@@ -65,3 +65,7 @@ Alpha.7 adds a host-only Compose updater. It stages downloads, closes outside ad
 ## DDIL handling (alpha.8)
 
 Network callbacks, monotonic retries, independent GPS sampling and bounded uploads affect only Bungee's app-contained connection. No radio/airplane-mode setting or persistent OS policy is added. Local stop cancels the native peer's active requests; retry cannot clear the stop flag. Encrypted command reservations precede action; lost receipts are retried without re-executing a reserved command. A crash can leave an explicitly unknown outcome. Server acceptance of a dated late receipt does not reauthorize expired commands. Queue capacity is surfaced rather than hidden, and storage failure creates no fallback phone restriction. See [DDIL.md](DDIL.md).
+
+## Restart location permission
+
+Automatic GPS recovery after first unlock requires precise and background location permission, explicitly granted through Android Settings, plus the independent restart opt-in. The grant is optional and can be revoked normally. Without it, automatic restart can reconnect in a connection-only foreground service and reports GPS paused; open Bungee and resume GPS from the visible screen. A blocked foreground-service start posts an attention notification when notifications are allowed. No identity or GPS access is promised before first unlock. Physical GrapheneOS cold-boot/lock/Doze acceptance is still open; see [the review follow-up](REVIEW-2026-10.md).

@@ -3,7 +3,7 @@ package org.bungee.app
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Pure queue operations; Identity encrypts the serialized result before persistence. */
+/** Validation and legacy queue helpers. New persistence uses GpsJournal's incremental records. */
 object GpsBacklog {
     const val MAX_POINTS = 10080
     fun append(queue: JSONArray, point: JSONObject): JSONArray {

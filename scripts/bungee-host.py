@@ -104,7 +104,7 @@ def compose(config, images, root):
             volumes=['gateway-private:/private', 'gateway-peers:/peers', {'type': 'bind', 'source': str(root / 'control'), 'target': '/control', 'read_only': True}],
             healthcheck={'test': ['CMD', 'wg', 'show', 'wg0'], 'interval': '10s', 'timeout': '3s', 'retries': 5}),
         'server': service(images['server'], network_mode='service:gateway', depends_on={'gateway': {'condition': 'service_healthy'}},
-            environment={**PRIVATE_ENV, 'BUNGEE_PUBLIC_ORIGIN': network.origin(c), 'BUNGEE_ADMIN_BIND': '127.0.0.1:8080', 'BUNGEE_DEVICE_BIND': '10.77.0.1:8081', 'BUNGEE_WG_ENDPOINT': f"{network.bracket(c['endpoint_ip'])}:{c['wg_port']}"},
+            environment={**PRIVATE_ENV, 'BUNGEE_PUBLIC_ORIGIN': network.origin(c), 'BUNGEE_ADMIN_BIND': '127.0.0.1:8080', 'BUNGEE_TRUST_LOOPBACK_PROXY': 'true', 'BUNGEE_DEVICE_BIND': '10.77.0.1:8081', 'BUNGEE_WG_ENDPOINT': f"{network.bracket(c['endpoint_ip'])}:{c['wg_port']}"},
             tmpfs=['/tmp:size=16m'], volumes=['server-data:/state', 'gateway-peers:/state/wireguard', {'type': 'bind', 'source': str(dataset), 'target': '/datasets', 'read_only': True, 'bind': {'create_host_path': False}}]),
         'web': service(images['web'], network_mode='service:gateway', depends_on={'server': {'condition': 'service_healthy'}},
             cap_add=['NET_BIND_SERVICE'], tmpfs=['/tmp:size=16m'],

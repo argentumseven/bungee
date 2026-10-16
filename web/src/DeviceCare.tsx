@@ -46,6 +46,7 @@ type Report = {
     dropped_fixes: number;
     oldest_queued_at: number | null;
     pending_receipts: number;
+    gps_access?: string | null;
   };
 };
 type Saved = {
@@ -297,6 +298,10 @@ export function DeviceCare({
                         is offline.
                       </p>
                       <dl className="care-health">
+                        <div>
+                          <dt>GPS access at last report</dt>
+                          <dd>{({background: "Background permission granted", foreground: "Active · background restart not permitted", needs_foreground_start: "Paused · open Bungee to resume GPS", start_restricted: "Paused · Android restricted the location service", permission_denied: "Paused · precise permission missing", disabled: "Sharing disabled", paused: "Paused"} as Record<string,string>)[report.delivery.gps_access ?? ""] ?? "Not reported by this app"}</dd>
+                        </div>
                         <div>
                           <dt>Queued GPS fixes</dt>
                           <dd>

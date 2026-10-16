@@ -223,7 +223,7 @@ async fn handle(app: &App, peer: SocketAddr, data: &[u8], tcp: bool) -> Option<V
             .ok()
             .flatten()
     }?;
-    rate_limit(app, format!("dns:{id}"), 1200).ok()?;
+    rate_limit(app, RateClass::Dns, id.clone(), 1200).ok()?;
     let query = Message::from_vec(data).ok()?;
     if query.message_type() != MessageType::Query || query.op_code() != OpCode::Query {
         return error_reply(&query, ResponseCode::Refused).to_vec().ok();

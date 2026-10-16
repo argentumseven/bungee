@@ -15,7 +15,9 @@
     encode zstd gzip
     @allowed remote_ip {$BUNGEE_ADMIN_SUBNETS:REQUIRED_ADMIN_SUBNETS}
     handle @allowed {
-        reverse_proxy 127.0.0.1:8080
+        reverse_proxy 127.0.0.1:8080 {
+            header_up X-Bungee-Admin-IP {http.request.remote.host}
+        }
     }
     handle {
         respond "Administrator network not allowed" 403

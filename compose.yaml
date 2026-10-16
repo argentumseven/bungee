@@ -51,6 +51,7 @@ services:
       <<: *private-env
       BUNGEE_PUBLIC_ORIGIN: ${BUNGEE_PUBLIC_ORIGIN:?Set the exact HTTPS URL including a nonstandard port}
       BUNGEE_ADMIN_BIND: 127.0.0.1:8080
+      BUNGEE_TRUST_LOOPBACK_PROXY: "true"
       BUNGEE_DEVICE_BIND: 10.77.0.1:8081
       BUNGEE_WG_ENDPOINT: ${BUNGEE_WG_ENDPOINT:?Set BUNGEE_WG_ENDPOINT to your reachable IP and custom port}
       BUNGEE_DNS_UPSTREAM_IP: ${BUNGEE_DNS_UPSTREAM_IP:-}

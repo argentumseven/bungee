@@ -21,6 +21,7 @@ use std::{
     collections::HashMap,
     fs,
     io::{self, Write},
+    net::IpAddr,
     path::Path,
 };
 
@@ -80,20 +81,64 @@ pub fn password_matches(value: &str, hash: &str) -> bool {
     })
 }
 
+#[derive(Clone, Copy, Hash, Eq, PartialEq)]
+pub enum RateClass {
+    AdminSource,
+    AdminAggregate,
+    DeviceSource,
+    DeviceIdentity,
+    Enrollment,
+    Dns,
+}
+
 #[derive(Default)]
-pub struct RateLimits(HashMap<String, (i64, u16)>);
-pub fn rate_limit(app: &App, key: String, limit: u16) -> ApiResult<()> {
-    let mut all = app.limiter.lock().unwrap();
-    all.0.retain(|_, (at, _)| now() - *at < 60);
-    if all.0.len() >= 4096 {
-        return Err(Error(StatusCode::TOO_MANY_REQUESTS, "Please retry later"));
+pub struct RateLimits(HashMap<RateClass, HashMap<String, (i64, u16)>>);
+impl RateLimits {
+    fn check(&mut self, class: RateClass, key: String, limit: u16, at: i64) -> ApiResult<()> {
+        let bucket = self.0.entry(class).or_default();
+        bucket.retain(|_, (start, _)| at.saturating_sub(*start) < 60);
+        // Capacity applies only to NEW identities in this class. Existing peers and
+        // the separate administrator budgets remain usable when a class is full.
+        if !bucket.contains_key(&key) && bucket.len() >= 4096 {
+            return Err(Error(StatusCode::TOO_MANY_REQUESTS, "Please retry later"));
+        }
+        let entry = bucket.entry(key).or_insert((at, 0));
+        entry.1 = entry.1.saturating_add(1);
+        if entry.1 > limit {
+            Err(Error(StatusCode::TOO_MANY_REQUESTS, "Please retry later"))
+        } else {
+            Ok(())
+        }
     }
-    let entry = all.0.entry(key).or_insert((now(), 0));
-    entry.1 += 1;
-    if entry.1 > limit {
-        Err(Error(StatusCode::TOO_MANY_REQUESTS, "Please retry later"))
+}
+pub fn rate_limit(app: &App, class: RateClass, key: String, limit: u16) -> ApiResult<()> {
+    app.limiter.lock().unwrap().check(class, key, limit, now())
+}
+
+pub async fn device_source_guard(State(app): State<App>, req: Request, next: Next) -> Response {
+    let Some(peer) = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+    else {
+        return denied().into_response();
+    };
+    // WireGuard validates each peer's source address. Never accept a caller's
+    // device ID or a forwarding header as pre-authentication identity.
+    if let Err(e) = rate_limit(&app, RateClass::DeviceSource, peer.0.ip().to_string(), 600) {
+        return e.into_response();
+    }
+    next.run(req).await
+}
+
+pub fn admin_source(peer: IpAddr, headers: &HeaderMap, trusted_proxy: bool) -> ApiResult<IpAddr> {
+    if trusted_proxy && peer.is_loopback() {
+        headers
+            .get("x-bungee-admin-ip")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse().ok())
+            .ok_or_else(denied)
     } else {
-        Ok(())
+        Ok(peer)
     }
 }
 
@@ -180,7 +225,6 @@ pub fn verify_device(app: &App, headers: &HeaderMap, path: &str, body: &[u8]) ->
     if now().abs_diff(stamp) > 120 {
         return Err(denied());
     }
-    rate_limit(app, format!("device:{id}"), 240)?;
     let db = app.db.lock().unwrap();
     let key: Option<String> = db
         .query_row(
@@ -200,6 +244,7 @@ pub fn verify_device(app: &App, headers: &HeaderMap, path: &str, body: &[u8]) ->
     verify
         .verify(message.as_bytes(), &sig)
         .map_err(|_| denied())?;
+    rate_limit(app, RateClass::DeviceIdentity, id.to_owned(), 240)?;
     db.execute("DELETE FROM nonces WHERE created < ?", [now() - 300])?;
     let inserted = db.execute(
         "INSERT OR IGNORE INTO nonces(device_id,nonce,created) VALUES(?,?,?)",
@@ -242,4 +287,66 @@ pub fn private_write(path: &Path, data: &[u8]) -> io::Result<()> {
     let mut f = opts.open(path)?;
     f.write_all(data)?;
     f.sync_all()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn full_source_bucket_preserves_existing_peers_and_other_classes() {
+        let mut limits = RateLimits::default();
+        limits
+            .check(RateClass::DeviceSource, "known".into(), 600, 1000)
+            .unwrap();
+        for n in 0..4095 {
+            limits
+                .check(RateClass::DeviceSource, n.to_string(), 600, 1000)
+                .unwrap();
+        }
+        assert!(
+            limits
+                .check(RateClass::DeviceSource, "new".into(), 600, 1000)
+                .is_err()
+        );
+        limits
+            .check(RateClass::DeviceSource, "known".into(), 600, 1000)
+            .unwrap();
+        limits
+            .check(RateClass::AdminSource, "admin".into(), 5, 1000)
+            .unwrap();
+        limits
+            .check(RateClass::DeviceIdentity, "phone".into(), 240, 1000)
+            .unwrap();
+        limits
+            .check(RateClass::DeviceSource, "new".into(), 600, 1060)
+            .unwrap();
+    }
+    #[test]
+    fn denied_counter_saturates_instead_of_wrapping() {
+        let mut limits = RateLimits::default();
+        for _ in 0..70000 {
+            let _ = limits.check(RateClass::AdminSource, "source".into(), 5, 1000);
+        }
+        assert!(
+            limits
+                .check(RateClass::AdminSource, "source".into(), 5, 1000)
+                .is_err()
+        );
+    }
+    #[test]
+    fn admin_forwarding_identity_requires_explicit_loopback_trust() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-bungee-admin-ip", "192.0.2.7".parse().unwrap());
+        let direct = "192.0.2.8".parse::<IpAddr>().unwrap();
+        let proxy = "127.0.0.1".parse::<IpAddr>().unwrap();
+        assert_eq!(admin_source(direct, &headers, true).unwrap(), direct);
+        assert_eq!(admin_source(proxy, &headers, false).unwrap(), proxy);
+        assert_eq!(
+            admin_source(proxy, &headers, true).unwrap(),
+            "192.0.2.7".parse::<IpAddr>().unwrap()
+        );
+        assert!(admin_source(proxy, &HeaderMap::new(), true).is_err());
+        headers.insert("x-bungee-admin-ip", "192.0.2.7,192.0.2.8".parse().unwrap());
+        assert!(admin_source(proxy, &headers, true).is_err());
+    }
 }

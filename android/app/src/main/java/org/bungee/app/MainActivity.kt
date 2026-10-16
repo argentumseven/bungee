@@ -50,8 +50,12 @@ class MainActivity : FragmentActivity() {
     private val pairingOwner = Any()
     private var pairingText by mutableStateOf("")
     private var showPairing by mutableStateOf(false)
+    private var backgroundLocation by mutableStateOf(false)
+    private var showBackgroundGuide by mutableStateOf(false)
+    private var backgroundGuideForRestart by mutableStateOf(false)
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-        ContextCompat.startForegroundService(this, Intent(this, TelemetryService::class.java))
+        runCatching { ContextCompat.startForegroundService(this, Intent(this, TelemetryService::class.java).setAction("USER_START")) }
+            .onFailure { error = "Android did not allow sharing to start. Keep Bungee open and try again." }
         if (!TelemetryService.hasLocation(this)) error = "GPS permission was not granted. The connection and approved recovery controls can still work."
     }
     private val scan = registerForActivityResult(ScanContract()) { result -> result.contents?.let { pairingText = it; showPairing = true } }
@@ -70,6 +74,7 @@ class MainActivity : FragmentActivity() {
         } }
     }
     override fun onStop() { super.onStop(); if (::identity.isInitialized && identity.appLock) locked = true }
+    override fun onResume() { super.onResume(); backgroundLocation = TelemetryService.hasBackgroundLocation(this) }
     override fun onDestroy() { scope.cancel(); super.onDestroy() }
     private fun unlock(requireCredential: Boolean = false, onSuccess: () -> Unit = { locked = false }) {
         if (!getSystemService(KeyguardManager::class.java).isDeviceSecure) { error = "Set a screen lock in Android settings first."; return }
@@ -140,6 +145,7 @@ class MainActivity : FragmentActivity() {
         var confirmReset by remember { mutableStateOf(false) }
         var recovery by remember { mutableStateOf(identity.recoveryMessage) }
         var resume by remember { mutableStateOf(LocalSafety.isRestartAllowed(this)) }
+        fun saveRestart(enabled: Boolean) { runCatching { LocalSafety.setRestartAllowed(this@MainActivity, enabled) }.onSuccess { resume = enabled }.onFailure { error = "Restart preference could not be saved." } }
         Column(Modifier.fillMaxSize().systemBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 25.dp)) {
             Row(Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 35.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(36.dp).background(Purple, RoundedCornerShape(11.dp)), contentAlignment = Alignment.Center) { Icon(Icons.Outlined.Sensors, null, tint = Color.White, modifier = Modifier.size(23.dp)) }
@@ -177,6 +183,14 @@ class MainActivity : FragmentActivity() {
                         Row { Icon(Icons.Outlined.VpnLock, null, tint = Purple, modifier = Modifier.size(17.dp)); Text("  Household traffic uses app-contained WireGuard.", fontSize = 11.sp, color = Muted) }
                         Text("Bungee’s app-contained connection leaves Android’s VPN slot free for your other VPN. That VPN may still filter Bungee’s UDP connection.", color = Muted, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
                         Text("Queued GPS fixes: ${status.queuedFixes} · dropped at capacity: ${status.droppedFixes}", color = Muted, fontSize = 11.sp, modifier = Modifier.padding(top = 10.dp))
+                        Text(when (status.gpsAccess) {
+                            "foreground" -> "GPS active while the location service continues. Allow background location for restart recovery."
+                            "background" -> "Background GPS permission granted. Android power and location settings still apply."
+                            "disabled" -> "GPS sharing is off."
+                            "permission_denied" -> "Precise GPS permission is missing. Connection does not mean GPS is recording."
+                            else -> "GPS is paused. Open this screen and resume GPS, or grant background location for automatic restart."
+                        }, color = Muted, fontSize = 12.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
+                        if (status.running && status.gpsAccess !in listOf("foreground", "background", "disabled")) TextButton(onClick = { startSharing() }) { Text("Resume GPS from this screen") }
                         status.nextRetryAt?.let { Text("Next retry around ${java.text.DateFormat.getTimeInstance().format(java.util.Date(it))}", color = Muted, fontSize = 10.sp) }
                         status.lastSent?.let { Text("Last check-in · ${java.text.DateFormat.getTimeInstance().format(java.util.Date(it))}", color = Color(0xFF9BA99F), fontSize = 10.sp, modifier = Modifier.padding(top = 16.dp)) }
                         Button(onClick = {
@@ -188,11 +202,21 @@ class MainActivity : FragmentActivity() {
                 Text("YOU’RE IN CONTROL", color = Muted, fontSize = 9.sp, letterSpacing = 1.8.sp, modifier = Modifier.padding(top = 30.dp, bottom = 15.dp))
                 Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(17.dp)) {
                     Column(Modifier.padding(horizontal = 18.dp)) {
-                        SettingRow("Share GPS history", "Saved on your server until erased; precise location required", locate) { locate = it; identity.allowLocate = it }
+                        SettingRow("Share GPS history", "Saved on your server until erased; precise location required", locate) { value ->
+                            scope.launch {
+                                runCatching { withContext(Dispatchers.IO) { identity.allowLocate = value } }
+                                    .onSuccess { locate = value }
+                                    .onFailure { locate = identity.allowLocate; error = "Location preference or queue cleanup failed. Pause sharing and use local recovery or Android Settings." }
+                            }
+                        }
                         HorizontalDivider(color = Color(0xFFF4F1F7))
                         SettingRow("Household commands", "Sound, recovery messages & permitted locking", commands) { commands = it; identity.allowCommands = it }
                         HorizontalDivider(color = Color(0xFFF4F1F7))
-                        SettingRow("Resume after restart", "Opt in to reconnect after first unlock; OS limits still apply", resume) { enabled -> unlock { runCatching { LocalSafety.setRestartAllowed(this@MainActivity, enabled) }.onSuccess { resume = enabled }.onFailure { error = "Restart preference could not be saved." } } }
+                        SettingRow("Resume after restart", "After first unlock; automatic GPS needs background location", resume) { enabled -> unlock {
+                            if (enabled && locate && !backgroundLocation) { backgroundGuideForRestart = true; showBackgroundGuide = true }
+                            else saveRestart(enabled)
+                        } }
+                        if (locate && !backgroundLocation) TextButton(onClick = { backgroundGuideForRestart = false; showBackgroundGuide = true }) { Text("Allow GPS after restart") }
                         HorizontalDivider(color = Color(0xFFF4F1F7))
                         SettingRow("Lock this app", "Use your phone’s secure screen lock", lockEnabled) { enabled ->
                             unlock { identity.appLock = enabled; lockEnabled = enabled; locked = false }
@@ -221,6 +245,18 @@ class MainActivity : FragmentActivity() {
             }
             Text("Early release · test device recommended · no Google Play services required", color = Color(0xFFB0ABB9), fontSize = 9.sp, modifier = Modifier.padding(bottom = 22.dp))
         }
+        if (showBackgroundGuide) AlertDialog(onDismissRequest = { showBackgroundGuide = false }, title = { Text("GPS after restart") }, text = {
+            Text("Bungee records your GPS trail for your home server. To resume GPS after reboot and first unlock, Android requires Location → Allow all the time, with precise location enabled. This is optional and reversible in Android Settings. Without it, automatic restart can reconnect but GPS stays paused until you open Bungee and resume GPS. No data is available before the first unlock.")
+        }, confirmButton = { TextButton(onClick = {
+            showBackgroundGuide = false
+            runCatching { startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:$packageName"))) }
+                .onFailure { error = "Open Android Settings → Apps → Bungee → Permissions → Location." }
+        }) { Text("Open Android Settings") } }, dismissButton = {
+            Column {
+                if (backgroundGuideForRestart) TextButton(onClick = { saveRestart(true); showBackgroundGuide = false }) { Text("Resume connection only") }
+                TextButton(onClick = { showBackgroundGuide = false }) { Text("Cancel") }
+            }
+        })
         if (showPairing) AlertDialog(onDismissRequest = { if (!busy) showPairing = false }, title = { Text("Connect to your home") }, text = {
             Column { Text("This creates a private tunnel and shares your phone’s location and battery with the server you chose. Timestamped GPS history stays on that server until explicitly erased or the device is revoked. Unsent GPS fixes are encrypted on this phone, up to 10,080 points. Continue only if you consent.", fontSize = 12.sp, lineHeight = 20.sp); OutlinedTextField(value = pairingText, onValueChange = { pairingText = it }, label = { Text("Enrollment invitation") }, modifier = Modifier.fillMaxWidth().padding(top = 16.dp), minLines = 4); error?.let { Text(it, color = Color(0xFFB97777), fontSize = 11.sp) } }
         }, confirmButton = { TextButton(onClick = { pair(pairingText) }, enabled = !busy) { Text("Agree & pair") } }, dismissButton = { TextButton(onClick = { showPairing = false }, enabled = !busy) { Text("Cancel") } })

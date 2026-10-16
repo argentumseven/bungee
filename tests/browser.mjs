@@ -370,6 +370,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
             dropped_fixes: 3,
             oldest_queued_at: Math.floor(Date.now() / 1000) - 14400,
             pending_receipts: 2,
+            gps_access: "needs_foreground_start",
           },
           revision: 0,
         },
@@ -387,6 +388,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
             dropped_fixes: 3,
             oldest_queued_at: Math.floor(Date.now() / 1000) - 14400,
             pending_receipts: 2,
+            gps_access: "needs_foreground_start",
           },
           revision: desired.revision,
           lost_mode_active: true,
@@ -401,6 +403,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       await page
         .getByText("Requested state reported", { exact: true })
         .waitFor();
+      await page.getByText("Paused · open Bungee to resume GPS", {exact:true}).waitFor();
       await page.evaluate(() => scrollTo(0, 0));
       await page.screenshot({
         path: "docs/screenshots/device-care.png",
@@ -426,6 +429,17 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
           .count(),
         0,
       );
+    },
+  );
+  await t.test(
+    "offered commands are not labeled as confirmed delivery",
+    async () => {
+      await page.getByRole("button", { name: /Play a sound/ }).click();
+      const offered = await phoneRequest("/v1/commands", {});
+      assert.equal(offered.commands[0].kind, "ring");
+      await page.getByText("Offered · awaiting receipt", {exact:true}).waitFor();
+      await phoneRequest("/v1/ack", {id:offered.commands[0].id,status:"executed",result:"Sound started"});
+      await page.getByText("executed", {exact:true}).waitFor();
     },
   );
   await t.test(

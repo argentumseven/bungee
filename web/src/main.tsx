@@ -734,7 +734,7 @@ function App() {
                         <span className={`command-status ${c.status}`}>
                           {c.delivery_uncertain
                             ? "Expired · unconfirmed"
-                            : c.status}
+                            : c.status === "delivered" ? "Offered · awaiting receipt" : c.status}
                         </span>
                       </div>
                     ))}

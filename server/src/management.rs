@@ -95,6 +95,7 @@ pub struct DeliveryReport {
     pub dropped_fixes: u64,
     pub oldest_queued_at: Option<i64>,
     pub pending_receipts: u32,
+    pub gps_access: Option<String>,
 }
 impl DeliveryReport {
     fn valid(&self) -> bool {
@@ -103,6 +104,18 @@ impl DeliveryReport {
             && self.queued_fixes <= 10080
             && self.dropped_fixes <= 9_007_199_254_740_991
             && self.pending_receipts <= 100
+            && self.gps_access.as_deref().is_none_or(|v| {
+                [
+                    "paused",
+                    "disabled",
+                    "permission_denied",
+                    "start_restricted",
+                    "needs_foreground_start",
+                    "foreground",
+                    "background",
+                ]
+                .contains(&v)
+            })
             && self.oldest_queued_at.is_none_or(|t| t > 0)
     }
 }

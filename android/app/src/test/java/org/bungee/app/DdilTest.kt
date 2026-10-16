@@ -21,10 +21,11 @@ class DdilTest {
         val retry=DdilRetry { 0.0 }
         retry.attempted(1000); retry.failed(1000,true)
         assertEquals(721000L,retry.nextAttempt)
-        retry.networkChanged(1001); assertEquals(6000L,retry.nextAttempt)
+        repeat(100) { retry.networkChanged(1001L + it*1000) }
+        assertEquals(721000L,retry.nextAttempt)
         assertEquals(1,retry.failures)
-        retry.attempted(6000); retry.failed(6000); retry.networkChanged(6001)
-        assertEquals(11000L,retry.nextAttempt)
+        retry.attempted(721000); retry.failed(721000); retry.networkChanged(721001)
+        assertEquals(726000L,retry.nextAttempt)
     }
     @Test fun bandwidthChangesStayBounded() {
         val retry=DdilRetry { 1.0 }
@@ -66,5 +67,22 @@ class DdilTest {
         assertEquals(0,ReceiptOutbox.pending(records,86411).length())
         records=ReceiptOutbox.save(records,receipt("new"),90000,86411)
         assertNull(ReceiptOutbox.find(records,"past")); assertNotNull(ReceiptOutbox.find(records,"new"))
+    }
+    @Test fun ambiguousLegacyOrUnmatchedAcknowledgementsDoNotDiscardTheReceipt() {
+        assertFalse(ReceiptOutbox.confirmed(JSONObject().put("accepted",false).put("settled",true)))
+        for (status in listOf("unknown_command","not_offered","conflicting_terminal","expired","invalid_attempt"))
+            assertFalse(ReceiptOutbox.confirmed(JSONObject().put("accepted",false).put("receipt_status",status)))
+        assertTrue(ReceiptOutbox.confirmed(JSONObject().put("accepted",true)))
+        assertTrue(ReceiptOutbox.confirmed(JSONObject().put("receipt_status","already_terminal")))
+    }
+    @Test fun backgroundGpsNeedsExplicitPermissionAndForegroundServiceEligibility() {
+        assertTrue(LocationAccess.canStartLocation(true,true,false,true))
+        assertFalse(LocationAccess.canStartLocation(false,true,false,true))
+        assertTrue(LocationAccess.canStartLocation(false,true,true,true))
+        assertFalse(LocationAccess.canStartLocation(false,false,true,true))
+        assertFalse(LocationAccess.canStartLocation(true,true,true,false))
+        assertEquals("needs_foreground_start",LocationAccess.describe(true,false,true,false))
+        assertEquals("start_restricted",LocationAccess.describe(true,true,true,false))
+        assertEquals("permission_denied",LocationAccess.describe(false,true,true,true))
     }
 }

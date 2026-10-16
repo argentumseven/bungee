@@ -22,7 +22,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.coroutines.resume
 
-data class SharingStatus(val running: Boolean = false, val connected: Boolean = false, val text: String = "Sharing is paused", val lastSent: Long? = null, val queuedFixes: Int = 0, val droppedFixes: Long = 0, val nextRetryAt: Long? = null)
+data class SharingStatus(val running: Boolean = false, val connected: Boolean = false, val text: String = "Sharing is paused", val lastSent: Long? = null, val queuedFixes: Int = 0, val droppedFixes: Long = 0, val nextRetryAt: Long? = null, val gpsAccess: String = "paused")
 
 class TelemetryService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -34,6 +34,11 @@ class TelemetryService : Service() {
     @Volatile private var latest: Location? = null
     @Volatile private var network: Network? = null
     private var watchingNetwork = false
+    private var locationForeground = false
+    private fun canSample() = identity.allowLocate && hasLocation(this) && locationForeground
+    private fun updateLocationStatus() {
+        status.value = status.value.copy(gpsAccess = LocationAccess.describe(hasLocation(this), hasBackgroundLocation(this), identity.allowLocate, locationForeground))
+    }
     private val tunnelOwner = Any()
     private val networkChanged = Channel<Unit>(Channel.CONFLATED)
     private val callback = object : ConnectivityManager.NetworkCallback() {
@@ -65,10 +70,21 @@ class TelemetryService : Service() {
         }
         if (intent?.action == "STOP_RING") { stopRinging(); return START_NOT_STICKY }
         if (!identity.enrolled) { stopSelf(); return START_NOT_STICKY }
-        val locationType = hasLocation(this) && identity.allowLocate && (intent?.action != "AUTO_START" || ManagementAgent.isOwner(this))
+        val locationType = LocationAccess.canStartLocation(intent?.action == "USER_START", hasLocation(this), hasBackgroundLocation(this), identity.allowLocate)
         val fallbackType = if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE
-        try { startForeground(1, notification(), if (locationType) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else fallbackType) }
-        catch (_: SecurityException) { startForeground(1, notification(), fallbackType) }
+        try {
+            try {
+                locationForeground = locationType
+                startForeground(1, notification(), if (locationType) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else fallbackType)
+            } catch (_: SecurityException) {
+                locationForeground = false
+                startForeground(1, notification(), fallbackType)
+            }
+        } catch (_: RuntimeException) {
+            RecoveryStartup.showResumeNotification(this)
+            stopSelf(); return START_NOT_STICKY
+        }
+        updateLocationStatus()
         if (worker?.isActive == true) return if (LocalSafety.isRestartAllowed(this)) START_STICKY else START_NOT_STICKY
         status.value = status.value.copy(running = true, connected = false, text = "Connecting to your household", nextRetryAt = null)
         // Sampling is independent: a long network timeout/backoff cannot suspend the GPS trail.
@@ -76,8 +92,9 @@ class TelemetryService : Service() {
             while (isActive && !LocalSafety.isStopped(this@TelemetryService)) {
                 val nextSample = elapsed() + 60_000
                 try {
+                    updateLocationStatus()
                     val cached = lastLocation()
-                    latest = if (identity.allowLocate && (cached == null || System.currentTimeMillis() - cached.time > 45000)) freshLocation() ?: cached else cached
+                    latest = if (canSample() && (cached == null || System.currentTimeMillis() - cached.time > 45000)) freshLocation() ?: cached else cached
                     latest?.let { point -> withContext(Dispatchers.IO) { identity.queueLocation(locationJson(point)) } }
                     updateQueueStatus()
                 } catch (e: CancellationException) { throw e }
@@ -153,18 +170,18 @@ class TelemetryService : Service() {
         val pause = PendingIntent.getService(this, 1, Intent(this, TelemetryService::class.java).setAction("STOP"), PendingIntent.FLAG_IMMUTABLE)
         val hush = PendingIntent.getService(this, 2, Intent(this, TelemetryService::class.java).setAction("STOP_RING"), PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, "sharing").setSmallIcon(R.drawable.ic_bungee).setContentTitle("Bungee sharing is active")
-            .setContentText("GPS fixes queue locally until home is reachable")
+            .setContentText(if (locationForeground) "GPS fixes queue locally until home is reachable" else "Connection active · open Bungee to resume GPS")
             .setContentIntent(open).setOngoing(true).setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .addAction(0, "Pause sharing", pause).addAction(0, "Stop sound", hush).build()
     }
     private fun lastLocation(): Location? {
-        if (!identity.allowLocate || !hasLocation(this)) return null
+        if (!canSample()) return null
         val manager = getSystemService(LocationManager::class.java)
         // An old, timestamped fix can still be valuable after a long outage; never age it out here.
         return try { manager.getLastKnownLocation(LocationManager.GPS_PROVIDER)?.takeIf { it.time > 0 && it.time <= System.currentTimeMillis() + 120000 } } catch (_: SecurityException) { null }
     }
     private suspend fun freshLocation(): Location? {
-        if (!identity.allowLocate || !hasLocation(this)) return null
+        if (!canSample()) return null
         val manager = getSystemService(LocationManager::class.java)
         if (!manager.isProviderEnabled(LocationManager.GPS_PROVIDER)) return null
         return withTimeoutOrNull(25000) {
@@ -207,7 +224,7 @@ class TelemetryService : Service() {
     }
     private suspend fun sendReceipt(api: HomeApi, receipt: JSONObject) {
         val response = withContext(Dispatchers.IO) { api.request("/v1/ack", receipt) }
-        if (response.optBoolean("accepted") || response.optBoolean("settled")) withContext(Dispatchers.IO) { identity.settleReceipt(receipt.getString("id")) }
+        if (ReceiptOutbox.confirmed(response)) withContext(Dispatchers.IO) { identity.settleReceipt(receipt.getString("id")) }
     }
     private suspend fun execute(api: HomeApi, command: JSONObject, deadline: Long) {
         if (LocalSafety.isStopped(this) || ManagementAgent.isOwner(this)) return
@@ -271,10 +288,11 @@ class TelemetryService : Service() {
     }
     companion object {
         val status = MutableStateFlow(SharingStatus())
-        fun hasLocation(context: Context) = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        fun hasLocation(context: Context) = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        fun hasBackgroundLocation(context: Context) = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
         fun capabilities(context: Context, identity: Identity): List<String> = buildList {
             if (LocalSafety.isStopped(context) || ManagementAgent.isOwner(context)) return@buildList
-            if (identity.allowLocate && hasLocation(context)) add("locate")
+            if (identity.allowLocate && hasLocation(context) && status.value.gpsAccess in listOf("foreground", "background")) add("locate")
             if (identity.allowCommands) {
                 addAll(listOf("ring", "stop_ringing"))
                 if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) addAll(listOf("message", "clear_message"))

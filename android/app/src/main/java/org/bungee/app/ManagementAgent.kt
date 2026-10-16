@@ -23,7 +23,7 @@ object ManagementAgent {
         val signals = identity.state("unlock")
         val attempts = if (identity.allowCommands) runCatching { dpm.currentFailedPasswordAttempts }.getOrNull() else null
         return JSONObject().put("owner", isOwner(context)).put("consent", false)
-            .put("delivery", identity.backlogReport().put("reported_at", System.currentTimeMillis()/1000))
+            .put("delivery", identity.backlogReport().put("reported_at", System.currentTimeMillis()/1000).put("gps_access", TelemetryService.status.value.gpsAccess))
             .put("recovery_consent", identity.allowCommands && !LocalSafety.isStopped(context)).put("revision", state.optLong("revision", 0))
             .put("dns_active", false).put("always_on", isOwner(context) && runCatching { dpm.getAlwaysOnVpnPackage(admin(context)) == context.packageName }.getOrDefault(false))
             .put("uninstall_blocked", isOwner(context) && runCatching { dpm.isUninstallBlocked(admin(context), context.packageName) }.getOrDefault(false))

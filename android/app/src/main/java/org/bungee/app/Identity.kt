@@ -18,6 +18,7 @@ import javax.crypto.spec.GCMParameterSpec
 
 /** Private signing keys stay in Android Keystore; WireGuard's userspace key is encrypted at rest. */
 class Identity(context: Context) {
+    private val appContext = context.applicationContext
     private val prefs = context.getSharedPreferences("identity", Context.MODE_PRIVATE)
     private val keys = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
     init {
@@ -54,10 +55,14 @@ class Identity(context: Context) {
     var allowLocate: Boolean
         get() = prefs.getBoolean("allow_locate", true)
         set(value) {
-            synchronized(this) {
+            synchronized(GpsStorage.lock) {
+                // Persist withdrawal before cleanup. A cleanup failure cannot authorize uploads.
+                // Clear again before re-enabling if a previous cleanup was interrupted.
+                if (value && !allowLocate) newJournal().clear()
                 val edit = prefs.edit().putBoolean("allow_locate", value)
                 if (!value) edit.remove("location_queue").remove("gps_backlog_v2")
                 check(edit.commit()) { "Could not save location consent and queue state" }
+                if (!value) newJournal().clear()
             }
         }
     var allowCommands: Boolean
@@ -68,37 +73,34 @@ class Identity(context: Context) {
     var recoveryMessage: String?
         get() = secret("recovery_message")
         set(value) { if (value == null) prefs.edit().remove("recovery_message").commit() else putSecret("recovery_message", value) }
-    private fun backlog(): JSONObject = secret("gps_backlog_v2")?.let(::JSONObject) ?: JSONObject().put("points", JSONArray(secret("location_queue") ?: "[]")).put("dropped", 0)
-    private fun saveBacklog(value: JSONObject) {
-        putSecret("gps_backlog_v2", value.toString())
-        check(prefs.edit().remove("location_queue").commit()) { "Old GPS queue cleanup failed" }
-    }
-    @Synchronized fun queueLocation(point: JSONObject) {
-        if (!allowLocate || !GpsBacklog.usable(point)) return
-        val state = backlog(); val queue = state.getJSONArray("points")
-        val bounded = GpsBacklog.append(queue, point)
-        if (bounded !== queue) {
-            if (queue.length() >= GpsBacklog.MAX_POINTS) state.put("dropped", (state.optLong("dropped") + 1).coerceAtMost(9_007_199_254_740_991L))
-            saveBacklog(state.put("points", bounded))
+    private fun newJournal() = GpsJournal(GpsStorage.database(appContext), GpsCipher { keys.getKey("bungee-storage", null) as SecretKey })
+    private fun journal(): GpsJournal {
+        val journal = newJournal()
+        if (!allowLocate) journal.clear()
+        else if (!journal.migrated()) {
+            val legacy = secret("gps_backlog_v2")?.let(::JSONObject)
+                ?: JSONObject().put("points", JSONArray(secret("location_queue") ?: "[]")).put("dropped", 0)
+            journal.migrate(legacy.getJSONArray("points"), legacy.optLong("dropped"))
         }
+        // Only after a committed migration/clear. Its marker prevents reimport if this write fails.
+        if (prefs.contains("location_queue") || prefs.contains("gps_backlog_v2"))
+            check(prefs.edit().remove("location_queue").remove("gps_backlog_v2").commit()) { "Old GPS queue cleanup failed" }
+        return journal
     }
-    @Synchronized fun pendingLocations(limit: Int = 100, before: Long = Long.MAX_VALUE): JSONArray = if (!allowLocate) JSONArray() else GpsBacklog.batch(backlog().getJSONArray("points"), limit, before)
-    @Synchronized fun newestQueuedLocation(before: Long): JSONObject? {
+    fun queueLocation(point: JSONObject) = synchronized(GpsStorage.lock) {
+        if (!allowLocate || !GpsBacklog.usable(point)) return
+        journal().append(point)
+    }
+    fun pendingLocations(limit: Int = 100, before: Long = Long.MAX_VALUE): JSONArray = synchronized(GpsStorage.lock) { if (!allowLocate) JSONArray() else journal().batch(limit, before) }
+    fun newestQueuedLocation(before: Long): JSONObject? = synchronized(GpsStorage.lock) {
         if (!allowLocate) return null
-        val queue = backlog().getJSONArray("points")
-        return (0 until queue.length()).map { queue.getJSONObject(it) }.filter { GpsBacklog.usable(it, before) }.maxByOrNull { it.getLong("observed_at") }
+        journal().newest(before)
     }
-    @Synchronized fun backlogReport(): JSONObject {
-        val state = backlog(); val queue = state.getJSONArray("points")
-        val times = (0 until queue.length()).map { queue.getJSONObject(it).getLong("observed_at") }
-        return JSONObject().put("queued_fixes", queue.length()).put("dropped_fixes", state.optLong("dropped"))
-            .put("oldest_queued_at", times.minOrNull() ?: JSONObject.NULL)
+    fun backlogReport(): JSONObject = synchronized(GpsStorage.lock) {
+        journal().report()
             .put("pending_receipts", ReceiptOutbox.pending(receipts(), System.currentTimeMillis()/1000, 100).length())
     }
-    @Synchronized fun acknowledgeLocations(sent: JSONArray) {
-        val state = backlog()
-        saveBacklog(state.put("points", GpsBacklog.acknowledge(state.getJSONArray("points"), sent)))
-    }
+    fun acknowledgeLocations(sent: JSONArray) = synchronized(GpsStorage.lock) { journal().acknowledge(sent) }
     private fun receipts() = JSONArray(secret("receipt_outbox") ?: "[]")
     @Synchronized fun result(id: String): JSONObject? = ReceiptOutbox.find(receipts(), id)?.getJSONObject("receipt") ?: secret("receipt_$id")?.let(::JSONObject)
     @Synchronized fun saveResult(id: String, result: JSONObject, expires: Long) {
@@ -110,8 +112,9 @@ class Identity(context: Context) {
     fun sign(text: String): String = Signature.getInstance("SHA256withECDSA").run {
         initSign(keys.getKey("bungee-signing", null) as java.security.PrivateKey); update(text.toByteArray(Charsets.UTF_8)); encode(sign())
     }
-    fun reset() {
-        prefs.edit().clear().commit()
+    fun reset() = synchronized(GpsStorage.lock) {
+        newJournal().clear()
+        check(prefs.edit().clear().commit()) { "Could not erase local identity" }
         keys.deleteEntry("bungee-signing"); keys.deleteEntry("bungee-storage")
     }
     private fun putSecret(name: String, text: String) {

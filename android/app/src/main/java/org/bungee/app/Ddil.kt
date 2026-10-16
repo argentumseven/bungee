@@ -10,6 +10,7 @@ class DdilRetry(private val random: () -> Double = { Random.nextDouble() }) {
     var nextAttempt = 0L; private set
     var lastAttempt = Long.MIN_VALUE; private set
     var batchSize = 25; private set
+    private var authenticationNotBefore = 0L
     fun attempted(now: Long) { lastAttempt = now }
     fun failed(now: Long, authentication: Boolean = false) {
         failures = (failures + 1).coerceAtMost(30)
@@ -17,16 +18,19 @@ class DdilRetry(private val random: () -> Double = { Random.nextDouble() }) {
         val cap = if (authentication) 900_000L else min(300_000L, 15_000L * (1L shl min(failures - 1, 5)))
         val delay = (cap * (0.8 + random().coerceIn(0.0, 1.0) * 0.2)).toLong()
         nextAttempt = now + delay
+        if (authentication) authenticationNotBefore = nextAttempt
+        nextAttempt = maxOf(nextAttempt, authenticationNotBefore)
     }
     fun succeeded(now: Long, roundTrip: Long) {
         failures = 0
+        authenticationNotBefore = 0
         if (roundTrip < 2_000) batchSize = (batchSize + 5).coerceAtMost(100)
         else if (roundTrip > 5_000) batchSize = (batchSize / 2).coerceAtLeast(1)
         nextAttempt = now + 15_000
     }
     fun networkChanged(now: Long) {
         // A flapping network cannot trigger a tight retry loop or reset failure backoff.
-        nextAttempt = min(nextAttempt, if (lastAttempt == Long.MIN_VALUE) now else maxOf(now, lastAttempt + 5_000))
+        nextAttempt = maxOf(authenticationNotBefore, min(nextAttempt, if (lastAttempt == Long.MIN_VALUE) now else maxOf(now, lastAttempt + 5_000)))
     }
 }
 

@@ -25,19 +25,29 @@ pub async fn health() -> Json<Value> {
 pub struct Login {
     password: String,
 }
+static LOGIN_WORK: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 pub async fn login(
     State(app): State<App>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(input): Json<Login>,
 ) -> ApiResult<impl IntoResponse> {
-    rate_limit(&app, format!("login:{}", addr.ip()), 5)?;
+    let source = admin_source(addr.ip(), &headers, app.trust_admin_proxy)?;
+    rate_limit(&app, RateClass::AdminSource, source.to_string(), 5)?;
+    rate_limit(&app, RateClass::AdminAggregate, "household".into(), 30)?;
     if input.password.len() > 1024 {
         return Err(denied());
     }
     let expected = app.admin_hash.clone();
-    let valid = tokio::task::spawn_blocking(move || password_matches(&input.password, &expected))
-        .await
-        .unwrap_or(false);
+    let permit = LOGIN_WORK
+        .try_acquire()
+        .map_err(|_| Error(StatusCode::TOO_MANY_REQUESTS, "Please retry later"))?;
+    let valid = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        password_matches(&input.password, &expected)
+    })
+    .await
+    .unwrap_or(false);
     if !valid {
         return Err(denied());
     }
@@ -280,7 +290,7 @@ pub async fn enroll(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(input): Json<Pair>,
 ) -> ApiResult<Json<Value>> {
-    rate_limit(&app, format!("pair:{}", addr.ip()), 10)?;
+    rate_limit(&app, RateClass::Enrollment, addr.ip().to_string(), 10)?;
     if input.token.len() > 128
         || input.public_key.len() > 512
         || !valid_public_key(&input.public_key)
@@ -695,17 +705,53 @@ pub async fn ack(
         return Err(bad("Invalid receipt values"));
     }
     let db = app.db.lock().unwrap();
-    // A delayed receipt reports an earlier attempt; it never makes an expired command executable.
-    // Replays cannot rewrite a terminal result, and pending (never delivered) commands cannot be acknowledged.
+    // A delayed receipt reports an earlier attempt; it never extends execution authority.
+    // A restored server may not know an offered command yet. Preserve the phone's
+    // journal in every non-matching case so later polls/restoration can reconcile it.
     let received = now();
-    let changed=db.execute("UPDATE commands SET status=?,result=?,receipt_received_at=? WHERE id=? AND device_id=? AND (?!='accepted' OR kind='reboot') AND (status='delivered' OR (status='accepted' AND kind='reboot' AND ?='failed')) AND created>=? AND (expires>? OR (? IS NOT NULL AND ?>=created AND ?<expires))",
-        params![input.status,input.result,received,input.id,id,input.status,input.status,received-86400,received,input.attempted_at,input.attempted_at,input.attempted_at])?;
-    if changed == 1 {
+    let row: Option<(String, Option<String>, i64, i64, String)> = db
+        .query_row(
+            "SELECT status,result,created,expires,kind FROM commands WHERE id=? AND device_id=?",
+            params![input.id, id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .optional()?;
+    let disposition = match row {
+        None => "unknown_command",
+        Some((status, result, created, expires, kind)) => {
+            let offered = status == "delivered"
+                || (status == "accepted" && kind == "reboot" && input.status == "failed");
+            if !offered && status != "pending" {
+                if status == input.status && result.as_deref() == Some(input.result.as_str()) {
+                    "already_terminal"
+                } else {
+                    "conflicting_terminal"
+                }
+            } else if created < received - 86400 {
+                "retention_elapsed"
+            } else if input
+                .attempted_at
+                .is_some_and(|at| at < created || at >= expires)
+            {
+                "invalid_attempt"
+            } else if expires <= received && input.attempted_at.is_none() {
+                "expired"
+            } else if !offered {
+                "not_offered"
+            } else if input.status == "accepted" && kind != "reboot" {
+                "invalid_status"
+            } else {
+                db.execute("UPDATE commands SET status=?,result=?,receipt_received_at=? WHERE id=? AND device_id=?",
+                    params![input.status,input.result,received,input.id,id])?;
+                "recorded"
+            }
+        }
+    };
+    if disposition == "recorded" {
         store::audit(&db, "command.receipt", Some(&id), &input.status)?;
     }
-    // A definitive rejection/terminal result can leave the phone's outbox; transport failures cannot.
     Ok(Json(
-        json!({"accepted":changed==1,"settled":true,"server_time":received}),
+        json!({"accepted":disposition=="recorded","settled":(["recorded","already_terminal"].contains(&disposition)),"receipt_status":disposition,"server_time":received}),
     ))
 }
 pub async fn revoke(

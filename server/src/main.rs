@@ -24,6 +24,7 @@ pub struct App {
     origin: String,
     secure_cookie: bool,
     admin_hash: String,
+    trust_admin_proxy: bool,
     limiter: Arc<Mutex<security::RateLimits>>,
     state_dir: PathBuf,
     wg_endpoint: Option<String>,
@@ -87,6 +88,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         secure_cookie,
         admin_hash: security::password_hash(password.trim())
             .map_err(|_| "Password hashing failed")?,
+        trust_admin_proxy: match env::var("BUNGEE_TRUST_LOOPBACK_PROXY").as_deref() {
+            Ok("true") if admin_bind.ip().is_loopback() => true,
+            Err(env::VarError::NotPresent) | Ok("false") => false,
+            _ => {
+                return Err(
+                    "BUNGEE_TRUST_LOOPBACK_PROXY requires true/false and a loopback admin bind"
+                        .into(),
+                );
+            }
+        },
         limiter: Arc::new(Mutex::new(security::RateLimits::default())),
         state_dir: dir,
         wg_endpoint,
@@ -151,6 +162,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/commands", post(api::poll))
         .route("/v1/ack", post(api::ack))
         .route("/v1/sync", post(management::sync))
+        .layer(middleware::from_fn_with_state(
+            app.clone(),
+            security::device_source_guard,
+        ))
         .layer(axum::extract::DefaultBodyLimit::max(32 * 1024))
         .with_state(app.clone());
     dns::start(app).await?;

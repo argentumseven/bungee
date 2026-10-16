@@ -57,6 +57,7 @@ class SetupTests(unittest.TestCase):
     def test_exact_origin_and_no_privileged_socket_or_extra_published_apis(self):
         c = host.compose(CONFIG, metadata()['images'], Path('/opt/bungee'))
         self.assertEqual(c['services']['server']['environment']['BUNGEE_PUBLIC_ORIGIN'], 'https://192.168.1.10:8443')
+        self.assertEqual(c['services']['server']['environment']['BUNGEE_TRUST_LOOPBACK_PROXY'], 'true')
         self.assertEqual(host.network.origin({**CONFIG, 'web_port': 443}), 'https://192.168.1.10')
         self.assertEqual(host.network.origin({**CONFIG, 'web_host': 'fd12::1'}), 'https://[fd12::1]:8443')
         for s in c['services'].values():

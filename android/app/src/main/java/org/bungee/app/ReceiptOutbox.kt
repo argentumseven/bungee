@@ -6,6 +6,7 @@ import org.json.JSONObject
 /** Single encrypted journal: reserve before acting, retain until the home server settles it. */
 object ReceiptOutbox {
     const val CAPACITY = 100
+    fun confirmed(response: JSONObject) = response.optBoolean("accepted") || response.optString("receipt_status") == "already_terminal"
     fun find(records: JSONArray, id: String): JSONObject? = (0 until records.length()).map { records.getJSONObject(it) }.firstOrNull { it.getJSONObject("receipt").getString("id") == id }
     fun save(records: JSONArray, receipt: JSONObject, expires: Long, now: Long): JSONArray {
         val id = receipt.getString("id")

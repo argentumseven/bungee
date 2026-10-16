@@ -12,6 +12,7 @@ import {
   randomUUID,
 } from "node:crypto";
 import { createServer } from "node:net";
+import { request as httpRequest } from "node:http";
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 async function freePort() {
   const s = createServer();
@@ -691,6 +692,7 @@ test("live server: household enrollment, device signatures, commands, and revoca
       ).json();
       assert.equal(late.accepted, true);
       assert.equal(late.settled, true);
+      assert.equal(late.receipt_status, "recorded");
       const confirmed = (
         await (await admin("/api/devices")).json()
       ).commands.find((c) => c.id === queued.id);
@@ -774,16 +776,19 @@ test("live server: household enrollment, device signatures, commands, and revoca
           dropped_fixes: 3,
           oldest_queued_at: 1000,
           pending_receipts: 2,
+          gps_access: "needs_foreground_start",
         },
       };
       assert.equal((await signed("/v1/sync", { report })).status, 200);
       const saved = await (await admin(`/api/devices/${id}/policy`)).json();
       assert.equal(saved.report.delivery.queued_fixes, 120);
+      assert.equal(saved.report.delivery.gps_access, "needs_foreground_start");
       for (const value of [
         { queued_fixes: 10081 },
         { pending_receipts: 101 },
         { dropped_fixes: 9007199254740992 },
         { reported_at: 0 },
+        { gps_access: "unrestricted" },
       ])
         assert.equal(
           (
@@ -795,6 +800,25 @@ test("live server: household enrollment, device signatures, commands, and revoca
         );
     },
   );
+  await t.test("receipt replay after restoring pre-poll state stays unresolved until the server records a matching outcome", async () => {
+    const queued = await (await admin(`/api/devices/${id}/commands`, "POST", {kind:"ring"})).json();
+    await signed("/v1/commands", {});
+    const receipt = {id:queued.id,status:"executed",result:"Sound started",attempted_at:Math.floor(Date.now()/1000)};
+    // Simulate restoring the command row from a snapshot taken before the poll.
+    sql("UPDATE commands SET status='pending' WHERE id=?", [queued.id]);
+    const unresolved = await (await signed("/v1/ack", receipt)).json();
+    assert.equal(unresolved.receipt_status, "not_offered"); assert.equal(unresolved.settled,false);
+    await signed("/v1/commands", {});
+    const recorded = await (await signed("/v1/ack", receipt)).json();
+    assert.equal(recorded.receipt_status,"recorded"); assert.equal(recorded.accepted,true);
+    const repeated = await (await signed("/v1/ack", receipt)).json();
+    assert.equal(repeated.receipt_status,"already_terminal"); assert.equal(repeated.settled,true);
+    const conflict = await (await signed("/v1/ack", {...receipt,status:"failed",result:"Conflicting old state"})).json();
+    assert.equal(conflict.receipt_status,"conflicting_terminal"); assert.equal(conflict.settled,false);
+    sql("DELETE FROM commands WHERE id=?", [queued.id]);
+    const missing = await (await signed("/v1/ack", receipt)).json();
+    assert.equal(missing.receipt_status,"unknown_command"); assert.equal(missing.settled,false);
+  });
   await t.test(
     "duplicate receipts do not change completed commands",
     async () =>
@@ -1017,6 +1041,23 @@ test("live server: household enrollment, device signatures, commands, and revoca
       assert.equal((await (await history()).json()).records.length, 1);
     },
   );
+  await t.test("4096 fabricated device IDs cannot exhaust administrator or another peer's budgets", async () => {
+    const flood = (n) => new Promise((resolve, reject) => {
+      const req = httpRequest(`${deviceOrigin}/v1/commands`, {
+        method: "POST", localAddress: "127.0.0.2", agent: false,
+        headers: {"Content-Type":"application/json", "X-Bungee-Device": `fabricated-${n}`, "X-Bungee-Time": `${Math.floor(Date.now()/1000)}`, "X-Bungee-Nonce": randomBytes(18).toString("base64url"), "X-Bungee-Signature":"AA==", "X-Bungee-Admin-IP":"127.0.0.1", "X-Forwarded-For":"127.0.0.1"},
+      }, res => { res.resume(); res.on("end", () => resolve(res.statusCode)); });
+      req.on("error", reject); req.end("{}");
+    });
+    for (let base=0; base<4096; base+=32) {
+      const statuses = await Promise.all(Array.from({length:32}, (_,i) => flood(base+i)));
+      assert.ok(statuses.every(status => status === 401 || status === 429));
+    }
+    assert.equal((await signed("/v1/commands", {})).status, 200);
+    assert.equal((await signed("/v1/telemetry", telemetry)).status, 200);
+    assert.equal((await admin("/api/devices")).status, 200);
+    assert.equal((await admin("/api/session", "POST", {password})).status, 200);
+  });
   await t.test(
     "revocation erases telemetry and removes tunnel access",
     async () => {
