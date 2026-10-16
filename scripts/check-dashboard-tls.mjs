@@ -4,8 +4,7 @@ import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import tls from "node:tls";
 const name = `bungee-tls-test-${process.pid}`;
-const image =
-  "caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d";
+const image = "bungee-web:dev";
 const docker = (args) =>
   execFileSync("docker", args, {
     encoding: "utf8",
@@ -20,6 +19,8 @@ try {
     name,
     "-e",
     "BUNGEE_DOMAIN=127.0.0.1",
+    "-e",
+    "BUNGEE_ADMIN_SUBNETS=127.0.0.1/32 172.16.0.0/12 192.168.0.0/16",
     "-p",
     "127.0.0.1::443",
     "--read-only",

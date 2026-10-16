@@ -63,6 +63,8 @@ try {
     "--cap-add",
     "NET_ADMIN",
     "--read-only",
+    "--tmpfs",
+    "/run:mode=0700",
     "--entrypoint",
     "tail",
     "bungee-gateway:dev",
@@ -80,7 +82,7 @@ try {
   const firewall = readFileSync("deploy/wireguard/entrypoint.sh", "utf8").split(
     "mkdir -p /private /peers",
   )[0];
-  docker(["exec", "-i", "-e", "BUNGEE_WG_PORT=47937", gateway, "sh"], firewall);
+  docker(["exec", "-i", "-e", "BUNGEE_WG_PORT=47937", "-e", "BUNGEE_ADMIN_SUBNETS=127.0.0.1/32 172.16.0.0/12 192.168.0.0/16", gateway, "sh"], firewall);
   assert.throws(
     () => probe(upstreamIp),
     (e) => e.status === 124,
@@ -107,6 +109,8 @@ try {
       "-i",
       "-e",
       "BUNGEE_WG_PORT=47937",
+      "-e",
+      "BUNGEE_ADMIN_SUBNETS=127.0.0.1/32 172.16.0.0/12 192.168.0.0/16",
       "-e",
       `BUNGEE_DNS_UPSTREAM_IP=${upstreamIp}`,
       "-e",
@@ -198,6 +202,8 @@ try {
     "/tmp:size=16m",
     "-e",
     "BUNGEE_DOMAIN=127.0.0.1",
+    "-e",
+    "BUNGEE_ADMIN_SUBNETS=127.0.0.1/32 172.16.0.0/12 192.168.0.0/16",
     "-v",
     `${resolve("deploy/Caddyfile")}:/etc/caddy/Caddyfile:ro`,
     image,

@@ -1,4 +1,4 @@
-# Validation of the reversibility update (alpha.6)
+# Validation of installation, updates and reversibility (alpha.7)
 
 The project owner confirmed no phone or server has been deployed. These are development checks, not a guarantee of zero failures or a physical GrapheneOS deployment. The exact supported-mode contract and excluded actions are in [SAFETY.md](SAFETY.md).
 
@@ -12,10 +12,15 @@ The project owner confirmed no phone or server has been deployed. These are deve
 | APK manifest | Merged APK inspected: separate recovery launcher present; both owner-provisioning activities disabled; unused library VpnService absent. Ordinary administration requests force-lock/watch-login only |
 | APK integrity | Debug APK signature and ZIP 16-KiB alignment checked. ARM64/x86_64 Go ELF alignment was verified previously; native module is unchanged in this update |
 | Native WireGuard | The unchanged module previously passed 2 real loopback peer/protocol/boundary tests, including wrong-PSK failure. This does not prove Android routing or coexistence |
-| Container boundary | Both current images build. Actual isolated Docker network test passes: default new egress and Docker DNS blocked, only a selected legacy private resolver IP/port allowed, trusted hybrid HTTPS reaches non-root/zero-capability/read-only Rust |
+| Container boundary | All three current images build. Actual isolated Docker network test passes: default new egress and Docker DNS blocked, only a selected legacy private resolver IP/port allowed, trusted hybrid HTTPS reaches non-root/zero-capability/read-only Rust |
 | Caddy TLS | Unchanged pinned issuer/group configuration previously passed local-CA/hybrid TLS checks and rejection of classical/TLS1.2. Current container-boundary test also establishes trusted hybrid HTTPS |
 | CI/config | Actions lint and Compose schema checked; tagged previews are configured to publish only after required CI jobs. Publication is separate from local validation |
 | Emulator runtime | **Blocked / not passed.** A dedicated AOSP Android 16 software emulator installed an intermediate APK and listed a Bungee activity, but system-service failures and command/UI timeouts prevented recovery assertions. The final APK has not passed interactive runtime checks |
+| Installer/updater unit tests | 17 passed: bare hosts/prefixes, invalid inputs, no-write/no-network plan, release constraints, disk/download failures, cleanup ordering, interrupted/failed trials and the post-rollback acceptance boundary |
+| Administrator ACL | Actual IPv4 Docker clients establish trusted hybrid TLS: configured source reaches the upstream route, a different source gets 403 for dashboard/API/health paths despite forged forwarding headers. Empty/malformed input prevents the bundled web image starting/validating. IPv6 normalization/rule generation is checked; real IPv6 client/NAT behavior is not field-tested |
+| Real Docker update transaction | Three real services and five real volumes: actual maintenance firewall blocks TCP; deliberately unhealthy candidate rolls back; saved SQLite fixture, WireGuard private identity and CA survive; trial-only file disappears; subsequent healthy candidate commits. Only kernel interface creation is replaced by an explicitly documented fixture; real firewall/admission/key setup/Rust/Caddy/snapshot/restore code runs |
+| Full host installation | Plan/generated Compose config and generated systemd unit syntax validated; production installer/timers were not enabled on this cloud. Kernel preflight fails with “Unknown device type”, so this machine cannot complete real WireGuard deployment. Real systemd boot/power-loss recovery and ARM64 runtime remain unverified |
+| Release publication | CI builds AMD64/ARM64 images and rechecks the exact published AMD64 candidates before promoting one digest bundle. Hosted execution/package visibility and stable refresh are unverified here; stable requires an intentionally published stable release. Client-side publisher-signature enforcement is absent |
 | Physical GrapheneOS | **Not run**. Ordinary admin deactivation, offline recovery, corrupted app state, storage faults, cold boot, update, real home routing and other-VPN behavior remain field-test requirements |
 | Old owner removal | **Not guaranteed or tested on a phone.** Cleanup cannot promise OS owner removal without reset. New build refuses owner operation and provides no owner-creation path |
 

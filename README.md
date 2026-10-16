@@ -21,7 +21,7 @@ Everything below is implemented in this preview; physical GrapheneOS validation 
 | Area | Included features |
 | --- | --- |
 | Household dashboard | Multiple named phones; enrollment/online/offline state; battery and charging; last check-in; last-known GPS with observation time and accuracy; responsive desktop/mobile layout; manual refresh; administrator sign-out |
-| Location history | Durable GPS observations and device check-in logs; inclusive from/to lookup; per-phone pagination; private coordinate trail and point selection; CSV export; no map/geocoding provider |
+| Location history | Durable GPS observations and device check-in logs; inclusive from/to lookup; per-phone pagination; private coordinate trail and point selection (no street basemap); CSV export; no map/geocoding provider |
 | Recurring history lookup | Every saved record; newest record per **5 minutes**, **hour**, or custom **1–1,440 minutes**; nearest record **every day at HH:MM** in an IANA timezone with ±0–120 minute tolerance; daily ranges up to 366 days; explicit DST/gap rules; matching filtered CSV; originals remain saved |
 | Offline recovery | Independent last-known point survives missing fixes, outages and server restart; old backfills cannot replace newer locations; encrypted phone backlog up to **10,080** unique GPS points; bounded batches/retry/deduplication |
 | Finding commands | Fresh GPS request; alarm tone for up to 30 seconds; stop sound; post/clear recovery notification; remote screen lock with Android device administration |
@@ -39,9 +39,12 @@ Everything below is implemented in this preview; physical GrapheneOS validation 
 | Administrator security | Argon2id password hashing; HttpOnly/SameSite cookies; exact-origin mutation checks; separate administrator/device listeners; bounded/rate-limited requests; capability-gated commands; five-minute command expiry; bounded security audit; same-origin CSP |
 | Data ownership | GPS, check-in history, last-known point and DNS summaries retained until erased/revoked; separate GPS/full-history/DNS erase; cutoff prevents erased GPS backlog reappearing; revocation deletes device data/policies/commands, invalidates identity and removes peer; local-only SQLite |
 | Deployment | Docker Compose; non-root, zero-capability, read-only Rust server; isolated WireGuard gateway; Caddy local CA; TLS 1.3 X25519MLKEM768 key exchange; no public ACME/port 80/HTTP3; runtime new egress denied except the explicitly selected private home DNS IP/port |
+| Guided setup | Wizard asks for both ports, endpoint/bind address and mandatory administrator hosts/prefixes; bare hosts become /32 or /128; validated review plan; exact HTTPS URL and local-CA fingerprint; refuses existing installations |
+| Administrator network boundary | Gateway firewall and Caddy both enforce explicit source prefixes; forwarded-IP headers cannot bypass the web check; local-console configuration repair |
+| Container updates | Host timer/Compose; stable default and explicit preview choice; immutable three-image bundle; staged downloads; closed admission during health checks; coherent five-volume snapshots and failed-trial recovery; newest three local snapshots; no app Docker socket |
 | Builds and checks | ARM64 and x86_64 Android 12+ APK; tagged CI test releases and checksums; Rust/API/browser/Android/native-WireGuard/container tests; stable operator signing option; source and test fixtures available |
 
-**Absent:** automatic failed-unlock photos, hidden launcher, lock-screen overlays, power-off, remote reboot, device-owner enrollment, managed DNS/always-on, app suspension, uninstall protection, forced lock requirements, recovery-settings restrictions, remote wipe, arbitrary shell/scripts, remote credential reset, software deployment, work-profile management, activation/firmware lock, powered-off finding, crowdsourced offline finding, relay/NAT traversal, multi-user household roles/MFA, attestation and a security audit. Failed-credential events do not promise to count biometric failures. Android device ownership requires eligible provisioning; it cannot be granted by a normal permission dialog.
+**Absent:** street-map basemaps and GeoIP lookups (no external provider is contacted), automatic failed-unlock photos, hidden launcher, lock-screen overlays, power-off, remote reboot, device-owner enrollment, managed DNS/always-on, app suspension, uninstall protection, forced lock requirements, recovery-settings restrictions, remote wipe, arbitrary shell/scripts, remote credential reset, software deployment, work-profile management, activation/firmware lock, powered-off finding, crowdsourced offline finding, relay/NAT traversal, multi-user household roles/MFA, attestation and a security audit. Failed-credential events do not promise to count biometric failures. Android device ownership requires eligible provisioning; it cannot be granted by a normal permission dialog.
 
 **Coverage limits:** Bungee uses app-contained WireGuard for its own API and leaves Android's VPN slot free. It does not redirect other apps' DNS or enforce restrictions. No claim of universal DNS coverage is made. Post-quantum PSK/hybrid key exchange does not make classical certificate/device/APK signatures quantum-proof. Physical GrapheneOS validation is still required.
 
@@ -63,6 +66,7 @@ The server uses administrator port 8080 and a separate local device-test port 80
 source scripts/dev-env.sh
 cargo build --locked --manifest-path server/Cargo.toml
 npm test
+python3 -m unittest discover -s tests -p 'test_*.py'
 npm run test:browser
 npm run test:tls # Docker + Node 24/OpenSSL 3.5
 bash scripts/build-transport.sh
@@ -76,17 +80,19 @@ For web hot reload, run the Rust server with `BUNGEE_PUBLIC_ORIGIN=http://127.0.
 
 ## Deploy on your own server
 
+Use [the guided installer](docs/INSTALL.md): `bash scripts/install.sh --plan` validates without changes; `sudo bash scripts/install.sh` applies it on a supported Linux/Docker/systemd host. The manual Compose alternative below does not install the update timer.
+
 Use a Linux host with Docker Compose and kernel WireGuard support. Docker Desktop and restricted cloud sandboxes are not the target. The gateway never forwards general internet traffic.
 
 1. Copy `.env.example` to `.env`. Choose an unused **custom UDP port** in `BUNGEE_WG_PORT` (no default; 51820 is rejected). Set `BUNGEE_WG_ENDPOINT` to the literal reachable `IP:chosen-port`, or `[IPv6]:chosen-port`. Provider DNS is disabled for the tunnel.
-2. Set `BUNGEE_DOMAIN` to the dashboard's IP or a name resolved locally. Set `BUNGEE_ADMIN_ADDRESS` to the server's LAN address for LAN access; the default binds HTTPS to loopback for an SSH tunnel. Forward only your chosen UDP port for remote phones. CGNAT still needs an independently reachable endpoint; no relay is implemented.
-3. Ensure the non-secret `deploy/Caddyfile` is readable (`chmod 0644 deploy/Caddyfile`). Run `docker compose up --build -d` and check `docker compose ps` / `docker compose logs`.
+2. Set `BUNGEE_ADMIN_PORT`, the exact `BUNGEE_PUBLIC_ORIGIN` including a nonstandard port, and mandatory `BUNGEE_ADMIN_SUBNETS`. Set `BUNGEE_DOMAIN` to the dashboard's IP or a name resolved locally. Set `BUNGEE_ADMIN_ADDRESS` to the server's LAN address for LAN access; the default binds HTTPS to loopback for an SSH tunnel. Forward only your chosen UDP port for remote phones. CGNAT still needs an independently reachable endpoint; no relay is implemented.
+3. Caddy configuration is bundled in the web image. Run `docker compose up --build -d` and check `docker compose ps` / `docker compose logs`.
 4. Caddy creates a **local CA** and never requests a public ACME certificate. Retrieve its **public** root certificate locally with `docker compose exec -T web cat /data/caddy/pki/authorities/local/root.crt > bungee-root.crt`, verify its SHA-256 fingerprint over a trusted channel, and trust it on administrator devices. Never copy the CA private key or bypass certificate verification. Use a current browser supporting X25519MLKEM768; classical-only TLS clients fail closed. Read the generated administrator password locally with `docker compose exec server cat /state/admin-password` and sign in over trusted HTTPS.
 5. Install the new APK, copy its public key into **Add a device**, and scan the invitation from the trusted administrator display. The QR contains a long-lived preshared secret; keep it private and avoid cloud clipboard/photo synchronization. Approve precise GPS permission, then start sharing visibly on the phone.
 
 Gateway peers refresh within about three seconds. Invitations expire in ten minutes. If pairing succeeds on the server but the phone loses the enrollment response, revoke that pending device, unpair locally, and generate a fresh invitation. Do not reuse invitations or keys from a revoked phone.
 
-Only the configured dashboard bind address on TCP 443 and your chosen WireGuard UDP port are published. There is no HTTP port 80, HTTP/3 listener, public certificate issuance, cloud push, analytics, geocoding, or map provider. Newly initiated external traffic is denied except an explicitly configured private home DNS IP/port; inbound connection replies remain allowed. The administrator and device APIs are not published separately. The private device API uses HTTP **inside the authenticated WireGuard channel**; exposing port 8081 directly would break the transport assumption. See [deployment details](docs/DEPLOYMENT.md).
+Only the configured dashboard bind address on your chosen HTTPS TCP port and your chosen WireGuard UDP port are published. There is no HTTP port 80, HTTP/3 listener, public certificate issuance, cloud push, analytics, geocoding, or map provider. Newly initiated external traffic is denied except an explicitly configured private home DNS IP/port; inbound connection replies remain allowed. The administrator and device APIs are not published separately. The private device API uses HTTP **inside the authenticated WireGuard channel**; exposing port 8081 directly would break the transport assumption. See [deployment details](docs/DEPLOYMENT.md).
 
 ## Platform boundaries
 
@@ -113,7 +119,7 @@ Server history has **no automatic expiry or size-based eviction**. Monitor free 
 
 Existing databases migrate the saved last-known point into history. **Legacy identities without a preshared key are blocked from the tunnel after upgrading**; their saved data stays available. Re-pair with a new phone identity and version-2 invitation. Revoking a legacy identity erases its saved data, so export anything you need first. Old APKs do not provide the new offline queue or GPS-only collection policy. See [security boundaries](docs/SECURITY.md#post-quantum-protection-and-limits).
 
-Bungee has no runtime service-provider integration. Build/install tools download dependencies; the running app sends its payloads only to the enrolled home server. The OS, GNSS assistance, browser/clipboard synchronization, DNS configuration, ISP and any reverse proxy you add remain outside that application boundary. Configure GrapheneOS's OS-level services to match your policy. Network operators can observe connection metadata even when payloads are encrypted. No claim of zero traffic from the entire phone or compromised host is made.
+Bungee has no runtime service-provider integration. Build/install tools download dependencies; the optional host updater downloads image artifacts and exposes normal server-IP/artifact metadata to the registry (see [update privacy](docs/INSTALL.md#publication-trust-and-privacy)); the running app sends its payloads only to the enrolled home server. The OS, GNSS assistance, browser/clipboard synchronization, DNS configuration, ISP and any reverse proxy you add remain outside that application boundary. Configure GrapheneOS's OS-level services to match your policy. Network operators can observe connection metadata even when payloads are encrypted. No claim of zero traffic from the entire phone or compromised host is made.
 
 The administrator and home server are trusted and can read device locations. This is not end-to-end encryption against the administrator. No claim of audit, attestation, penetration testing, or guaranteed hardware-backed keys is made. Android Keystore uses the device’s available security implementation; hardware-backed key verification and server-verified attestation are future hardening work.
 

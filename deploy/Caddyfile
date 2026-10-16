@@ -13,5 +13,16 @@
         curves x25519mlkem768
     }
     encode zstd gzip
-    reverse_proxy 127.0.0.1:8080
+    @allowed remote_ip {$BUNGEE_ADMIN_SUBNETS:REQUIRED_ADMIN_SUBNETS}
+    handle @allowed {
+        reverse_proxy 127.0.0.1:8080
+    }
+    handle {
+        respond "Administrator network not allowed" 403
+    }
+}
+http://127.0.0.1:8090 {
+    bind 127.0.0.1
+    respond /healthz "ready" 200
+    respond 404
 }

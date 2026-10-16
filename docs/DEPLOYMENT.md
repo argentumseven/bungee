@@ -12,13 +12,15 @@ Wireshark analyzes packets; WireGuard creates an encrypted tunnel. Neither gives
 
 ## Private dashboard deployment
 
+Use the [guided installer](INSTALL.md) for prompted ports, mandatory administrator networks and the host update timer. The following manual alternative does not install automatic updates.
+
 1. Copy .env.example to .env and choose BUNGEE_WG_PORT and BUNGEE_WG_ENDPOINT explicitly. Use an IP address or locally resolved dashboard name for BUNGEE_DOMAIN.
-2. Set BUNGEE_ADMIN_ADDRESS to the server's LAN address to make HTTPS available to administrator devices on that LAN. Its default is 127.0.0.1; loopback requires a local browser or an SSH tunnel with correct origin/host handling. There is no dashboard WAN-forwarding requirement. Prefer keeping administration on a trusted LAN.
-3. Ensure deploy/Caddyfile is readable by Caddy (`chmod 0644 deploy/Caddyfile`; it contains no secrets). Run `docker compose up --build -d`, then check health and logs. Never publish internal API ports 8080/8081.
+2. Set BUNGEE_ADMIN_PORT, the exact BUNGEE_PUBLIC_ORIGIN (including a nonstandard port), and mandatory BUNGEE_ADMIN_SUBNETS. Set BUNGEE_ADMIN_ADDRESS to the server's LAN address to make HTTPS available to administrator devices on that LAN. Its default is 127.0.0.1; loopback requires a local browser or an SSH tunnel with correct origin/host handling. There is no dashboard WAN-forwarding requirement. Prefer keeping administration on a trusted LAN.
+3. The web image bundles its Caddy configuration. Run `docker compose up --build -d`, then check health and logs. Never publish internal API ports 8080/8081.
 4. Caddy creates and renews certificates with its **local CA**. Retrieve only the public root: `docker compose exec -T web cat /data/caddy/pki/authorities/local/root.crt > bungee-root.crt`. Verify its SHA-256 fingerprint locally/over an authenticated channel, then explicitly trust it on administrator devices. Never export root.key or disable verification. CA trust grants certificate authority; use an administrator browser/profile under your control.
 5. Use a current browser supporting TLS 1.3 **X25519MLKEM768**. The server rejects classical-only key exchange; there is no automatic fallback. Read the generated administrator password locally with `docker compose exec server cat /state/admin-password` and sign in to the exact HTTPS origin.
 
-There is **no public ACME/certificate-provider contact**, port 80 listener, HTTP/3 listener, cloud push, remote map/geocoding service, analytics or runtime update check. Only dashboard TCP 443 on the chosen bind address and the custom WireGuard UDP port are published. Do not add a third-party TLS-terminating proxy if the provider must not see data.
+There is **no public ACME/certificate-provider contact**, port 80 listener, HTTP/3 listener, cloud push, remote map/geocoding service, analytics or in-app runtime update check. The optional host updater downloads release artifacts as described in INSTALL.md. Only the chosen dashboard HTTPS TCP port on the chosen bind address and the custom WireGuard UDP port are published. Do not add a third-party TLS-terminating proxy if the provider must not see data.
 
 ## Container boundary and volumes
 
@@ -69,4 +71,4 @@ See [MANAGEMENT.md](MANAGEMENT.md) for supported personal operation, local recov
 
 Ordinary hosts can use the README’s unmodified Compose build. This cloud’s Docker daemon needs an explicit proxy hostname mapping and the authoritative environment CA for build-time HTTPS. `scripts/docker-build-cloud.sh` derives the proxy hostname/address without reading credential values, forwards existing proxy bindings using Docker’s predefined build arguments, and supplies the system CA bundle as a BuildKit secret. It never disables TLS/package signature checks and does not install the cloud CA into runtime images.
 
-`scripts/docker-build-cloud.sh` builds the two local development image tags. It does not deploy or expose them. Live Caddy certificate issuance and the complete Compose stack still require the host prerequisites above.
+`scripts/docker-build-cloud.sh` builds all three local development image tags. It does not deploy or expose them. Live Caddy certificate issuance and the complete Compose stack still require the host prerequisites above.

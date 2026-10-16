@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 umask 077
+# Parse the entire list before installing any accept rule. Bare addresses become hosts.
+admin_rules=$(python3 /usr/local/lib/bungee/network_config.py firewall)
 : "${BUNGEE_WG_PORT:?Choose a custom UDP port}"
 case "$BUNGEE_WG_PORT" in ''|*[!0-9]*) echo "Invalid UDP port" >&2; exit 1;; esac
 if [ "$BUNGEE_WG_PORT" -lt 1 ] || [ "$BUNGEE_WG_PORT" -gt 65535 ] || [ "$BUNGEE_WG_PORT" -eq 51820 ]; then
@@ -39,7 +41,11 @@ for firewall in iptables ip6tables; do
     "$firewall" -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     "$firewall" -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     "$firewall" -A INPUT -p udp --dport "$BUNGEE_WG_PORT" -j ACCEPT
-    "$firewall" -A INPUT -p tcp --dport 443 -j ACCEPT
+    printf '%s\n' "$admin_rules" | while read -r family subnet; do
+        if { [ "$family" = 4 ] && [ "$firewall" = iptables ]; } || { [ "$family" = 6 ] && [ "$firewall" = ip6tables ]; }; then
+            "$firewall" -A INPUT -s "$subnet" -p tcp --dport 443 -j ACCEPT
+        fi
+    done
     "$firewall" -A INPUT -i wg0 -p tcp --dport 8081 -j ACCEPT
     # Essential IPv6 neighbor discovery / path-MTU, not application egress.
     if [ "$firewall" = ip6tables ]; then
@@ -49,6 +55,34 @@ for firewall in iptables ip6tables; do
         done
     fi
 done
+# Host updater can close admission before snapshots and while checking a candidate.
+# The directory is mounted read-only, contains no keys, and cannot be changed by the app.
+admission=unknown
+refresh_admission() {
+    wanted=open
+    if [ -n "${BUNGEE_UPDATE_CONTROL:-}" ]; then
+        wanted=closed
+        if [ "$(cat "$BUNGEE_UPDATE_CONTROL/status" 2>/dev/null || true)" = open ]; then wanted=open; fi
+    fi
+    [ "$wanted" != "$admission" ] || return 0
+    for fw in iptables ip6tables; do
+        if [ "$admission" = unknown ]; then
+            "$fw" -N BUNGEE_HOLD 2>/dev/null || "$fw" -F BUNGEE_HOLD
+            "$fw" -A BUNGEE_HOLD -p udp --dport "$BUNGEE_WG_PORT" -j DROP
+            "$fw" -A BUNGEE_HOLD -p tcp --dport 443 -j DROP
+            "$fw" -A BUNGEE_HOLD -i wg0 -p tcp --dport 8081 -j DROP
+            "$fw" -I INPUT 1 -j BUNGEE_HOLD
+        fi
+        if [ "$wanted" = open ]; then
+            "$fw" -D INPUT -j BUNGEE_HOLD
+        elif [ "$admission" = open ]; then
+            "$fw" -I INPUT 1 -j BUNGEE_HOLD
+        fi
+    done
+    admission=$wanted
+    printf '%s\n' "$wanted" > /run/bungee-admission
+}
+refresh_admission
 iptables -t nat -F PREROUTING
 if [ -n "$dns_ip" ]; then
     for protocol in udp tcp; do
@@ -58,6 +92,9 @@ if [ -n "$dns_ip" ]; then
     done
 fi
 mkdir -p /private /peers
+# A previous run leaves /peers owned by Rust. CHOWN permits reclaiming it;
+# DAC_OVERRIDE alone does not permit chmod of another UID's directory.
+chown 0:0 /private /peers
 chmod 0700 /private /peers
 chown 10001:10001 /peers
 if [ ! -s /private/server-key ]; then wg genkey > /private/server-key; fi
@@ -66,8 +103,10 @@ chown 10001:10001 /peers/server-public-key
 ip link add wg0 type wireguard
 ip address add 10.77.0.1/24 dev wg0
 ip link set wg0 mtu 1280 up
-trap 'ip link delete wg0 2>/dev/null || true' EXIT INT TERM
+trap 'ip link delete wg0 2>/dev/null || true' EXIT
+trap 'exit 0' INT TERM
 while :; do
+    refresh_admission
     {
         printf '[Interface]\nListenPort = %s\nPrivateKey = ' "$BUNGEE_WG_PORT"
         cat /private/server-key

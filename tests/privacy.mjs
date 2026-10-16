@@ -61,12 +61,15 @@ test("gateway validates the chosen port and installs outbound-deny rules for the
     original
       .replaceAll("/private", join(dir, "private"))
       .replace(/\/peers(?=[/\s"]|$)/g, join(dir, "peers"))
-      .replaceAll("/run/wg0.conf", join(dir, "wg0.conf")),
+      .replaceAll("/run/wg0.conf", join(dir, "wg0.conf"))
+      .replaceAll("/run/bungee-admission", join(dir, "admission"))
+      .replaceAll("/usr/local/lib/bungee/network_config.py", resolve("deploy/network_config.py")),
   );
   const env = {
     ...process.env,
     PATH: `${bin}:${process.env.PATH}`,
     TEST_FIREWALL_LOG: log,
+    BUNGEE_ADMIN_SUBNETS: "127.0.0.1 ::1",
   };
   for (const port of ["", "51820", "0", "65536", "123;bad", "-2"]) {
     const rejected = spawnSync("sh", [script], {
@@ -74,7 +77,7 @@ test("gateway validates the chosen port and installs outbound-deny rules for the
       encoding: "utf8",
     });
     assert.notEqual(rejected.status, 0);
-    assert.match(rejected.stderr, /Choose a custom UDP port|Invalid UDP port/);
+    assert.match(rejected.stderr, /Choose a custom UDP port|Invalid UDP port|Ports must|51820 is not permitted/);
   }
   assert.equal(
     spawnSync("sh", [script], { env: { ...env, BUNGEE_WG_PORT: "47937" } })

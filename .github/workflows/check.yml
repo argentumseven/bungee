@@ -20,9 +20,9 @@ jobs:
       - run: cargo fmt --manifest-path server/Cargo.toml -- --check
       - run: cargo clippy --locked --manifest-path server/Cargo.toml -- -D warnings
       - run: cargo test --locked --manifest-path server/Cargo.toml && cargo build --locked --manifest-path server/Cargo.toml && npm test
+      - run: python3 -m unittest discover -s tests -p 'test_*.py' -v
       - run: npx playwright-core install --with-deps chromium
       - run: CHROME_BIN=$(find "$HOME/.cache/ms-playwright" -path '*/chrome-linux*/chrome' -type f | head -1) npm run test:browser
-      - run: npm run test:tls
   android:
     runs-on: ubuntu-24.04
     steps:
@@ -64,11 +64,139 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with: { node-version: "24" }
-      - run: docker build -t bungee-gateway:dev deploy/wireguard && docker build -t bungee-server:dev .
+      - run: docker build -t bungee-gateway:dev -f deploy/wireguard/Dockerfile deploy && docker build -t bungee-server:dev . && docker build -t bungee-web:dev -f deploy/web.Dockerfile deploy
       - run: npm run test:network
+      - run: npm run test:tls
+      - run: node scripts/check-admin-network.mjs
+      - run: python3 scripts/check-updater.py
+  publish-containers:
+    if: github.repository == 'argentumseven/bungee' && startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: [server-and-web, android, container-boundaries]
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: bungee-publish-${{ contains(github.ref_name, '-') && 'preview' || 'stable' }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-qemu-action@v3
+      - uses: actions/setup-node@v5
+        with: { node-version: "24" }
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        id: server
+        with:
+          context: .
+          push: true
+          pull: true
+          platforms: linux/amd64,linux/arm64
+          tags: ghcr.io/argentumseven/bungee-server:${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          provenance: mode=max
+      - uses: docker/build-push-action@v6
+        id: gateway
+        with:
+          context: deploy
+          file: deploy/wireguard/Dockerfile
+          push: true
+          pull: true
+          platforms: linux/amd64,linux/arm64
+          tags: ghcr.io/argentumseven/bungee-gateway:${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          provenance: mode=max
+      - uses: docker/build-push-action@v6
+        id: web
+        with:
+          context: deploy
+          file: deploy/web.Dockerfile
+          push: true
+          pull: true
+          platforms: linux/amd64,linux/arm64
+          tags: ghcr.io/argentumseven/bungee-web:${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          provenance: mode=max
+      - name: Check the exact published amd64 candidates before channel promotion
+        env:
+          SERVER_DIGEST: ${{ steps.server.outputs.digest }}
+          GATEWAY_DIGEST: ${{ steps.gateway.outputs.digest }}
+          WEB_DIGEST: ${{ steps.web.outputs.digest }}
+        run: |
+          set -euo pipefail
+          for service in server gateway web; do
+            key="${service^^}_DIGEST"
+            reference="ghcr.io/argentumseven/bungee-$service@${!key}"
+            docker pull "$reference"
+            docker tag "$reference" "bungee-$service:dev"
+          done
+          npm run test:network
+          npm run test:tls
+          node scripts/check-admin-network.mjs
+          python3 scripts/check-updater.py
+      - name: Assemble one immutable stack manifest
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+          SERVER_DIGEST: ${{ steps.server.outputs.digest }}
+          GATEWAY_DIGEST: ${{ steps.gateway.outputs.digest }}
+          WEB_DIGEST: ${{ steps.web.outputs.digest }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, re, time
+          version = os.environ['RELEASE_VERSION'].removeprefix('v')
+          assert re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-alpha\.[1-9][0-9]*)?', version)
+          images = {}
+          for service in ('server', 'gateway', 'web'):
+              digest = os.environ[service.upper() + '_DIGEST']
+              assert re.fullmatch(r'sha256:[a-f0-9]{64}', digest)
+              images[service] = f'ghcr.io/argentumseven/bungee-{service}@{digest}'
+          path = pathlib.Path('release-bundle'); path.mkdir()
+          (path / 'release.json').write_text(json.dumps({'format': 1, 'host_api': 1, 'data_contract': 1, 'version': version, 'published_at': int(time.time()), 'images': images}))
+          PY
+          if [[ "$RELEASE_VERSION" == *-* ]]; then channel=preview; else channel=stable; fi
+          echo "BUNGEE_RELEASE_CHANNEL=$channel" >> "$GITHUB_ENV"
+      - name: Publish the immutable bundle
+        uses: docker/build-push-action@v6
+        id: bundle
+        with:
+          context: release-bundle
+          file: deploy/release.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/argentumseven/bungee-release:${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          provenance: mode=max
+      - name: Atomically promote without moving the channel backwards
+        env:
+          BUNDLE_DIGEST: ${{ steps.bundle.outputs.digest }}
+        run: |
+          python3 - <<'PY'
+          import importlib.util, json, os, pathlib, subprocess
+          spec = importlib.util.spec_from_file_location('host', 'scripts/bungee-host.py')
+          host = importlib.util.module_from_spec(spec); spec.loader.exec_module(host)
+          repository = 'ghcr.io/argentumseven/bungee-release'
+          channel = repository + ':' + os.environ['BUNGEE_RELEASE_CHANNEL']
+          candidate = json.loads(pathlib.Path('release-bundle/release.json').read_text())
+          result = subprocess.run(['docker', 'pull', '--platform', 'linux/amd64', channel], capture_output=True, text=True)
+          if result.returncode:
+              if 'manifest unknown' not in result.stderr.lower() and 'not found' not in result.stderr.lower():
+                  raise SystemExit(result.stderr)
+          else:
+              container = subprocess.check_output(['docker', 'create', '--platform', 'linux/amd64', channel], text=True).strip()
+              try:
+                  subprocess.check_call(['docker', 'cp', container + ':/release.json', 'release-bundle/current.json'])
+                  previous = json.loads(pathlib.Path('release-bundle/current.json').read_text())
+              finally:
+                  subprocess.check_call(['docker', 'rm', '--volumes', container])
+              if host.version(candidate['version']) < host.version(previous['version']) or candidate['published_at'] <= previous['published_at']:
+                  print('A newer bundle already owns this channel; immutable artifact kept, channel unchanged.')
+                  raise SystemExit(0)
+          subprocess.check_call(['docker', 'buildx', 'imagetools', 'create', '--tag', channel, repository + '@' + os.environ['BUNDLE_DIGEST']])
+          PY
   prerelease:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [server-and-web, android, container-boundaries]
+    needs: [server-and-web, android, container-boundaries, publish-containers]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -94,13 +222,17 @@ jobs:
 
           A separate **Bungee recovery** launcher entry stops controls offline without pairing keys or a server. The saved local stop takes precedence over boot/restart/connect/command execution. Cleanup attempts continue after individual failures and report errors. Android's ordinary personal-app deactivation/uninstall paths remain available. Device ownership from old previews is not automatically removable; do not enroll a phone as device owner.
 
+          Alpha.7 adds guided host installation, chosen HTTPS/WireGuard ports, mandatory administrator source-prefix restrictions at both the gateway firewall and Caddy, and a host-side Compose updater. Updates stage immutable images, close admission, snapshot all five volumes, check health and recover a failed trial before reopening. Stable is the default update channel; preview updates require an explicit choice. The app containers never receive the Docker socket. See docs/INSTALL.md for prerequisites, recovery and update trust boundaries.
+
           Update BOTH server and APK. Choose a custom UDP port (51820 rejected). Version-2 pairing requires a per-peer random 256-bit WireGuard PSK. Dashboard HTTPS requires the trusted local CA and TLS 1.3 X25519MLKEM768. Certificate/device/APK signatures remain classical; this is not a wholly quantum-proof product. Runtime egress is denied except an explicitly configured legacy private home DNS upstream; leave it unset for new deployments. No public DNS fallback, telemetry provider, analytics or cloud push.
 
           This is a signed **debug build** of an unaudited prototype for test devices. CI debug keys are ephemeral: updates may require uninstall/re-pair. **Device-owner enrollment is unsupported; do not use ADB to assign that role.** Build with your own stable signing key using scripts/build-owner-apk.sh.
 
           ARM64 phones and x86_64 test devices, Android 12+. Native WireGuard protocol tests run without kernel TUN. Physical GrapheneOS routing, other-VPN coexistence and local recovery still need testing. Automatic photos, hidden launcher, remote power-off/wipe and crowdsourced finding are absent. See README.md for the full feature checklist and docs/VALIDATION.md for evidence.
           NOTES
+          release_flags=(--prerelease=false)
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then release_flags=(--prerelease); fi
           gh release create "$GITHUB_REF_NAME" bungee-debug.apk bungee-debug.apk.sha256 \
-            --repo "$GITHUB_REPOSITORY" --verify-tag --draft --prerelease \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --draft "${release_flags[@]}" \
             --title "Bungee $GITHUB_REF_NAME — development preview" --notes-file release-notes.md
-          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false "${release_flags[@]}"
