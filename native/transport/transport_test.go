@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/curve25519"
 	"golang.zx2c4.com/wireguard/conn"
@@ -52,7 +53,14 @@ func TestWireGuardRoundTripAndRequestBoundaries(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	stalled := make(chan struct{})
+	release := make(chan struct{})
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/sync" {
+			close(stalled)
+			<-release
+			return
+		}
 		if r.URL.Path != "/v1/telemetry" || r.Method != "POST" || r.Header.Get("X-Bungee-Nonce") != "test-nonce" {
 			t.Error("unexpected request")
 		}
@@ -93,6 +101,28 @@ func TestWireGuardRoundTripAndRequestBoundaries(t *testing.T) {
 	if _, e = Exchange("/v1/telemetry", `{}`, `{"X-Bungee-Nonce":"test-nonce"}`); e == nil {
 		t.Fatal("wrong PSK reached API")
 	}
+	config.PresharedKey = base64.StdEncoding.EncodeToString(psk)
+	data, _ = json.Marshal(config)
+	if e = Configure(string(data)); e != nil {
+		t.Fatal(e)
+	}
+	completed := make(chan error, 1)
+	go func() { _, err := Exchange("/v1/sync", `{}`, `{}`); completed <- err }()
+	select {
+	case <-stalled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("request did not reach test peer")
+	}
+	Stop()
+	select {
+	case err := <-completed:
+		if err == nil {
+			t.Fatal("stopped peer returned success")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("stop did not cancel active request")
+	}
+	close(release)
 	Stop()
 	if _, e = Exchange("/v1/sync", `{}`, `{}`); e == nil {
 		t.Fatal("stopped transport accepted request")

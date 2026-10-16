@@ -40,6 +40,13 @@ type Report = {
   unlock_monitoring: boolean;
   failed_unlocks: number;
   last_failed_at: number | null;
+  delivery?: null | {
+    reported_at: number;
+    queued_fixes: number;
+    dropped_fixes: number;
+    oldest_queued_at: number | null;
+    pending_receipts: number;
+  };
 };
 type Saved = {
   revision: number;
@@ -279,6 +286,50 @@ export function DeviceCare({
                           : "Requested state reported"}
                     </strong>
                   </div>
+                  <h3 className="delivery-heading">
+                    Delivery &amp; offline queue
+                  </h3>
+                  {report.delivery ? (
+                    <>
+                      <p className="fine">
+                        Last reported {time(report.delivery.reported_at)}. These
+                        are saved observations, not a live view while the phone
+                        is offline.
+                      </p>
+                      <dl className="care-health">
+                        <div>
+                          <dt>Queued GPS fixes</dt>
+                          <dd>
+                            {report.delivery.queued_fixes.toLocaleString()}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Discarded at queue capacity</dt>
+                          <dd>
+                            {report.delivery.dropped_fixes.toLocaleString()}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Oldest queued observation</dt>
+                          <dd>
+                            {report.delivery.oldest_queued_at
+                              ? time(report.delivery.oldest_queued_at)
+                              : "None reported"}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Receipts awaiting confirmation</dt>
+                          <dd>{report.delivery.pending_receipts}</dd>
+                        </div>
+                      </dl>
+                    </>
+                  ) : (
+                    <p className="fine">
+                      Update the phone app to report its encrypted offline
+                      queue. An offline phone cannot report its current queue
+                      size.
+                    </p>
+                  )}
                   <dl className="care-health">
                     <div>
                       <dt>Screen lock</dt>
@@ -352,8 +403,8 @@ export function DeviceCare({
                 Android's system resolver in the managed profile. App-supplied
                 DoH/DoT, hard-coded DNS, other profiles and periods without the
                 VPN are coverage limits. App suspension is unavailable in this
-                build. This view is not a browsing-history or
-                app-attribution claim.
+                build. This view is not a browsing-history or app-attribution
+                claim.
               </div>
             </section>
           </div>

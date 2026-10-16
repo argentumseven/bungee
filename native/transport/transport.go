@@ -30,6 +30,8 @@ type configuration struct {
 	PresharedKey string `json:"preshared_key"`
 }
 type engine struct {
+	ctx       context.Context
+	cancel    context.CancelFunc
 	device    *device.Device
 	http      *http.Client
 	transport *http.Transport
@@ -106,12 +108,14 @@ func Configure(configJSON string) error {
 			}
 			return stack.DialContextTCPAddrPort(ctx, apiAddress)
 		}}
-	peer := &engine{wg, &http.Client{Transport: transport, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, transport}
+	ctx, cancel := context.WithCancel(context.Background())
+	peer := &engine{ctx, cancel, wg, &http.Client{Transport: transport, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, transport}
 	active.Lock()
 	old := active.peer
 	active.peer = peer
 	active.Unlock()
 	if old != nil {
+		old.cancel()
 		old.transport.CloseIdleConnections()
 		old.device.Close()
 	}
@@ -140,7 +144,7 @@ func Exchange(path, body, headersJSON string) (string, error) {
 	if peer == nil {
 		return "", errors.New("private connection is stopped")
 	}
-	request, e := http.NewRequest(http.MethodPost, "http://"+apiAddress.String()+path, bytes.NewBufferString(body))
+	request, e := http.NewRequestWithContext(peer.ctx, http.MethodPost, "http://"+apiAddress.String()+path, bytes.NewBufferString(body))
 	if e != nil {
 		return "", errors.New("invalid request")
 	}
@@ -171,6 +175,7 @@ func Stop() {
 	active.peer = nil
 	active.Unlock()
 	if old != nil {
+		old.cancel()
 		old.transport.CloseIdleConnections()
 		old.device.Close()
 	}

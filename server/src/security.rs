@@ -208,6 +208,10 @@ pub fn verify_device(app: &App, headers: &HeaderMap, path: &str, body: &[u8]) ->
     if inserted != 1 {
         return Err(Error(StatusCode::CONFLICT, "Request already used"));
     }
+    db.execute(
+        "UPDATE devices SET last_contact=MAX(COALESCE(last_contact,0),?) WHERE id=? AND revoked=0",
+        params![now(), id],
+    )?;
     Ok(id.into())
 }
 

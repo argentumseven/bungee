@@ -96,7 +96,7 @@ pub async fn devices(State(app): State<App>, headers: HeaderMap) -> ApiResult<Js
     }
     let db = app.db.lock().unwrap();
     // Recovery data survives long outages. Freshness is described by timestamps, not deletion.
-    let mut q=db.prepare("SELECT id,name,address,created,last_seen,revoked,telemetry,capabilities,public_key IS NOT NULL,last_location,wg_psk IS NOT NULL,management_report FROM devices ORDER BY created")?;
+    let mut q=db.prepare("SELECT id,name,address,created,last_seen,revoked,telemetry,capabilities,public_key IS NOT NULL,last_location,wg_psk IS NOT NULL,management_report,last_contact FROM devices ORDER BY created")?;
     let rows=q.query_map([],|r| {
         let location = r.get::<_,Option<String>>(9)?.and_then(|s|serde_json::from_str::<Value>(&s).ok());
         let mut telemetry = r.get::<_,Option<String>>(6)?.and_then(|s|serde_json::from_str::<Value>(&s).ok());
@@ -107,15 +107,15 @@ pub async fn devices(State(app): State<App>, headers: HeaderMap) -> ApiResult<Js
         Ok(json!({
         "id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"address":r.get::<_,String>(2)?,
         "created":r.get::<_,i64>(3)?,"last_seen":r.get::<_,Option<i64>>(4)?,"revoked":r.get::<_,bool>(5)?,
-        "telemetry":telemetry,
+        "telemetry":telemetry,"last_contact":r.get::<_,Option<i64>>(12)?,
         "network":crate::geography::latest(&db,&r.get::<_,String>(0)?)?,
         "capabilities":serde_json::from_str::<Vec<String>>(&r.get::<_,String>(7)?).unwrap_or_default().into_iter().filter(|kind|kind!="reboot").collect::<Vec<_>>(),
         "enrolled":r.get::<_,bool>(8)?,
         "preshared_key":r.get::<_,bool>(10)?,
         "management":r.get::<_,Option<String>>(11)?.and_then(|s|serde_json::from_str::<Value>(&s).ok()),
     }))})?.collect::<Result<Vec<_>,_>>()?;
-    let mut q=db.prepare("SELECT id,device_id,kind,created,expires,status,result FROM commands ORDER BY created DESC LIMIT 50")?;
-    let commands=q.query_map([],|r| Ok(json!({"id":r.get::<_,String>(0)?,"device_id":r.get::<_,String>(1)?,"kind":r.get::<_,String>(2)?,"created":r.get::<_,i64>(3)?,"expires":r.get::<_,i64>(4)?,"status":if r.get::<_,i64>(4)?<now() && ["pending","delivered"].contains(&r.get::<_,String>(5)?.as_str()) {"expired".to_owned()} else {r.get(5)?},"result":r.get::<_,Option<String>>(6)?})))?.collect::<Result<Vec<_>,_>>()?;
+    let mut q=db.prepare("SELECT id,device_id,kind,created,expires,status,result,receipt_received_at FROM commands ORDER BY created DESC LIMIT 50")?;
+    let commands=q.query_map([],|r| Ok(json!({"id":r.get::<_,String>(0)?,"device_id":r.get::<_,String>(1)?,"kind":r.get::<_,String>(2)?,"created":r.get::<_,i64>(3)?,"expires":r.get::<_,i64>(4)?,"status":if r.get::<_,i64>(4)?<now() && ["pending","delivered"].contains(&r.get::<_,String>(5)?.as_str()) {"expired".to_owned()} else {r.get(5)?},"result":r.get::<_,Option<String>>(6)?,"receipt_received_at":r.get::<_,Option<i64>>(7)?,"delivery_uncertain":r.get::<_,String>(5)?=="delivered" && r.get::<_,i64>(4)?<now()})))?.collect::<Result<Vec<_>,_>>()?;
     Ok(Json(
         json!({"devices":rows,"commands":commands,"server_time":now()}),
     ))
@@ -677,6 +677,7 @@ pub struct Ack {
     id: String,
     status: String,
     result: String,
+    attempted_at: Option<i64>,
 }
 pub async fn ack(
     State(app): State<App>,
@@ -687,15 +688,25 @@ pub async fn ack(
     let input: Ack = serde_json::from_slice(&body).map_err(|_| bad("Invalid receipt"))?;
     if !["executed", "rejected", "failed", "accepted"].contains(&input.status.as_str())
         || input.result.len() > 256
+        || input
+            .attempted_at
+            .is_some_and(|v| v <= 0 || v > now() + 120)
     {
         return Err(bad("Invalid receipt values"));
     }
     let db = app.db.lock().unwrap();
-    let changed=db.execute("UPDATE commands SET status=?,result=? WHERE id=? AND device_id=? AND (?!='accepted' OR kind='reboot') AND (status='delivered' OR (status='accepted' AND kind='reboot' AND ?='failed')) AND expires>?",params![input.status,input.result,input.id,id,input.status,input.status,now()])?;
+    // A delayed receipt reports an earlier attempt; it never makes an expired command executable.
+    // Replays cannot rewrite a terminal result, and pending (never delivered) commands cannot be acknowledged.
+    let received = now();
+    let changed=db.execute("UPDATE commands SET status=?,result=?,receipt_received_at=? WHERE id=? AND device_id=? AND (?!='accepted' OR kind='reboot') AND (status='delivered' OR (status='accepted' AND kind='reboot' AND ?='failed')) AND created>=? AND (expires>? OR (? IS NOT NULL AND ?>=created AND ?<expires))",
+        params![input.status,input.result,received,input.id,id,input.status,input.status,received-86400,received,input.attempted_at,input.attempted_at,input.attempted_at])?;
     if changed == 1 {
         store::audit(&db, "command.receipt", Some(&id), &input.status)?;
     }
-    Ok(Json(json!({"accepted":changed==1})))
+    // A definitive rejection/terminal result can leave the phone's outbox; transport failures cannot.
+    Ok(Json(
+        json!({"accepted":changed==1,"settled":true,"server_time":received}),
+    ))
 }
 pub async fn revoke(
     State(app): State<App>,

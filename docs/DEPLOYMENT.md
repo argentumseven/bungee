@@ -53,7 +53,7 @@ WireGuard PSK protection and hybrid TLS key exchange do not make all signatures 
 
 Start sharing visibly and grant precise GPS permission. The app uses GPS_PROVIDER only, with no network-location fallback or Play services. GPS availability/accuracy depends on the device, sky view, permissions and OS. OS-managed assisted GNSS or other system traffic must be configured separately in GrapheneOS; app GPS requests cannot guarantee the entire OS never contacts a service provider.
 
-The phone collects about once per minute before attempting the network and encrypts up to 10,080 unique unsent fixes locally. It retries batches after reconnect; the oldest unsent points roll off at that bound. Pausing preserves the queue; turning location sharing off clears it. Recovery resume after first unlock is opt-in; force-stop/OS restrictions can prevent operation. A powered-off phone cannot collect new fixes.
+The phone collects about once per minute before attempting the network and encrypts up to 10,080 unique unsent fixes locally. It retries adaptive, bounded batches after reconnect, with commands/receipts taking priority; the oldest unsent points roll off at that bound. Pausing preserves the queue; turning location sharing off clears it. Recovery resume after first unlock is opt-in; force-stop/OS restrictions can prevent operation. A powered-off phone cannot collect new fixes.
 
 History in the dashboard queries inclusive local-time ranges with all/interval/daily recurrence, plots loaded GPS points using optional same-origin OpenStreetMap raster tiles, and exports CSV with UTC observation/receipt times. Device check-ins separately expose battery, charging and management-mode history by receipt time. The API uses Unix-second from/to parameters, limit 1..1000, and an exclusive next_before cursor; kind=locations and kind=network (separate IP/GeoIP observations) order by observation time and kind=state orders by receipt ID. Old backfills do not replace a newer last-known point.
 
@@ -74,3 +74,5 @@ Ordinary hosts can use the README’s unmodified Compose build. This cloud’s D
 `scripts/docker-build-cloud.sh` builds all three local development image tags. It does not deploy or expose them. Live Caddy certificate issuance and the complete Compose stack still require the host prerequisites above.
 
 Local OpenStreetMap/GeoIP datasets and import/recovery/licensing instructions are in [GEOGRAPHY.md](GEOGRAPHY.md). These are read-only offline files; no external map or GeoIP lookup is permitted by the runtime egress policy.
+
+Alpha.8 must be installed server-first, then on the phone. See [DDIL.md](DDIL.md) for backoff, queue metrics, authenticated-contact versus telemetry time, clock requirements and delayed command-receipt reconciliation. No additional port or provider is required.

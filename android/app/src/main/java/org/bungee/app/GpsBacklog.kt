@@ -14,8 +14,16 @@ object GpsBacklog {
             put(point)
         }
     }
-    fun batch(queue: JSONArray): JSONArray = JSONArray().apply {
-        for (i in 0 until queue.length().coerceAtMost(100)) put(queue.getJSONObject(i))
+    fun usable(point: JSONObject, before: Long = Long.MAX_VALUE): Boolean = runCatching {
+        val lat = point.getDouble("latitude"); val lon = point.getDouble("longitude"); val accuracy = point.getDouble("accuracy")
+        lat.isFinite() && lon.isFinite() && accuracy.isFinite() && lat in -90.0..90.0 && lon in -180.0..180.0 && accuracy in 0.0..100000.0 && point.getLong("observed_at") in 1..before
+    }.getOrDefault(false)
+    fun batch(queue: JSONArray, limit: Int = 100, before: Long = Long.MAX_VALUE): JSONArray = JSONArray().apply {
+        require(limit in 1..100)
+        for (i in 0 until queue.length()) {
+            val point = queue.getJSONObject(i)
+            if (length() < limit && usable(point, before)) put(point)
+        }
     }
     fun acknowledge(queue: JSONArray, sent: JSONArray): JSONArray {
         val times = (0 until sent.length()).map { sent.getJSONObject(it).getLong("observed_at") }.toSet()

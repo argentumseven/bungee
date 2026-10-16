@@ -23,6 +23,7 @@ object ManagementAgent {
         val signals = identity.state("unlock")
         val attempts = if (identity.allowCommands) runCatching { dpm.currentFailedPasswordAttempts }.getOrNull() else null
         return JSONObject().put("owner", isOwner(context)).put("consent", false)
+            .put("delivery", identity.backlogReport().put("reported_at", System.currentTimeMillis()/1000))
             .put("recovery_consent", identity.allowCommands && !LocalSafety.isStopped(context)).put("revision", state.optLong("revision", 0))
             .put("dns_active", false).put("always_on", isOwner(context) && runCatching { dpm.getAlwaysOnVpnPackage(admin(context)) == context.packageName }.getOrDefault(false))
             .put("uninstall_blocked", isOwner(context) && runCatching { dpm.isUninstallBlocked(admin(context), context.packageName) }.getOrDefault(false))
@@ -41,6 +42,7 @@ object ManagementAgent {
         val policy = DevicePolicy.parse(json)
         val dpm = context.getSystemService(DevicePolicyManager::class.java)
         val state = identity.state("management")
+        val previous = state.toString()
         val errors = JSONArray()
         val lost = policy.lostMode && identity.allowCommands
         if (policy.lostMode && !identity.allowCommands) errors.put("Lost mode needs local recovery consent")
@@ -63,7 +65,7 @@ object ManagementAgent {
             identity.recoveryMessage = null; context.getSystemService(NotificationManager::class.java).cancel(2)
         }
         state.put("revision", revision).put("lost_mode_active", lost).put("errors", errors).put("policy", json)
-        identity.saveState("management", state)
+        if (state.toString() != previous) identity.saveState("management", state)
     }
     fun recoveryNotification(context: Context, message: String) {
         val open = PendingIntent.getActivity(context, 3, Intent(context, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)

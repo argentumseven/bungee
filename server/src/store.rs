@@ -52,11 +52,25 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
         received_at INTEGER NOT NULL, ip TEXT NOT NULL, geoip TEXT,
         PRIMARY KEY(device_id,observed_at));",
     )?;
+    let command_columns = tx
+        .prepare("PRAGMA table_info(commands)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    if !command_columns.iter().any(|c| c == "receipt_received_at") {
+        tx.execute(
+            "ALTER TABLE commands ADD COLUMN receipt_received_at INTEGER",
+            [],
+        )?;
+    }
     // Upgrade the initial schema without losing an offline phone's existing fix.
     let columns = tx
         .prepare("PRAGMA table_info(devices)")?
         .query_map([], |r| r.get::<_, String>(1))?
         .collect::<Result<Vec<_>, _>>()?;
+    if !columns.iter().any(|c| c == "last_contact") {
+        tx.execute("ALTER TABLE devices ADD COLUMN last_contact INTEGER", [])?;
+        tx.execute("UPDATE devices SET last_contact=last_seen", [])?;
+    }
     if !columns.iter().any(|c| c == "last_location") {
         tx.execute("ALTER TABLE devices ADD COLUMN last_location TEXT", [])?;
         tx.execute("UPDATE devices SET last_location=json_extract(telemetry,'$.location')

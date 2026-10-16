@@ -47,6 +47,7 @@ class MainActivity : FragmentActivity() {
     private var busy by mutableStateOf(false)
     private var enrolled by mutableStateOf(false)
     private var pendingBundle: String? = null
+    private val pairingOwner = Any()
     private var pairingText by mutableStateOf("")
     private var showPairing by mutableStateOf(false)
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
@@ -83,7 +84,8 @@ class MainActivity : FragmentActivity() {
             check(!LocalSafety.isStopped(this) && !ManagementAgent.isOwner(this)) { "Open Bungee recovery before pairing" }
             require(text.length <= 8192) { "Invitation is too large" }
             val bundle = JSONObject(text)
-            require(bundle.getLong("expires") > System.currentTimeMillis()/1000) { "This invitation has expired" }
+            require(bundle.getLong("expires") > 0) { "Invalid invitation expiry" }
+            // The server enforces first-use expiry; an already-bound key may confirm a lost reply.
             require(bundle.getJSONObject("wireguard").getString("client_public_key") == identity.wgPublic) { "Invitation belongs to another phone" }
             pendingBundle = text
             finishPairing()
@@ -96,7 +98,7 @@ class MainActivity : FragmentActivity() {
             try {
                 identity.bundle = text
                 withContext(Dispatchers.IO) {
-                    HomeTunnel.connect(this@MainActivity, identity, JSONObject(text))
+                    HomeTunnel.connect(this@MainActivity, identity, JSONObject(text), pairingOwner)
                     // The gateway may be refreshing peers for a few seconds; retries are safe until enrollment succeeds.
                     var success = false
                     for (attempt in 1..3) {
@@ -108,7 +110,10 @@ class MainActivity : FragmentActivity() {
                 enrolled = true; showPairing = false; pairingText = ""; pendingBundle = null
                 startSharing()
             } catch (e: Exception) { error = "Pairing failed: ${e.message}. Check the gateway address and UDP port." }
-            finally { busy = false }
+            finally {
+                withContext(NonCancellable + Dispatchers.IO) { runCatching { HomeTunnel.disconnectOwned(pairingOwner) } }
+                busy = false
+            }
         }
     }
     private fun startSharing() {
@@ -158,6 +163,7 @@ class MainActivity : FragmentActivity() {
                             Icon(Icons.Outlined.QrCodeScanner, null, Modifier.size(18.dp)); Text("  Scan invitation", Modifier.padding(6.dp))
                         }
                         TextButton(onClick = { showPairing = true }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Paste enrollment text instead", fontSize = 11.sp) }
+                        if (runCatching { identity.bundle != null }.getOrDefault(false)) TextButton(onClick = { pendingBundle = identity.bundle; finishPairing() }, enabled = !busy, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Retry saved pairing", fontSize = 11.sp) }
                     }
                 }
             } else {
@@ -170,6 +176,8 @@ class MainActivity : FragmentActivity() {
                         HorizontalDivider(Modifier.padding(vertical = 20.dp), color = Color(0xFFF0EDF5))
                         Row { Icon(Icons.Outlined.VpnLock, null, tint = Purple, modifier = Modifier.size(17.dp)); Text("  Household traffic uses app-contained WireGuard.", fontSize = 11.sp, color = Muted) }
                         Text("Bungee’s app-contained connection leaves Android’s VPN slot free for your other VPN. That VPN may still filter Bungee’s UDP connection.", color = Muted, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
+                        Text("Queued GPS fixes: ${status.queuedFixes} · dropped at capacity: ${status.droppedFixes}", color = Muted, fontSize = 11.sp, modifier = Modifier.padding(top = 10.dp))
+                        status.nextRetryAt?.let { Text("Next retry around ${java.text.DateFormat.getTimeInstance().format(java.util.Date(it))}", color = Muted, fontSize = 10.sp) }
                         status.lastSent?.let { Text("Last check-in · ${java.text.DateFormat.getTimeInstance().format(java.util.Date(it))}", color = Color(0xFF9BA99F), fontSize = 10.sp, modifier = Modifier.padding(top = 16.dp)) }
                         Button(onClick = {
                             if (status.running) { runCatching { LocalSafety.setStopped(this@MainActivity, true) }.onFailure { error = "Stop could not be saved. Force-stop Bungee in Android Settings." }; resume = false; stopService(Intent(this@MainActivity, TelemetryService::class.java)) }

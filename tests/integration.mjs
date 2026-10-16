@@ -636,6 +636,166 @@ test("live server: household enrollment, device signatures, commands, and revoca
     );
   });
   await t.test(
+    "DDIL pairing confirmation requires the already-bound key and never reopens the invitation",
+    async () => {
+      assert.equal((await device("/v1/enroll", pair())).status, 401);
+      const confirmation = await signed("/v1/sync", { report: {} });
+      assert.equal(confirmation.status, 200);
+      const state = await confirmation.json();
+      assert.equal(typeof state.revision, "number");
+      assert.ok(state.policy);
+      assert.equal((await device("/v1/sync", { report: {} })).status, 401);
+      assert.equal((await device("/v1/enroll", pair())).status, 401);
+    },
+  );
+  await t.test(
+    "DDIL redelivery and late receipt reconcile an earlier attempt without extending execution expiry",
+    async () => {
+      const queued = await (
+        await admin(`/api/devices/${id}/commands`, "POST", { kind: "ring" })
+      ).json();
+      const beforeContact = (
+        await (await admin("/api/devices")).json()
+      ).devices.find((d) => d.id === id).last_seen;
+      const first = await (await signed("/v1/commands", {})).json();
+      const contact = (await (await admin("/api/devices")).json()).devices.find(
+        (d) => d.id === id,
+      );
+      assert.ok(contact.last_contact >= Math.floor(Date.now() / 1000) - 2);
+      assert.equal(contact.last_seen, beforeContact);
+      const repeated = await (await signed("/v1/commands", {})).json();
+      assert.equal(first.commands[0].id, queued.id);
+      assert.equal(repeated.commands[0].id, queued.id);
+      const time = Math.floor(Date.now() / 1000);
+      sql("UPDATE commands SET created=?,expires=? WHERE id=?", [
+        time - 100,
+        time - 1,
+        queued.id,
+      ]);
+      assert.equal(
+        (await (await signed("/v1/commands", {})).json()).commands.length,
+        0,
+      );
+      const uncertain = (
+        await (await admin("/api/devices")).json()
+      ).commands.find((c) => c.id === queued.id);
+      assert.equal(uncertain.status, "expired");
+      assert.equal(uncertain.delivery_uncertain, true);
+      const late = await (
+        await signed("/v1/ack", {
+          id: queued.id,
+          status: "executed",
+          result: "Sound started before loss",
+          attempted_at: time - 10,
+        })
+      ).json();
+      assert.equal(late.accepted, true);
+      assert.equal(late.settled, true);
+      const confirmed = (
+        await (await admin("/api/devices")).json()
+      ).commands.find((c) => c.id === queued.id);
+      assert.equal(confirmed.status, "executed");
+      assert.equal(confirmed.delivery_uncertain, false);
+      assert.ok(confirmed.receipt_received_at > confirmed.expires);
+      assert.equal(
+        (
+          await (
+            await signed("/v1/ack", {
+              id: queued.id,
+              status: "failed",
+              result: "duplicate",
+              attempted_at: time - 10,
+            })
+          ).json()
+        ).accepted,
+        false,
+      );
+    },
+  );
+  await t.test(
+    "DDIL cannot acknowledge an undelivered or post-expiry attempt",
+    async () => {
+      const queued = await (
+        await admin(`/api/devices/${id}/commands`, "POST", { kind: "ring" })
+      ).json();
+      const time = Math.floor(Date.now() / 1000);
+      assert.equal(
+        (
+          await (
+            await signed("/v1/ack", {
+              id: queued.id,
+              status: "executed",
+              result: "not delivered",
+              attempted_at: time,
+            })
+          ).json()
+        ).accepted,
+        false,
+      );
+      await signed("/v1/commands", {});
+      sql("UPDATE commands SET created=?,expires=? WHERE id=?", [
+        time - 100,
+        time - 1,
+        queued.id,
+      ]);
+      assert.equal(
+        (
+          await (
+            await signed("/v1/ack", {
+              id: queued.id,
+              status: "executed",
+              result: "post deadline",
+              attempted_at: time,
+            })
+          ).json()
+        ).accepted,
+        false,
+      );
+      assert.equal(
+        (
+          await signed("/v1/ack", {
+            id: queued.id,
+            status: "executed",
+            result: "future claim",
+            attempted_at: time + 1000,
+          })
+        ).status,
+        400,
+      );
+    },
+  );
+  await t.test(
+    "DDIL queue reports are optional, bounded and explicitly dated",
+    async () => {
+      const report = {
+        delivery: {
+          reported_at: Math.floor(Date.now() / 1000),
+          queued_fixes: 120,
+          dropped_fixes: 3,
+          oldest_queued_at: 1000,
+          pending_receipts: 2,
+        },
+      };
+      assert.equal((await signed("/v1/sync", { report })).status, 200);
+      const saved = await (await admin(`/api/devices/${id}/policy`)).json();
+      assert.equal(saved.report.delivery.queued_fixes, 120);
+      for (const value of [
+        { queued_fixes: 10081 },
+        { pending_receipts: 101 },
+        { dropped_fixes: 9007199254740992 },
+        { reported_at: 0 },
+      ])
+        assert.equal(
+          (
+            await signed("/v1/sync", {
+              report: { delivery: { ...report.delivery, ...value } },
+            })
+          ).status,
+          400,
+        );
+    },
+  );
+  await t.test(
     "duplicate receipts do not change completed commands",
     async () =>
       assert.equal(

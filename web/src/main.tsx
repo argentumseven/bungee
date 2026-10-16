@@ -54,6 +54,7 @@ type Device = {
   address: string;
   created: number;
   last_seen: number | null;
+  last_contact?: number | null;
   revoked: boolean;
   enrolled: boolean;
   preshared_key: boolean;
@@ -74,6 +75,8 @@ type Command = {
   expires: number;
   status: string;
   result: string | null;
+  delivery_uncertain?: boolean;
+  receipt_received_at?: number | null;
 };
 type Event = {
   at: number;
@@ -90,7 +93,9 @@ const ago = (t: number | null) =>
         : new Date(t * 1000).toLocaleString()
     : "Not connected yet";
 const online = (d: Device) =>
-  !!d.last_seen && Date.now() / 1000 - d.last_seen < 150 && !d.revoked;
+  !!(d.last_contact ?? d.last_seen) &&
+  Date.now() / 1000 - (d.last_contact ?? d.last_seen)! < 150 &&
+  !d.revoked;
 function Brand() {
   return (
     <div className="brand">
@@ -498,7 +503,7 @@ function App() {
                   icon={<Radio size={20} />}
                   label="Connected now"
                   value={String(active.filter(online).length)}
-                  note="Seen in the last 2½ minutes"
+                  note="Authenticated contact in the last 2½ minutes"
                   color="green"
                 />
                 <Stat
@@ -561,11 +566,15 @@ function App() {
                                   ? "Connected"
                                   : "Offline"}
                               <span>·</span>
-                              {ago(d.last_seen)}
+                              {ago(d.last_contact ?? d.last_seen)}
                             </small>
                           </span>
                           <span className="battery">
-                            {d.telemetry ? `${d.telemetry.battery}%` : "—"}
+                            <span
+                              title={`Battery from saved telemetry: ${ago(d.last_seen)}`}
+                            >
+                              {d.telemetry ? `${d.telemetry.battery}%` : "—"}
+                            </span>
                             {d.telemetry?.charging && <Zap size={12} />}
                           </span>
                         </button>
@@ -715,10 +724,17 @@ function App() {
                           <small>
                             {ago(c.created)}
                             {c.result && ` · ${c.result}`}
+                            {c.delivery_uncertain &&
+                              " · No receipt: delivery or execution may have occurred."}
+                            {c.receipt_received_at != null &&
+                              c.receipt_received_at > c.expires &&
+                              " · Confirmed after reconnect"}
                           </small>
                         </div>
                         <span className={`command-status ${c.status}`}>
-                          {c.status}
+                          {c.delivery_uncertain
+                            ? "Expired · unconfirmed"
+                            : c.status}
                         </span>
                       </div>
                     ))}
@@ -822,8 +838,8 @@ function App() {
                 </p>
                 <ul>
                   <li>
-                    GPS, IP history and check-in logs stay until explicitly erased
-                    or the device is revoked
+                    GPS, IP history and check-in logs stay until explicitly
+                    erased or the device is revoked
                   </li>
                   <li>One-use enrollment expires in 10 minutes</li>
                   <li>Remote commands expire in 5 minutes</li>

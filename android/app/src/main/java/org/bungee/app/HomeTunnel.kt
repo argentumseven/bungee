@@ -9,11 +9,12 @@ import org.bungee.transport.Transport
 
 object HomeTunnel {
     private var activeParameters: String? = null
+    private var activeOwner: Any? = null
     @Volatile var appContained: Boolean = false
         private set
     @Volatile var state: Tunnel.State = Tunnel.State.DOWN
         private set
-    @Synchronized fun connect(context: Context, identity: Identity, bundle: JSONObject) {
+    @Synchronized fun connect(context: Context, identity: Identity, bundle: JSONObject, owner: Any? = null) {
         require(bundle.getInt("version") == 2) { "Re-pair using a version 2 invitation with a preshared key" }
         require(bundle.getString("api_url") == "http://10.77.0.1:8081") { "Unexpected device API address" }
         val wg = bundle.getJSONObject("wireguard")
@@ -30,15 +31,16 @@ object HomeTunnel {
         check(!LocalSafety.isStopped(context)) { "Bungee is stopped locally" }
         check(!ManagementAgent.isOwner(context)) { "Release legacy device ownership before using this preview" }
         val parameters = wg.toString()
-        if (state == Tunnel.State.UP && appContained && activeParameters == parameters) return
+        if (state == Tunnel.State.UP && appContained && activeParameters == parameters) { activeOwner = owner; return }
         disconnect()
         Transport.configure(JSONObject().put("address", wg.getString("address")).put("endpoint", endpoint)
             .put("private_key", identity.wgPrivate).put("public_key", wg.getString("server_public_key"))
             .put("preshared_key", psk).toString())
-        appContained = true; state = Tunnel.State.UP; activeParameters = parameters
+        appContained = true; state = Tunnel.State.UP; activeParameters = parameters; activeOwner = owner
     }
+    @Synchronized fun disconnectOwned(owner: Any) { if (activeOwner === owner) disconnect() }
     @Synchronized fun disconnect() {
         try { Transport.stop() }
-        finally { appContained = false; state = Tunnel.State.DOWN; activeParameters = null }
+        finally { appContained = false; state = Tunnel.State.DOWN; activeParameters = null; activeOwner = null }
     }
 }

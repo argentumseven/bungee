@@ -61,3 +61,7 @@ Any future control that can outlive the app or remove a local recovery path must
 ## Server updates
 
 Alpha.7 adds a host-only Compose updater. It stages downloads, closes outside admission, snapshots all five cold volumes, validates a candidate and restores failed trials before reopening. Acceptance is journaled for both success and rollback so subsequent recovery cannot replay a snapshot over newly admitted telemetry. This changes no phone ownership, credentials, permissions, firmware or APK. Local phone recovery remains independent of server health. Failed server restoration stays closed for console repair, with snapshots preserved; arbitrary disk/host failure is not guaranteed recoverable. See [the update contract](INSTALL.md).
+
+## DDIL handling (alpha.8)
+
+Network callbacks, monotonic retries, independent GPS sampling and bounded uploads affect only Bungee's app-contained connection. No radio/airplane-mode setting or persistent OS policy is added. Local stop cancels the native peer's active requests; retry cannot clear the stop flag. Encrypted command reservations precede action; lost receipts are retried without re-executing a reserved command. A crash can leave an explicitly unknown outcome. Server acceptance of a dated late receipt does not reauthorize expired commands. Queue capacity is surfaced rather than hidden, and storage failure creates no fallback phone restriction. See [DDIL.md](DDIL.md).

@@ -47,7 +47,7 @@ class Identity(context: Context) {
         set(value) { if (value == null) prefs.edit().remove("bundle").commit() else putSecret("bundle", value) }
     var enrolled: Boolean
         get() = prefs.getBoolean("enrolled", false)
-        set(value) { prefs.edit().putBoolean("enrolled", value).commit() }
+        set(value) { check(prefs.edit().putBoolean("enrolled", value).commit()) { "Could not persist enrollment state" } }
     var appLock: Boolean
         get() = prefs.getBoolean("app_lock", false)
         set(value) { prefs.edit().putBoolean("app_lock", value).commit() }
@@ -55,8 +55,9 @@ class Identity(context: Context) {
         get() = prefs.getBoolean("allow_locate", true)
         set(value) {
             synchronized(this) {
-                prefs.edit().putBoolean("allow_locate", value).commit()
-                if (!value) prefs.edit().remove("location_queue").commit()
+                val edit = prefs.edit().putBoolean("allow_locate", value)
+                if (!value) edit.remove("location_queue").remove("gps_backlog_v2")
+                check(edit.commit()) { "Could not save location consent and queue state" }
             }
         }
     var allowCommands: Boolean
@@ -67,29 +68,45 @@ class Identity(context: Context) {
     var recoveryMessage: String?
         get() = secret("recovery_message")
         set(value) { if (value == null) prefs.edit().remove("recovery_message").commit() else putSecret("recovery_message", value) }
-    fun result(id: String): JSONObject? = secret("receipt_$id")?.let(::JSONObject)
-    @Synchronized fun queueLocation(point: JSONObject) {
-        if (!allowLocate) return
-        val queue = JSONArray(secret("location_queue") ?: "[]")
-        val bounded = GpsBacklog.append(queue, point)
-        if (bounded !== queue) putSecret("location_queue", bounded.toString())
+    private fun backlog(): JSONObject = secret("gps_backlog_v2")?.let(::JSONObject) ?: JSONObject().put("points", JSONArray(secret("location_queue") ?: "[]")).put("dropped", 0)
+    private fun saveBacklog(value: JSONObject) {
+        putSecret("gps_backlog_v2", value.toString())
+        check(prefs.edit().remove("location_queue").commit()) { "Old GPS queue cleanup failed" }
     }
-    @Synchronized fun pendingLocations(): JSONArray {
-        if (!allowLocate) return JSONArray()
-        val queue = JSONArray(secret("location_queue") ?: "[]")
-        return GpsBacklog.batch(queue)
+    @Synchronized fun queueLocation(point: JSONObject) {
+        if (!allowLocate || !GpsBacklog.usable(point)) return
+        val state = backlog(); val queue = state.getJSONArray("points")
+        val bounded = GpsBacklog.append(queue, point)
+        if (bounded !== queue) {
+            if (queue.length() >= GpsBacklog.MAX_POINTS) state.put("dropped", (state.optLong("dropped") + 1).coerceAtMost(9_007_199_254_740_991L))
+            saveBacklog(state.put("points", bounded))
+        }
+    }
+    @Synchronized fun pendingLocations(limit: Int = 100, before: Long = Long.MAX_VALUE): JSONArray = if (!allowLocate) JSONArray() else GpsBacklog.batch(backlog().getJSONArray("points"), limit, before)
+    @Synchronized fun newestQueuedLocation(before: Long): JSONObject? {
+        if (!allowLocate) return null
+        val queue = backlog().getJSONArray("points")
+        return (0 until queue.length()).map { queue.getJSONObject(it) }.filter { GpsBacklog.usable(it, before) }.maxByOrNull { it.getLong("observed_at") }
+    }
+    @Synchronized fun backlogReport(): JSONObject {
+        val state = backlog(); val queue = state.getJSONArray("points")
+        val times = (0 until queue.length()).map { queue.getJSONObject(it).getLong("observed_at") }
+        return JSONObject().put("queued_fixes", queue.length()).put("dropped_fixes", state.optLong("dropped"))
+            .put("oldest_queued_at", times.minOrNull() ?: JSONObject.NULL)
+            .put("pending_receipts", ReceiptOutbox.pending(receipts(), System.currentTimeMillis()/1000, 100).length())
     }
     @Synchronized fun acknowledgeLocations(sent: JSONArray) {
-        val queue = JSONArray(secret("location_queue") ?: "[]")
-        putSecret("location_queue", GpsBacklog.acknowledge(queue, sent).toString())
+        val state = backlog()
+        saveBacklog(state.put("points", GpsBacklog.acknowledge(state.getJSONArray("points"), sent)))
     }
-    fun saveResult(id: String, result: JSONObject) {
-        // Commands are at-most-once on this phone, including across service/process restarts.
-        putSecret("receipt_$id", result.toString())
-        val ids = prefs.getStringSet("receipts", emptySet())!!.toMutableSet().apply { add(id) }
-        if (ids.size > 100) ids.first().let { ids.remove(it); prefs.edit().remove("receipt_$it").commit() }
-        prefs.edit().putStringSet("receipts", ids).commit()
+    private fun receipts() = JSONArray(secret("receipt_outbox") ?: "[]")
+    @Synchronized fun result(id: String): JSONObject? = ReceiptOutbox.find(receipts(), id)?.getJSONObject("receipt") ?: secret("receipt_$id")?.let(::JSONObject)
+    @Synchronized fun saveResult(id: String, result: JSONObject, expires: Long) {
+        require(result.getString("id") == id)
+        putSecret("receipt_outbox", ReceiptOutbox.save(receipts(), result, expires, System.currentTimeMillis()/1000).toString())
     }
+    @Synchronized fun pendingReceipts(): JSONArray = ReceiptOutbox.pending(receipts(), System.currentTimeMillis()/1000)
+    @Synchronized fun settleReceipt(id: String) { putSecret("receipt_outbox", ReceiptOutbox.settle(receipts(), id).toString()) }
     fun sign(text: String): String = Signature.getInstance("SHA256withECDSA").run {
         initSign(keys.getKey("bungee-signing", null) as java.security.PrivateKey); update(text.toByteArray(Charsets.UTF_8)); encode(sign())
     }

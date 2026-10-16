@@ -24,7 +24,7 @@ spec = importlib.util.spec_from_file_location('network_config', module_path)
 network = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(network)
 REGISTRY = 'ghcr.io/argentumseven/bungee'
-VERSION = '0.1.0-alpha.7'
+VERSION = '0.1.0-alpha.8'
 PRIVATE_ENV = {**{name: '' for name in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy')}, 'NO_PROXY': '*', 'no_proxy': '*'}
 VOLUMES = ('server-data', 'gateway-private', 'gateway-peers', 'caddy-data', 'caddy-config')
 

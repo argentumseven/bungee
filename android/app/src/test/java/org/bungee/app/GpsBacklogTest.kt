@@ -34,4 +34,12 @@ class GpsBacklogTest {
         assertEquals(2L, rolled.getJSONObject(0).getLong("observed_at"))
         assertEquals(GpsBacklog.MAX_POINTS.toLong() + 1, rolled.getJSONObject(rolled.length() - 1).getLong("observed_at"))
     }
+    @Test fun limitedBatchesSkipFutureOrMalformedPointsWithoutDroppingThem() {
+        val queue=JSONArray().put(point(5000)).put(point(100)).put(point(101)).put(point(102)).put(point(103).put("accuracy",-1))
+        val batch=GpsBacklog.batch(queue,2,1000)
+        assertEquals(2,batch.length()); assertEquals(100L,batch.getJSONObject(0).getLong("observed_at"))
+        val remaining=GpsBacklog.acknowledge(queue,batch)
+        assertEquals(3,remaining.length()); assertEquals(5000L,remaining.getJSONObject(0).getLong("observed_at"))
+        assertEquals(2,GpsBacklog.batch(remaining,100,6000).length())
+    }
 }

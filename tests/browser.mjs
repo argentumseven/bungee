@@ -233,6 +233,13 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
         owner: false,
         consent: false,
         recovery_consent: true,
+        delivery: {
+          reported_at: Math.floor(Date.now() / 1000),
+          queued_fixes: 246,
+          dropped_fixes: 3,
+          oldest_queued_at: Math.floor(Date.now() / 1000) - 14400,
+          pending_receipts: 2,
+        },
         revision: 0,
         android_version: "16",
         security_patch: "2026-10-05",
@@ -332,6 +339,10 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       await page
         .getByRole("cell", { name: "example.org", exact: false })
         .waitFor();
+      await page
+        .getByRole("heading", { name: "Delivery & offline queue" })
+        .waitFor();
+      await page.getByText("246", { exact: true }).waitFor();
       await page.getByLabel("Lost mode", { exact: false }).check();
       await page
         .getByLabel("Recovery contact message")
@@ -353,6 +364,13 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
           owner: false,
           consent: false,
           recovery_consent: true,
+          delivery: {
+            reported_at: Math.floor(Date.now() / 1000),
+            queued_fixes: 246,
+            dropped_fixes: 3,
+            oldest_queued_at: Math.floor(Date.now() / 1000) - 14400,
+            pending_receipts: 2,
+          },
           revision: 0,
         },
       });
@@ -363,6 +381,13 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
           owner: false,
           consent: false,
           recovery_consent: true,
+          delivery: {
+            reported_at: Math.floor(Date.now() / 1000),
+            queued_fixes: 246,
+            dropped_fixes: 3,
+            oldest_queued_at: Math.floor(Date.now() / 1000) - 14400,
+            pending_receipts: 2,
+          },
           revision: desired.revision,
           lost_mode_active: true,
           android_version: "16",
@@ -520,11 +545,23 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
         fullPage: true,
       });
       const networkDownload = page.waitForEvent("download");
-      await page.getByRole("button", {name:"Export CSV", exact:true}).click();
+      await page
+        .getByRole("button", { name: "Export CSV", exact: true })
+        .click();
       const networkFile = await networkDownload;
       let networkCsv = "";
-      for await (const part of await networkFile.createReadStream()) networkCsv += part.toString();
-      const parsedNetworkCsv = JSON.parse(execFileSync("python3", ["-c", "import csv,io,json,sys; print(json.dumps(list(csv.DictReader(io.StringIO(sys.stdin.read())))))"], {input:networkCsv,encoding:"utf8"}));
+      for await (const part of await networkFile.createReadStream())
+        networkCsv += part.toString();
+      const parsedNetworkCsv = JSON.parse(
+        execFileSync(
+          "python3",
+          [
+            "-c",
+            "import csv,io,json,sys; print(json.dumps(list(csv.DictReader(io.StringIO(sys.stdin.read())))))",
+          ],
+          { input: networkCsv, encoding: "utf8" },
+        ),
+      );
       assert.equal(parsedNetworkCsv[0].ip, "81.2.69.142");
       assert.equal(JSON.parse(parsedNetworkCsv[0].geoip_json).city, "London");
 

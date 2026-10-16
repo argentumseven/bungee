@@ -100,3 +100,7 @@ See [INSTALL.md](INSTALL.md) for mandatory source-prefix rules at both gateway a
 ## Offline maps and IP evidence
 
 Map requests are authenticated and same-origin; only local raster MBTiles/City MMDB files are read. No geocoder, public-IP endpoint or map/GeoIP provider is contacted. Gateway observations use authenticated WireGuard endpoints/counters, matched to enrolled PSK peers; HTTP forwarding headers and client-reported IPs are not evidence. GeoIP describes a possibly distant carrier/VPN/NAT exit and never replaces GPS. Location/IP snapshots and backups are sensitive. Full-history erasure/revocation also deletes IP records; a cutoff blocks stale endpoint resurrection. Dataset files are operator-trusted public data mounted read-only, versioned separately from five-volume state snapshots. See [GEOGRAPHY.md](GEOGRAPHY.md) for licensing, import, retention and recovery limits.
+
+## DDIL and receipts
+
+Alpha.8 retains signed/timestamped/nonce-protected requests and the two-minute replay window. Retries use new request nonces; expired commands are never newly delivered. A signed late receipt may report a previously delivered attempt within its original deadline; terminal outcomes cannot be overwritten, and arrival time remains separate. This is phone-reported evidence, not exactly-once execution/attestation. Backoff closes Bungee's peer and cancels its request contexts; no alternate provider, radio setting or routing exception is introduced. See [DDIL.md](DDIL.md) for bounded queues, clock assumptions and erasure limits.

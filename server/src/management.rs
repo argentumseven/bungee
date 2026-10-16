@@ -85,6 +85,26 @@ pub struct Report {
     pub unlock_monitoring: bool,
     pub failed_unlocks: u32,
     pub last_failed_at: Option<i64>,
+    pub delivery: Option<DeliveryReport>,
+}
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DeliveryReport {
+    pub reported_at: i64,
+    pub queued_fixes: u32,
+    pub dropped_fixes: u64,
+    pub oldest_queued_at: Option<i64>,
+    pub pending_receipts: u32,
+}
+impl DeliveryReport {
+    fn valid(&self) -> bool {
+        self.reported_at > 0
+            && self.reported_at <= now() + 120
+            && self.queued_fixes <= 10080
+            && self.dropped_fixes <= 9_007_199_254_740_991
+            && self.pending_receipts <= 100
+            && self.oldest_queued_at.is_none_or(|t| t > 0)
+    }
 }
 fn read(db: &rusqlite::Connection, id: &str) -> ApiResult<(i64, Policy)> {
     let saved: Option<(i64, String)> = db
@@ -187,7 +207,8 @@ pub async fn sync(
     let input: Sync =
         serde_json::from_slice(&body).map_err(|_| bad("Invalid management report"))?;
     let r = &input.report;
-    if r.revision < 0
+    if r.delivery.as_ref().is_some_and(|d| !d.valid())
+        || r.revision < 0
         || r.errors.len() > 20
         || r.errors.iter().any(|e| e.len() > 160)
         || r.blocked_apps.len() > 20
