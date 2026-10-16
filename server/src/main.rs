@@ -1,4 +1,7 @@
 mod api;
+mod dns;
+mod management;
+mod recurrence;
 mod security;
 mod store;
 
@@ -23,6 +26,7 @@ pub struct App {
     limiter: Arc<Mutex<security::RateLimits>>,
     state_dir: PathBuf,
     wg_endpoint: Option<String>,
+    dns: Option<dns::Config>,
 }
 
 #[tokio::main]
@@ -70,6 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
     }
+    let dns = dns::Config::from_env()?;
     let app = App {
         db: Arc::new(Mutex::new(db)),
         origin,
@@ -79,6 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         limiter: Arc::new(Mutex::new(security::RateLimits::default())),
         state_dir: dir,
         wg_endpoint,
+        dns,
     };
     // Expire sessions across restarts, including snapshots of the development machine.
     app.db.lock().unwrap().execute("DELETE FROM sessions", [])?;
@@ -108,6 +114,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(api::history).delete(api::clear_history),
         )
         .route("/api/devices/{id}/commands", post(api::command))
+        .route(
+            "/api/devices/{id}/policy",
+            get(management::get_policy).post(management::save_policy),
+        )
+        .route(
+            "/api/devices/{id}/dns",
+            get(dns::summary).delete(dns::erase),
+        )
         .route("/api/audit", get(api::audit))
         .fallback_service(
             ServeDir::new(&dist).not_found_service(ServeFile::new(format!("{dist}/index.html"))),
@@ -124,8 +138,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/telemetry", post(api::telemetry))
         .route("/v1/commands", post(api::poll))
         .route("/v1/ack", post(api::ack))
+        .route("/v1/sync", post(management::sync))
         .layer(axum::extract::DefaultBodyLimit::max(32 * 1024))
-        .with_state(app);
+        .with_state(app.clone());
+    dns::start(app).await?;
     let device_bind = env::var("BUNGEE_DEVICE_BIND").unwrap_or("127.0.0.1:8081".into());
     let admin_listener = tokio::net::TcpListener::bind(admin_bind).await?;
     let device_listener = tokio::net::TcpListener::bind(&device_bind).await?;

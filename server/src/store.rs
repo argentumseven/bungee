@@ -38,6 +38,14 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
         received_at INTEGER NOT NULL, battery INTEGER NOT NULL, charging INTEGER NOT NULL,
         device_owner INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS state_history_device_time ON state_history(device_id,received_at,id);")?;
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS device_policies(
+        device_id TEXT PRIMARY KEY REFERENCES devices(id), revision INTEGER NOT NULL, policy TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS dns_summary(
+        device_id TEXT NOT NULL REFERENCES devices(id), bucket INTEGER NOT NULL, domain TEXT NOT NULL,
+        queries INTEGER NOT NULL, activities INTEGER NOT NULL, last_window INTEGER NOT NULL,
+        first_at INTEGER NOT NULL,last_at INTEGER NOT NULL, answers INTEGER NOT NULL,nxdomain INTEGER NOT NULL,
+        errors INTEGER NOT NULL,a INTEGER NOT NULL,aaaa INTEGER NOT NULL,https INTEGER NOT NULL,other INTEGER NOT NULL,
+        PRIMARY KEY(device_id,bucket,domain));")?;
     // Upgrade the initial schema without losing an offline phone's existing fix.
     let columns = tx
         .prepare("PRAGMA table_info(devices)")?
@@ -61,6 +69,9 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
     }
     if !columns.iter().any(|c| c == "wg_psk") {
         tx.execute("ALTER TABLE devices ADD COLUMN wg_psk TEXT", [])?;
+    }
+    if !columns.iter().any(|c| c == "management_report") {
+        tx.execute("ALTER TABLE devices ADD COLUMN management_report TEXT", [])?;
     }
     // Run exactly once: restarting after erasure must never resurrect an old point.
     let history_migrated: bool = tx.query_row(

@@ -62,6 +62,23 @@ class Identity(context: Context) {
     var allowCommands: Boolean
         get() = prefs.getBoolean("allow_commands", true)
         set(value) { prefs.edit().putBoolean("allow_commands", value).commit() }
+    var allowReboot: Boolean
+        get() = prefs.getBoolean("allow_reboot", false)
+        set(value) { prefs.edit().putBoolean("allow_reboot", value).commit() }
+    var managementConsent: Boolean
+        get() = prefs.getBoolean("management_consent", false)
+        set(value) { prefs.edit().putBoolean("management_consent", value).commit() }
+    var resumeConsent: Boolean
+        get() = prefs.getBoolean("resume_consent", false)
+        set(value) { prefs.edit().putBoolean("resume_consent", value).commit() }
+    var autoResume: Boolean
+        get() = prefs.getBoolean("auto_resume", false)
+        set(value) { prefs.edit().putBoolean("auto_resume", value).commit() }
+    var managedDns: Boolean
+        get() = prefs.getBoolean("managed_dns", false)
+        set(value) { prefs.edit().putBoolean("managed_dns", value).commit() }
+    internal fun state(name: String): JSONObject = secret("state_$name")?.let(::JSONObject) ?: JSONObject()
+    internal fun saveState(name: String, value: JSONObject) = putSecret("state_$name", value.toString())
     var recoveryMessage: String?
         get() = secret("recovery_message")
         set(value) { if (value == null) prefs.edit().remove("recovery_message").commit() else putSecret("recovery_message", value) }

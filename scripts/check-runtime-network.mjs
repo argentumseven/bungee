@@ -100,6 +100,64 @@ try {
     (e) => e.status === 124,
     "Docker provider DNS is dropped",
   );
+  // Enable exactly one operator-selected private destination/port. No public fallback.
+  docker(
+    [
+      "exec",
+      "-i",
+      "-e",
+      "BUNGEE_WG_PORT=47937",
+      "-e",
+      `BUNGEE_DNS_UPSTREAM_IP=${upstreamIp}`,
+      "-e",
+      "BUNGEE_DNS_UPSTREAM_PORT=8088",
+      gateway,
+      "sh",
+    ],
+    firewall,
+  );
+  assert.match(probe(upstreamIp), /200 OK/);
+  assert.throws(
+    () =>
+      docker([
+        "exec",
+        gateway,
+        "timeout",
+        "2",
+        "bash",
+        "-c",
+        'exec 3<>/dev/tcp/"$1"/8089',
+        "probe",
+        upstreamIp,
+      ]),
+    (e) => e.status === 124,
+    "another upstream port remains blocked",
+  );
+  assert.throws(
+    () =>
+      docker([
+        "exec",
+        gateway,
+        "timeout",
+        "2",
+        "bash",
+        "-c",
+        "exec 3<>/dev/tcp/127.0.0.11/53",
+      ]),
+    (e) => e.status === 124,
+    "Docker DNS stays blocked with home upstream configured",
+  );
+  const nat = docker([
+    "exec",
+    gateway,
+    "iptables",
+    "-t",
+    "nat",
+    "-S",
+    "PREROUTING",
+  ]);
+  assert.match(nat, /-i wg0 -p udp .*--dport 53 -j REDIRECT --to-ports 5353/);
+  assert.match(nat, /-i wg0 -p tcp .*--dport 53 -j REDIRECT --to-ports 5353/);
   docker([
     "run",
     "-d",
@@ -185,7 +243,7 @@ try {
   assert.equal(result.status, 200);
   assert.equal(result.body.status, "ok");
   console.log(
-    "PASS: baseline TCP succeeds; new outbound TCP and Docker DNS are dropped; trusted hybrid HTTPS reaches Rust through the same namespace with all non-gateway capabilities dropped.",
+    "PASS: baseline TCP succeeds; new outbound TCP and Docker DNS are dropped; trusted hybrid HTTPS reaches Rust through the same namespace with all non-gateway capabilities dropped; only the selected private DNS destination/port is allowed.",
   );
 } catch (e) {
   for (const name of [gateway, server, web]) {

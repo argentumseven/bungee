@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
@@ -41,6 +41,8 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       BUNGEE_PUBLIC_ORIGIN: origin,
       BUNGEE_WG_ENDPOINT: "203.0.113.10:47937",
       BUNGEE_WEB_DIR: resolve("web/dist"),
+      BUNGEE_DNS_UPSTREAM_IP: "127.0.0.1",
+      BUNGEE_DNS_BIND: `127.0.0.1:${await freePort()}`,
     },
     stdio: "ignore",
   });
@@ -65,6 +67,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       viewport: { width: 1440, height: 1050 },
     }),
     page = await context.newPage();
+  context.setDefaultTimeout(10000);
   const errors = [],
     external = [];
   page.on("pageerror", (e) => errors.push(e.message));
@@ -75,6 +78,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
   await page.goto(origin);
   await page.getByRole("heading", { name: "Welcome home." }).waitFor();
   await mkdir("docs/screenshots", { recursive: true });
+  await page.evaluate(() => scrollTo(0, 0));
   await page.screenshot({
     path: "docs/screenshots/sign-in.png",
     fullPage: true,
@@ -87,10 +91,37 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
   await page
     .getByRole("heading", { name: "It starts with one phone." })
     .waitFor();
+  await page.evaluate(() => scrollTo(0, 0));
   await page.screenshot({
     path: "docs/screenshots/dashboard.png",
     fullPage: true,
   });
+  let phone;
+  const phoneRequest = async (path, data) => {
+    const body = JSON.stringify(data),
+      time = String(Math.floor(Date.now() / 1000)),
+      nonce = randomUUID();
+    const signature = sign(
+      "sha256",
+      Buffer.from(
+        `BUNGEE-V1\nPOST\n${path}\n${time}\n${nonce}\n${createHash("sha256").update(body).digest("hex")}`,
+      ),
+      phone.key.privateKey,
+    ).toString("base64");
+    const result = await fetch(`http://127.0.0.1:${devicePort}${path}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Bungee-Device": phone.bundle.device_id,
+        "X-Bungee-Time": time,
+        "X-Bungee-Nonce": nonce,
+        "X-Bungee-Signature": signature,
+      },
+      body,
+    });
+    assert.equal(result.status, 200);
+    return result.json();
+  };
   await t.test("an empty dashboard has usable enrollment", async () => {
     await page.getByRole("button", { name: "Add a device" }).click();
     await page
@@ -114,6 +145,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
         .inputValue(),
     );
     const key = generateKeyPairSync("ec", { namedCurve: "P-256" });
+    phone = { bundle, key };
     const publicKey = key.publicKey
       .export({ type: "spki", format: "der" })
       .toString("base64");
@@ -132,7 +164,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
         public_key: publicKey,
         wg_public_key: bundle.wireguard.client_public_key,
         proof,
-        capabilities: [],
+        capabilities: ["reboot", "locate", "ring", "message", "lock"],
       }),
     });
     assert.equal(enrolled.status, 200);
@@ -141,8 +173,14 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     const body = JSON.stringify({
       battery: 72,
       charging: false,
-      device_owner: false,
-      capabilities: [],
+      device_owner: true,
+      capabilities: ["reboot", "locate", "ring", "message", "lock"],
+      locations: Array.from({ length: 10 }, (_, i) => ({
+        latitude: 37.78 + i * 0.0003,
+        longitude: -122.42 + i * 0.0005,
+        accuracy: 12,
+        observed_at: Number(time) - 600 + i * 60,
+      })),
       location: {
         latitude: 37.78,
         longitude: -122.42,
@@ -172,9 +210,204 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       },
     );
     assert.equal(uploaded.status, 200);
+    await phoneRequest("/v1/sync", {
+      report: {
+        owner: true,
+        consent: true,
+        recovery_consent: true,
+        revision: 0,
+        android_version: "16",
+        security_patch: "2026-10-05",
+        secure_lock: true,
+        screen_locked: true,
+        unlock_monitoring: true,
+        failed_unlocks: 2,
+        last_failed_at: Number(time) - 90,
+      },
+    });
+    // Only this isolated screenshot fixture contains synthetic DNS rollups.
+    execFileSync(
+      "python3",
+      [
+        "-c",
+        "import sqlite3,sys,json; c=sqlite3.connect(sys.argv[1]); c.executemany('INSERT INTO dns_summary(device_id,bucket,domain,queries,activities,last_window,first_at,last_at,answers,nxdomain,errors,a,aaaa,https,other) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',json.load(sys.stdin)); c.commit()",
+        join(dir, "bungee.sqlite3"),
+      ],
+      {
+        input: JSON.stringify([
+          [
+            bundle.device_id,
+            Math.floor(Number(time) / 300) * 300,
+            "example.org",
+            46,
+            5,
+            Number(time),
+            Number(time) - 240,
+            Number(time),
+            46,
+            0,
+            0,
+            18,
+            18,
+            10,
+            0,
+          ],
+          [
+            bundle.device_id,
+            Math.floor(Number(time) / 300) * 300,
+            "[system DNS checks]",
+            128,
+            4,
+            Number(time),
+            Number(time) - 240,
+            Number(time) - 15,
+            128,
+            0,
+            0,
+            64,
+            64,
+            0,
+            0,
+          ],
+          [
+            bundle.device_id,
+            Math.floor(Number(time) / 300) * 300,
+            "wikipedia.org",
+            14,
+            2,
+            Number(time),
+            Number(time) - 180,
+            Number(time) - 45,
+            14,
+            0,
+            0,
+            6,
+            6,
+            2,
+            0,
+          ],
+        ]),
+      },
+    );
     await page.getByRole("button", { name: "Close dialog" }).click();
     await page.getByRole("button", { name: /Browser test phone/ }).waitFor();
   });
+  await page.evaluate(() => scrollTo(0, 0));
+  await page.screenshot({
+    path: "docs/screenshots/dashboard.png",
+    fullPage: true,
+  });
+  await t.test(
+    "device care saves explicit lost-mode intent, selected-app policy and shows private DNS summaries",
+    async () => {
+      await page
+        .getByRole("button", { name: "Device care", exact: true })
+        .click();
+      await page
+        .getByRole("heading", { name: "Recovery & management", exact: true })
+        .waitFor();
+      await page
+        .getByRole("cell", { name: "example.org", exact: false })
+        .waitFor();
+      await page.getByLabel("Lost mode", { exact: false }).check();
+      await page
+        .getByLabel("Recovery contact message")
+        .fill(
+          "This test phone is lost. Contact the household at +1 202 555 0142.",
+        );
+      await page
+        .getByText("Optional device-owner controls", { exact: true })
+        .click();
+      await page.getByLabel("Use home DNS", { exact: false }).check();
+      await page
+        .getByLabel("Suspend selected apps")
+        .fill("org.mozilla.firefox");
+      await page.getByRole("button", { name: "Save device care" }).click();
+      await page
+        .getByRole("status")
+        .filter({ hasText: "Saved at home" })
+        .waitFor();
+      const desired = await phoneRequest("/v1/sync", {
+        report: {
+          owner: true,
+          consent: true,
+          recovery_consent: true,
+          revision: 0,
+        },
+      });
+      assert.equal(desired.policy.managed_dns, true);
+      assert.deepEqual(desired.policy.blocked_apps, ["org.mozilla.firefox"]);
+      await phoneRequest("/v1/sync", {
+        report: {
+          owner: true,
+          consent: true,
+          recovery_consent: true,
+          revision: desired.revision,
+          dns_active: true,
+          always_on: true,
+          lost_mode_active: true,
+          blocked_apps: ["org.mozilla.firefox"],
+          android_version: "16",
+          security_patch: "2026-10-05",
+          secure_lock: true,
+          screen_locked: true,
+          unlock_monitoring: true,
+          failed_unlocks: 2,
+        },
+      });
+      await page
+        .getByText("Requested state reported", { exact: true })
+        .waitFor();
+      await page.evaluate(() => scrollTo(0, 0));
+      await page.screenshot({
+        path: "docs/screenshots/device-owner-controls.png",
+        fullPage: true,
+      });
+      await page
+        .getByText("Optional device-owner controls", { exact: true })
+        .click();
+      await page.evaluate(() => scrollTo(0, 0));
+      await page.screenshot({
+        path: "docs/screenshots/device-care.png",
+        fullPage: true,
+      });
+      await page.setViewportSize({ width: 390, height: 844 });
+      assert.equal(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth,
+        ),
+        true,
+      );
+      await page.evaluate(() => scrollTo(0, 0));
+      await page.screenshot({
+        path: "docs/screenshots/mobile-device-care.png",
+        fullPage: true,
+      });
+      await page.setViewportSize({ width: 1440, height: 1050 });
+      await page
+        .getByText("Optional device-owner controls", { exact: true })
+        .click();
+      await page
+        .getByLabel("Suspend selected apps")
+        .fill("com.android.settings");
+      await page.getByRole("button", { name: "Save device care" }).click();
+      await page.getByRole("alert").waitFor();
+      await page.getByRole("button", { name: "Overview", exact: true }).click();
+      await page
+        .getByRole("button", { name: "Secure reboot", exact: true })
+        .click();
+      await page
+        .getByRole("dialog")
+        .getByRole("heading", { name: /Secure reboot/ })
+        .waitFor();
+      await page.evaluate(() => scrollTo(0, 0));
+      await page.screenshot({
+        path: "docs/screenshots/secure-reboot.png",
+        fullPage: true,
+      });
+      await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    },
+  );
   await t.test("activity and settings show real state", async () => {
     await page.getByRole("button", { name: "Activity", exact: true }).click();
     await page.getByText("enrollment · created", { exact: true }).waitFor();
@@ -197,6 +430,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
         })
         .waitFor();
       await page.getByText(/Selected:.*37.780000, -122.420000/).waitFor();
+      await page.evaluate(() => scrollTo(0, 0));
       await page.screenshot({
         path: "docs/screenshots/history.png",
         fullPage: true,
@@ -222,6 +456,35 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
         /observed_at_utc,received_at_utc,latitude,longitude,accuracy_m/,
       );
       assert.match(csv, /37.78,-122.42,12/);
+      await page.getByLabel("History recurrence").selectOption("interval");
+      await page
+        .getByLabel("History interval", { exact: true })
+        .selectOption("5");
+      await page.getByRole("button", { name: "Look up history" }).click();
+      await page.getByText(/Showing the newest saved record/).waitFor();
+      await page.evaluate(() => scrollTo(0, 0));
+      await page.screenshot({
+        path: "docs/screenshots/history-interval.png",
+        fullPage: true,
+      });
+      await page.getByLabel("History recurrence").selectOption("daily");
+      const now = new Date();
+      await page
+        .getByLabel("History daily time")
+        .fill(now.toTimeString().slice(0, 5));
+      await page.getByRole("button", { name: "Look up history" }).click();
+      await page.getByText(/Showing the closest saved record/).waitFor();
+      await page
+        .getByRole("img", {
+          name: "Saved GPS trail, longitude horizontally and latitude vertically",
+        })
+        .waitFor();
+      await page.evaluate(() => scrollTo(0, 0));
+      await page.screenshot({
+        path: "docs/screenshots/history-daily.png",
+        fullPage: true,
+      });
+      await page.getByLabel("History recurrence").selectOption("all");
       await page.getByLabel("History from").fill("2000-01-01T00:00");
       await page.getByLabel("History to").fill("2000-01-02T00:00");
       await page.getByRole("button", { name: "Look up history" }).click();
@@ -264,6 +527,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
   await t.test("mobile layout fits a 390-pixel viewport", async () => {
     await page.getByRole("button", { name: "Overview", exact: true }).click();
     await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => scrollTo(0, 0));
     await page.screenshot({
       path: "docs/screenshots/mobile-dashboard.png",
       fullPage: true,

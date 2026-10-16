@@ -8,6 +8,9 @@ export GRADLE_USER_HOME="$_bungee_tools/gradle"
 export ANDROID_HOME="$_bungee_tools/android-sdk"
 export ANDROID_SDK_ROOT="$ANDROID_HOME"
 export ANDROID_USER_HOME="$_bungee_tools/android-user"
+export GOPATH="$_bungee_tools/gopath"
+export GOCACHE="$_bungee_tools/go-build"
+export GOTOOLCHAIN=local
 if [ -x "$_bungee_tools/jdk/bin/javac" ]; then export JAVA_HOME="$_bungee_tools/jdk"; fi
-export PATH="$CARGO_HOME/bin:${JAVA_HOME:+$JAVA_HOME/bin:}$ANDROID_HOME/platform-tools:$PATH"
+export PATH="$_bungee_tools/go/bin:$GOPATH/bin:$CARGO_HOME/bin:${JAVA_HOME:+$JAVA_HOME/bin:}$ANDROID_HOME/platform-tools:$PATH"
 unset _bungee_tools

@@ -99,6 +99,44 @@ test("gateway validates the chosen port and installs outbound-deny rules for the
     await readFile(join(dir, "wg0.conf"), "utf8"),
     /ListenPort = 47937/,
   );
+  for (const upstream of [
+    "8.8.8.8",
+    "1.1.1.1",
+    "127.0.0.11",
+    "10.77.0.2",
+    "resolver.example",
+  ]) {
+    const rejected = spawnSync("sh", [script], {
+      env: {
+        ...env,
+        BUNGEE_WG_PORT: "47937",
+        BUNGEE_DNS_UPSTREAM_IP: upstream,
+      },
+      encoding: "utf8",
+    });
+    assert.notEqual(rejected.status, 73, upstream);
+    assert.notEqual(rejected.status, 0, upstream);
+  }
+  assert.equal(
+    spawnSync("sh", [script], {
+      env: {
+        ...env,
+        BUNGEE_WG_PORT: "47937",
+        BUNGEE_DNS_UPSTREAM_IP: "192.168.1.53",
+        BUNGEE_DNS_UPSTREAM_PORT: "5353",
+      },
+    }).status,
+    73,
+  );
+  const dnsCalls = await readFile(log, "utf8");
+  assert.match(
+    dnsCalls,
+    /OUTPUT -d 192\.168\.1\.53 -p udp --dport 5353 -j ACCEPT/,
+  );
+  assert.match(
+    dnsCalls,
+    /PREROUTING -i wg0 -p udp --dport 53 -j REDIRECT --to-ports 5353/,
+  );
   const peers = join(dir, "peers/peers.conf");
   await writeFile(
     peers,

@@ -10,6 +10,8 @@ services:
     tmpfs: [/run:mode=0700]
     environment:
       BUNGEE_WG_PORT: ${BUNGEE_WG_PORT:?Choose a custom UDP port in .env}
+      BUNGEE_DNS_UPSTREAM_IP: ${BUNGEE_DNS_UPSTREAM_IP:-}
+      BUNGEE_DNS_UPSTREAM_PORT: ${BUNGEE_DNS_UPSTREAM_PORT:-53}
     ports:
       - "${BUNGEE_WG_PORT:?Choose a custom UDP port}:${BUNGEE_WG_PORT:?Choose a custom UDP port}/udp"
       - "${BUNGEE_ADMIN_ADDRESS:-127.0.0.1}:443:443"
@@ -35,6 +37,9 @@ services:
       BUNGEE_ADMIN_BIND: 127.0.0.1:8080
       BUNGEE_DEVICE_BIND: 10.77.0.1:8081
       BUNGEE_WG_ENDPOINT: ${BUNGEE_WG_ENDPOINT:?Set BUNGEE_WG_ENDPOINT to your reachable IP and custom port}
+      BUNGEE_DNS_UPSTREAM_IP: ${BUNGEE_DNS_UPSTREAM_IP:-}
+      BUNGEE_DNS_UPSTREAM_PORT: ${BUNGEE_DNS_UPSTREAM_PORT:-53}
+      BUNGEE_DNS_BIND: 10.77.0.1:5353
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     read_only: true

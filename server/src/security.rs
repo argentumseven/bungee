@@ -25,6 +25,7 @@ use std::{
 };
 
 pub type ApiResult<T> = Result<T, Error>;
+#[derive(Debug)]
 pub struct Error(pub StatusCode, pub &'static str);
 impl IntoResponse for Error {
     fn into_response(self) -> Response {

@@ -1654,7 +1654,8 @@ select {
   background: #f2f0f8;
   border-radius: 12px;
 }
-.history-panel .secondary {
+.history-panel .secondary,
+.modal .secondary {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1668,7 +1669,8 @@ select {
   font-size: 12px;
   cursor: pointer;
 }
-.history-panel .secondary:disabled {
+.history-panel .secondary:disabled,
+.modal .secondary:disabled {
   opacity: 0.5;
   cursor: default;
 }
@@ -1721,4 +1723,186 @@ select {
   .history-filters button {
     flex: 1;
   }
+}
+
+.care-device {
+  max-width: 340px;
+  margin: 8px 0 22px;
+}
+.device-care {
+  display: grid;
+  gap: 22px;
+}
+.care-grid {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  gap: 22px;
+  align-items: start;
+}
+.care-card {
+  padding: 24px;
+  min-width: 0;
+}
+.care-card .panel-heading {
+  padding: 0 0 18px;
+}
+.care-card textarea {
+  display: block;
+  width: 100%;
+  margin: 8px 0 12px;
+}
+.care-card .primary {
+  margin-top: 16px;
+}
+.care-toggle {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  justify-content: space-between;
+  padding: 17px 0;
+  margin: 0;
+  border-bottom: 1px solid #efedf4;
+  cursor: pointer;
+}
+.care-toggle strong {
+  display: block;
+  font-size: 12px;
+  color: #433c51;
+}
+.care-toggle small {
+  display: block;
+  color: #91899e;
+  font-size: 11px;
+  line-height: 1.7;
+  font-weight: 400;
+  margin-top: 5px;
+}
+.care-toggle input {
+  flex: 0 0 19px;
+  width: 19px;
+  height: 19px;
+  accent-color: #7057cd;
+  padding: 0;
+  margin: 0;
+}
+.managed-options {
+  margin-top: 20px;
+  border: 1px solid #e7e0f2;
+  border-radius: 12px;
+  padding: 15px;
+}
+.managed-options summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: #725a94;
+  font-size: 12px;
+  cursor: pointer;
+}
+.care-muted {
+  font-size: 12px;
+  line-height: 1.8;
+  color: #91879d;
+}
+.care-notice {
+  background: #edf6f0;
+  border: 1px solid #d9eadf;
+  border-radius: 12px;
+  padding: 16px 20px;
+  color: #577f66;
+  font-size: 12px;
+}
+.care-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  margin: 12px 0 22px;
+}
+.care-health {
+  margin: 0 0 22px;
+}
+.care-health > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 12px 0;
+  border-bottom: 1px solid #efedf4;
+  font-size: 11px;
+}
+.care-health dt {
+  color: #8f859b;
+}
+.care-health dd {
+  text-align: right;
+  margin: 0;
+  color: #5c4d72;
+}
+.care-errors {
+  padding-left: 18px;
+  font-size: 11px;
+  line-height: 1.8;
+  color: #a66e6e;
+}
+.dns-tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.dns-tools select {
+  font-size: 11px;
+  padding: 8px 10px;
+}
+.dns-totals {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+  padding: 20px 0;
+}
+.dns-totals strong {
+  display: block;
+  font-size: 27px;
+  color: #62507e;
+  font-weight: 500;
+}
+.dns-totals span {
+  font-size: 11px;
+  color: #9689a6;
+  display: block;
+  margin-top: 7px;
+}
+.dns-types {
+  display: block;
+  margin-top: 6px;
+  color: #a094af;
+  font-size: 10px;
+}
+@media (max-width: 1100px) {
+  .care-grid {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 600px) {
+  .care-card {
+    padding: 17px;
+  }
+  .dns-totals {
+    gap: 12px;
+  }
+  .dns-totals strong {
+    font-size: 22px;
+  }
+  .dns-panel .panel-heading {
+    flex-wrap: wrap;
+    gap: 15px;
+  }
+}
+
+.modal form > .primary,
+.modal form > .secondary {
+  margin-top: 12px;
+  margin-right: 8px;
+  min-height: 40px;
 }

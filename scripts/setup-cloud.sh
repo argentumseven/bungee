@@ -9,6 +9,11 @@ if [ ! -x "$CARGO_HOME/bin/rustup" ]; then
     sh "$tools/rustup-init.sh" -y --profile minimal --no-modify-path --default-toolchain none
 fi
 rustup toolchain install 1.90.0 --profile minimal --component rustfmt --component clippy
+if [ ! -x "$tools/go/bin/go" ] || [ "$("$tools/go/bin/go" env GOVERSION)" != go1.26.9 ]; then
+    curl -fsSL https://go.dev/dl/go1.26.9.linux-amd64.tar.gz -o "$tools/go.tar.gz"
+    printf '%s  %s\n' '42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d' "$tools/go.tar.gz" | sha256sum --check --status
+    tar -xzf "$tools/go.tar.gz" -C "$tools"
+fi
 if [ ! -x "$tools/jdk/bin/javac" ]; then
     url='https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12.1%2B1/OpenJDK21U-jdk_x64_linux_hotspot_21.0.12.1_1.tar.gz'
     curl --fail --silent --show-error --location "$url" -o "$tools/jdk.tar.gz"
@@ -42,9 +47,10 @@ PY
 )
 if [ "${#sdk_proxy[@]}" -eq 2 ]; then sdk_args+=(--proxy=http "--proxy_host=${sdk_proxy[0]}" "--proxy_port=${sdk_proxy[1]}"); fi
 if [ -f /etc/ssl/certs/java/cacerts ]; then export SDKMANAGER_OPTS="${SDKMANAGER_OPTS:-} -Djavax.net.ssl.trustStore=/etc/ssl/certs/java/cacerts"; fi
-"$ANDROID_HOME/cmdline-tools/19.0/bin/sdkmanager" "${sdk_args[@]}" 'platforms;android-36' 'build-tools;35.0.0' 'platform-tools' < <(printf 'y\n%.0s' {1..30})
+"$ANDROID_HOME/cmdline-tools/19.0/bin/sdkmanager" "${sdk_args[@]}" 'platforms;android-36' 'build-tools;35.0.0' 'platform-tools' 'ndk;28.2.13676358' < <(printf 'y\n%.0s' {1..30})
 npm ci --no-audit --no-fund
 npm ci --prefix web --no-audit --no-fund
 npm run build --prefix web
 cargo build --locked --manifest-path server/Cargo.toml -j 4
+bash scripts/build-transport.sh
 bash scripts/android.sh :app:assembleDebug

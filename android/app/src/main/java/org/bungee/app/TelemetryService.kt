@@ -35,11 +35,16 @@ class TelemetryService : Service() {
         nm.createNotificationChannel(NotificationChannel("recovery", "Phone recovery messages", NotificationManager.IMPORTANCE_HIGH).apply { lockscreenVisibility = Notification.VISIBILITY_PUBLIC })
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == "STOP") { stopSelf(); return START_NOT_STICKY }
+        if (intent?.action == "STOP") {
+            if (identity.managedDns && identity.managementConsent) { identity.allowLocate = false }
+            else { identity.autoResume = false; stopSelf(); return START_NOT_STICKY }
+        }
         if (intent?.action == "STOP_RING") { stopRinging(); return START_NOT_STICKY }
-        if (!identity.enrolled || !hasLocation(this)) { stopSelf(); return START_NOT_STICKY }
-        startForeground(1, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
-        if (worker?.isActive == true) return START_NOT_STICKY
+        if (!identity.enrolled) { stopSelf(); return START_NOT_STICKY }
+        val locationType = hasLocation(this) && identity.allowLocate && (intent?.action != "AUTO_START" || ManagementAgent.isOwner(this))
+        try { startForeground(1, notification(), if (locationType) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE) }
+        catch (_: SecurityException) { startForeground(1, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE) }
+        if (worker?.isActive == true) return if (identity.autoResume || identity.managedDns) START_STICKY else START_NOT_STICKY
         worker = scope.launch {
             val api = HomeApi(identity)
             var nextTelemetry = 0L
@@ -55,9 +60,15 @@ class TelemetryService : Service() {
                         nextSample = System.currentTimeMillis() + 60000
                     }
                     withContext(Dispatchers.IO) { HomeTunnel.connect(this@TelemetryService, identity, JSONObject(identity.bundle!!)) }
+                    withContext(Dispatchers.IO) {
+                        val desired = api.request("/v1/sync", JSONObject().put("report", ManagementAgent.report(this@TelemetryService, identity)))
+                        ManagementAgent.apply(this@TelemetryService, identity, desired.getLong("revision"), desired.getJSONObject("policy"), desired.getBoolean("dns_available"))
+                        HomeTunnel.connect(this@TelemetryService, identity, JSONObject(identity.bundle!!))
+                        api.request("/v1/sync", JSONObject().put("report", ManagementAgent.report(this@TelemetryService, identity)))
+                    }
                     if (System.currentTimeMillis() >= nextTelemetry) {
                         upload(api, latest)
-                        nextTelemetry = System.currentTimeMillis() + 60000
+                        nextTelemetry = System.currentTimeMillis() + if (identity.state("management").optBoolean("lost_mode_active")) 30000 else 60000
                     }
                     val batch = withContext(Dispatchers.IO) { api.request("/v1/commands").getJSONArray("commands") }
                     for (n in 0 until batch.length()) execute(api, batch.getJSONObject(n))
@@ -70,16 +81,16 @@ class TelemetryService : Service() {
                 delay(15000)
             }
         }
-        return START_NOT_STICKY
+        return if (identity.autoResume || identity.managedDns) START_STICKY else START_NOT_STICKY
     }
     private fun notification(): Notification {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val pause = PendingIntent.getService(this, 1, Intent(this, TelemetryService::class.java).setAction("STOP"), PendingIntent.FLAG_IMMUTABLE)
         val hush = PendingIntent.getService(this, 2, Intent(this, TelemetryService::class.java).setAction("STOP_RING"), PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, "sharing").setSmallIcon(R.drawable.ic_bungee).setContentTitle("Bungee sharing is active")
-            .setContentText("GPS fixes queue locally until home is reachable")
+            .setContentText(if (identity.managedDns) "Managed home DNS & recovery · location can be paused" else "GPS fixes queue locally until home is reachable")
             .setContentIntent(open).setOngoing(true).setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-            .addAction(0, "Pause sharing", pause).addAction(0, "Stop sound", hush).build()
+            .addAction(0, if (identity.managedDns) "Pause location" else "Pause sharing", pause).addAction(0, "Stop sound", hush).build()
     }
     private fun lastLocation(): Location? {
         if (!identity.allowLocate || !hasLocation(this)) return null
@@ -149,6 +160,16 @@ class TelemetryService : Service() {
                         "Recovery notification posted"
                     }
                     "clear_message" -> { identity.recoveryMessage = null; getSystemService(NotificationManager::class.java).cancel(2); "Message cleared" }
+                    "reboot" -> {
+                        check(ManagementAgent.isOwner(this) && identity.managementConsent && identity.allowReboot && getSystemService(KeyguardManager::class.java).isDeviceSecure)
+                        // Persist and acknowledge intent before asking Android. Never report an unobserved reboot as executed.
+                        receipt.put("status", "accepted").put("result", "Reboot accepted; completion unconfirmed. Recovery pauses until first unlock.")
+                        identity.saveResult(id, receipt)
+                        val accepted = withContext(Dispatchers.IO) { api.request("/v1/ack", receipt).getBoolean("accepted") }
+                        check(accepted)
+                        getSystemService(DevicePolicyManager::class.java).reboot(ComponentName(this, BungeeAdminReceiver::class.java))
+                        return
+                    }
                     "lock" -> { getSystemService(DevicePolicyManager::class.java).lockNow(); "Device lock requested" }
                     else -> error("Unknown command")
                 }
@@ -183,6 +204,7 @@ class TelemetryService : Service() {
             if (identity.allowCommands) {
                 addAll(listOf("ring", "stop_ringing"))
                 if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) addAll(listOf("message", "clear_message"))
+                if (identity.allowReboot && identity.managementConsent && ManagementAgent.isOwner(context) && context.getSystemService(KeyguardManager::class.java).isDeviceSecure) add("reboot")
                 if (context.getSystemService(DevicePolicyManager::class.java).isAdminActive(ComponentName(context, BungeeAdminReceiver::class.java))) add("lock")
             }
         }

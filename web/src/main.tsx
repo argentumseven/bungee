@@ -33,6 +33,8 @@ import {
 } from "lucide-react";
 import QRCode from "qrcode";
 import "./style.css";
+import { api } from "./api";
+import { DeviceCare } from "./DeviceCare";
 
 type Location = {
   latitude: number;
@@ -82,21 +84,6 @@ const ago = (t: number | null) =>
     : "Not connected yet";
 const online = (d: Device) =>
   !!d.last_seen && Date.now() / 1000 - d.last_seen < 150 && !d.revoked;
-async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    ...options,
-    credentials: "same-origin",
-    headers: { "Content-Type": "application/json", ...options.headers },
-  });
-  if (!res.ok) {
-    if (res.status === 401 && path !== "/session")
-      window.dispatchEvent(new Event("bungee:session-expired"));
-    const body = await res.json().catch(() => ({ error: "Connection failed" }));
-    throw new Error(body.error || `Request failed (${res.status})`);
-  }
-  if (res.status === 204) return undefined as T;
-  return res.json();
-}
 function Brand() {
   return (
     <div className="brand">
@@ -118,7 +105,13 @@ function App() {
     [selected, setSelected] = useState(""),
     [page, setPage] = useState("Overview");
   const [modal, setModal] = useState<
-      "enroll" | "message" | "revoke" | "clear_location" | "help" | null
+      | "enroll"
+      | "message"
+      | "revoke"
+      | "clear_location"
+      | "help"
+      | "reboot"
+      | null
     >(null),
     [toast, setToast] = useState("");
   const [name, setName] = useState(""),
@@ -127,6 +120,8 @@ function App() {
     [qr, setQr] = useState(""),
     [message, setMessage] = useState(""),
     [lastRefresh, setLastRefresh] = useState<number | null>(null);
+  const [rebootPassword, setRebootPassword] = useState("");
+  const [rebootTarget, setRebootTarget] = useState<Device | null>(null);
   const [clearTarget, setClearTarget] = useState<Device | null>(null);
   const active = devices.filter((d) => !d.revoked),
     device = active.find((d) => d.id === selected) || active[0];
@@ -158,6 +153,8 @@ function App() {
       setModal(null);
       setClearTarget(null);
       setBundle("");
+      setRebootPassword("");
+      setRebootTarget(null);
     };
     window.addEventListener("bungee:session-expired", expire);
     return () => window.removeEventListener("bungee:session-expired", expire);
@@ -208,13 +205,22 @@ function App() {
     if (!device) return;
     setBusy(true);
     try {
-      await api(`/devices/${device.id}/commands`, {
-        method: "POST",
-        body: JSON.stringify({ kind, message: text }),
-      });
+      await api(
+        `/devices/${kind === "reboot" ? rebootTarget!.id : device.id}/commands`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            kind,
+            message: text,
+            ...(kind === "reboot" ? { password: rebootPassword } : {}),
+          }),
+        },
+      );
       setToast("Command queued. The phone will acknowledge it when connected.");
       setModal(null);
       setMessage("");
+      setRebootPassword("");
+      setRebootTarget(null);
       await load();
     } catch (e) {
       setError((e as Error).message);
@@ -377,6 +383,7 @@ function App() {
           {[
             { name: "Overview", icon: House },
             { name: "Devices", icon: Smartphone },
+            { name: "Device care", icon: ShieldCheck },
             { name: "History", icon: History },
             { name: "Activity", icon: Activity },
             { name: "Settings", icon: Settings },
@@ -446,22 +453,26 @@ function App() {
                   ? "A little peace of mind."
                   : page === "Devices"
                     ? "Everyone, accounted for."
-                    : page === "History"
-                      ? "A trail you control."
-                      : page === "Activity"
-                        ? "A clear trail."
-                        : "Private by design."}
+                    : page === "Device care"
+                      ? "Ready when it matters."
+                      : page === "History"
+                        ? "A trail you control."
+                        : page === "Activity"
+                          ? "A clear trail."
+                          : "Private by design."}
               </h1>
               <p>
                 {page === "Overview"
                   ? "Everything you need to keep your household devices close."
                   : page === "Devices"
                     ? "Manage the phones that belong to your household."
-                    : page === "History"
-                      ? "Look back through GPS fixes and device check-ins. Stored only here."
-                      : page === "Activity"
-                        ? "Enrollment, access, and remote commands. All on your server."
-                        : "Understand the boundaries protecting your household."}
+                    : page === "Device care"
+                      ? "Recovery, optional management and a quiet view of home DNS."
+                      : page === "History"
+                        ? "Look back through GPS fixes and device check-ins. Stored only here."
+                        : page === "Activity"
+                          ? "Enrollment, access, and remote commands. All on your server."
+                          : "Understand the boundaries protecting your household."}
               </p>
             </div>
             {["Overview", "Devices"].includes(page) && (
@@ -686,6 +697,19 @@ function App() {
                       >
                         Clear recovery message
                       </button>
+                      <button
+                        className="text-button danger-text"
+                        disabled={
+                          !device.capabilities.includes("reboot") || busy
+                        }
+                        onClick={() => {
+                          setRebootTarget(device);
+                          setRebootPassword("");
+                          setModal("reboot");
+                        }}
+                      >
+                        Secure reboot
+                      </button>
                     </div>
                   )}
                 </section>
@@ -751,6 +775,30 @@ function App() {
               ) : (
                 <section className="panel history-panel">
                   Pair a phone to begin saving history.
+                </section>
+              )}
+            </>
+          )}
+          {page === "Device care" && (
+            <>
+              <label htmlFor="care-device">Device</label>
+              <select
+                id="care-device"
+                className="care-device"
+                value={device?.id || ""}
+                onChange={(e) => setSelected(e.target.value)}
+              >
+                {active.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+              {device ? (
+                <DeviceCare key={device.id} device={device} />
+              ) : (
+                <section className="panel history-panel">
+                  Pair a phone to configure recovery and optional management.
                 </section>
               )}
             </>
@@ -896,7 +944,73 @@ function App() {
           </button>
         </div>
       )}
-      {modal && (
+      {modal === "reboot" && rebootTarget && (
+        <div
+          className="modal-backdrop"
+          onClick={() => {
+            if (!busy) {
+              setModal(null);
+              setRebootPassword("");
+            }
+          }}
+        >
+          <section
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reboot-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="reboot-title">Secure reboot · {rebootTarget.name}</h2>
+            <p>
+              Restart this encrypted phone into the state before first unlock.
+              Android will require its primary screen-lock credential. This does
+              not erase data or power off the device, and is not equivalent to a
+              wipe.
+            </p>
+            <div className="notice">
+              Location, commands and managed DNS stop until someone first
+              unlocks the phone. A receipt confirms acceptance, not successful
+              reboot. An active call or Android policy can prevent it.
+            </div>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void send("reboot");
+              }}
+            >
+              <label>
+                Confirm administrator password
+                <input
+                  aria-label="Reboot administrator password"
+                  type="password"
+                  autoComplete="current-password"
+                  required
+                  maxLength={1024}
+                  value={rebootPassword}
+                  disabled={busy}
+                  onChange={(e) => setRebootPassword(e.target.value)}
+                />
+              </label>
+              <button className="primary" disabled={busy}>
+                Confirm secure reboot
+              </button>
+              <button
+                className="secondary"
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setModal(null);
+                  setRebootPassword("");
+                }}
+              >
+                Cancel
+              </button>
+            </form>
+          </section>
+        </div>
+      )}
+      {modal && modal !== "reboot" && (
         <div className="modal-backdrop" onClick={close}>
           <section
             className="modal"
@@ -1088,8 +1202,7 @@ function App() {
                   phone.
                 </p>
                 <p>
-                  4. Approve VPN and location permissions. Start sharing from
-                  the phone.
+                  4. Approve location permissions. Start sharing from the phone.
                 </p>
                 <div className="notice">
                   Bungee shares only through your server. It cannot find a
@@ -1127,10 +1240,22 @@ function HistoryView({ device }: { device: Device }) {
   const [from, setFrom] = useState(() => localDateTime(Date.now() - 86400000));
   const [to, setTo] = useState(() => localDateTime(Date.now() + 60000));
   const [kind, setKind] = useState("locations");
+  const [recurrence, setRecurrence] = useState("all"),
+    [minutes, setMinutes] = useState(5),
+    [daily, setDaily] = useState("09:00"),
+    [tolerance, setTolerance] = useState(15);
+  const [timezone, setTimezone] = useState(
+    () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+  );
   const [range, setRange] = useState(() => ({
     from: Math.floor((Date.now() - 86400000) / 1000),
     to: Math.floor(Date.now() / 1000) + 120,
     kind: "locations",
+    recurrence: "all",
+    minutes: 5,
+    daily: "09:00",
+    tolerance: 15,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
   }));
   const [records, setRecords] = useState<HistoryRecord[]>([]);
   const [next, setNext] = useState<number | null>(null);
@@ -1139,7 +1264,7 @@ function HistoryView({ device }: { device: Device }) {
     [error, setError] = useState("");
   const request = useRef<AbortController | null>(null);
   const endpoint = (before?: number | null) =>
-    `/devices/${device.id}/history?${new URLSearchParams({ from: String(range.from), to: String(range.to), kind: range.kind, limit: "200", ...(before ? { before: String(before) } : {}) })}`;
+    `/devices/${device.id}/history?${new URLSearchParams({ from: String(range.from), to: String(range.to), kind: range.kind, limit: "200", ...(range.recurrence === "interval" ? { every: String(range.minutes * 60) } : range.recurrence === "daily" ? { daily: range.daily, timezone: range.timezone, tolerance: String(range.tolerance * 60) } : {}), ...(before ? { before: String(before) } : {}) })}`;
   useEffect(() => {
     const abort = new AbortController();
     request.current = abort;
@@ -1215,7 +1340,7 @@ function HistoryView({ device }: { device: Device }) {
       );
       const a = document.createElement("a");
       a.href = url;
-      a.download = `bungee-${device.id}-${range.kind}.csv`;
+      a.download = `bungee-${device.id}-${range.kind}${range.recurrence === "interval" ? `-every-${range.minutes}m` : range.recurrence === "daily" ? "-daily" : ""}.csv`;
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) {
@@ -1267,7 +1392,16 @@ function HistoryView({ device }: { device: Device }) {
             setError("Choose a valid start and end time.");
             return;
           }
-          setRange({ from: Math.floor(start), to: Math.floor(end), kind });
+          setRange({
+            from: Math.floor(start),
+            to: Math.floor(end),
+            kind,
+            recurrence,
+            minutes,
+            daily,
+            tolerance,
+            timezone,
+          });
         }}
       >
         <label>
@@ -1304,6 +1438,94 @@ function HistoryView({ device }: { device: Device }) {
             <option value="state">Device check-ins</option>
           </select>
         </label>
+        <label>
+          Show records
+          <select
+            aria-label="History recurrence"
+            value={recurrence}
+            disabled={busy}
+            onChange={(e) => setRecurrence(e.target.value)}
+          >
+            <option value="all">Every saved record</option>
+            <option value="interval">One per interval</option>
+            <option value="daily">Every day at a time</option>
+          </select>
+        </label>
+        {recurrence === "interval" && (
+          <label>
+            Interval
+            <select
+              aria-label="History interval"
+              value={
+                minutes === 5 || minutes === 60 ? String(minutes) : "custom"
+              }
+              disabled={busy}
+              onChange={(e) =>
+                setMinutes(
+                  e.target.value === "custom" ? 15 : Number(e.target.value),
+                )
+              }
+            >
+              <option value="5">Every 5 minutes</option>
+              <option value="60">Every hour</option>
+              <option value="custom">Custom</option>
+            </select>
+          </label>
+        )}
+        {recurrence === "interval" && (
+          <label>
+            Minutes
+            <input
+              aria-label="History interval minutes"
+              type="number"
+              min={1}
+              max={1440}
+              required
+              value={minutes}
+              disabled={busy}
+              onChange={(e) => setMinutes(Number(e.target.value))}
+            />
+          </label>
+        )}
+        {recurrence === "daily" && (
+          <>
+            <label>
+              Daily time
+              <input
+                aria-label="History daily time"
+                type="time"
+                required
+                value={daily}
+                disabled={busy}
+                onChange={(e) => setDaily(e.target.value)}
+              />
+            </label>
+            <label>
+              Timezone
+              <input
+                aria-label="History timezone"
+                value={timezone}
+                required
+                maxLength={80}
+                disabled={busy}
+                onChange={(e) => setTimezone(e.target.value)}
+              />
+            </label>
+            <label>
+              Within ± minutes
+              <input
+                aria-label="History daily tolerance"
+                type="number"
+                min={0}
+                max={120}
+                required
+                value={tolerance}
+                disabled={busy}
+                onChange={(e) => setTolerance(Number(e.target.value))}
+              />
+            </label>
+          </>
+        )}
         <button className="primary" disabled={busy}>
           Look up history
         </button>
@@ -1322,6 +1544,15 @@ function HistoryView({ device }: { device: Device }) {
           {error}
         </div>
       )}
+      <p className="fine">
+        {range.recurrence === "interval"
+          ? `Showing the newest saved record in each ${range.minutes}-minute interval, anchored at the start of this range. Empty intervals remain gaps.`
+          : range.recurrence === "daily"
+            ? `Showing the closest saved record within ±${range.tolerance} minutes of ${range.daily} in ${range.timezone}, up to 366 days. Missing spring-forward times are skipped; repeated fall-back times use the first occurrence.`
+            : "Showing every saved record in this range."}{" "}
+        Recurrence changes this lookup and its CSV export; all original records
+        stay saved.
+      </p>
       {busy && <p role="status">Loading saved history…</p>}
       {!busy && !records.length && (
         <p>

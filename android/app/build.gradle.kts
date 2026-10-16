@@ -6,14 +6,28 @@ plugins {
 android {
     namespace = "org.bungee.app"
     compileSdk = 36
-    defaultConfig { applicationId = "org.bungee.app"; minSdk = 31; targetSdk = 36; versionCode = 3; versionName = "0.1.0-alpha.3" }
+    defaultConfig { applicationId = "org.bungee.app"; minSdk = 31; targetSdk = 36; versionCode = 4; versionName = "0.1.0-alpha.4"; ndk { abiFilters += setOf("arm64-v8a", "x86_64") } }
     buildFeatures { compose = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
-    buildTypes { release { isMinifyEnabled = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro") } }
+    val ownerKeystore = providers.environmentVariable("BUNGEE_OWNER_KEYSTORE").orNull
+    signingConfigs {
+        if (ownerKeystore != null) create("owner") {
+            storeFile = file(ownerKeystore)
+            storePassword = providers.environmentVariable("BUNGEE_OWNER_STORE_PASSWORD").orNull ?: error("Owner keystore password is required")
+            keyAlias = providers.environmentVariable("BUNGEE_OWNER_KEY_ALIAS").orNull ?: "bungee"
+            keyPassword = providers.environmentVariable("BUNGEE_OWNER_KEY_PASSWORD").orNull ?: storePassword
+        }
+    }
+    buildTypes { release {
+        isMinifyEnabled = true
+        proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        if (ownerKeystore != null) signingConfig = signingConfigs.getByName("owner")
+    } }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }
 dependencies {
+    implementation(files("libs/bungee-transport.aar"))
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
     implementation(platform("androidx.compose:compose-bom:2025.05.01"))

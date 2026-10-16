@@ -12,3 +12,5 @@
 *.keystore
 *.tsbuildinfo
 docs/research/
+android/app/libs/
+**/.kotlin/

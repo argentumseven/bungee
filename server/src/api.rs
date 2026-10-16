@@ -93,7 +93,7 @@ pub async fn devices(State(app): State<App>, headers: HeaderMap) -> ApiResult<Js
     require_admin(&app, &headers)?;
     let db = app.db.lock().unwrap();
     // Recovery data survives long outages. Freshness is described by timestamps, not deletion.
-    let mut q=db.prepare("SELECT id,name,address,created,last_seen,revoked,telemetry,capabilities,public_key IS NOT NULL,last_location,wg_psk IS NOT NULL FROM devices ORDER BY created")?;
+    let mut q=db.prepare("SELECT id,name,address,created,last_seen,revoked,telemetry,capabilities,public_key IS NOT NULL,last_location,wg_psk IS NOT NULL,management_report FROM devices ORDER BY created")?;
     let rows=q.query_map([],|r| {
         let location = r.get::<_,Option<String>>(9)?.and_then(|s|serde_json::from_str::<Value>(&s).ok());
         let mut telemetry = r.get::<_,Option<String>>(6)?.and_then(|s|serde_json::from_str::<Value>(&s).ok());
@@ -108,6 +108,7 @@ pub async fn devices(State(app): State<App>, headers: HeaderMap) -> ApiResult<Js
         "capabilities":serde_json::from_str::<Value>(&r.get::<_,String>(7)?).unwrap_or(json!([])),
         "enrolled":r.get::<_,bool>(8)?,
         "preshared_key":r.get::<_,bool>(10)?,
+        "management":r.get::<_,Option<String>>(11)?.and_then(|s|serde_json::from_str::<Value>(&s).ok()),
     }))})?.collect::<Result<Vec<_>,_>>()?;
     let mut q=db.prepare("SELECT id,device_id,kind,created,expires,status,result FROM commands ORDER BY created DESC LIMIT 50")?;
     let commands=q.query_map([],|r| Ok(json!({"id":r.get::<_,String>(0)?,"device_id":r.get::<_,String>(1)?,"kind":r.get::<_,String>(2)?,"created":r.get::<_,i64>(3)?,"expires":r.get::<_,i64>(4)?,"status":if r.get::<_,i64>(4)?<now() && ["pending","delivered"].contains(&r.get::<_,String>(5)?.as_str()) {"expired".to_owned()} else {r.get(5)?},"result":r.get::<_,Option<String>>(6)?})))?.collect::<Result<Vec<_>,_>>()?;
@@ -265,6 +266,7 @@ const CAPABILITIES: &[&str] = &[
     "message",
     "clear_message",
     "lock",
+    "reboot",
 ];
 fn valid_capabilities(caps: &[String]) -> bool {
     caps.len() <= CAPABILITIES.len() && caps.iter().all(|c| CAPABILITIES.contains(&c.as_str()))
@@ -427,6 +429,10 @@ pub struct HistoryQuery {
     before: Option<i64>,
     limit: Option<usize>,
     kind: Option<String>,
+    every: Option<i64>,
+    daily: Option<String>,
+    timezone: Option<String>,
+    tolerance: Option<i64>,
 }
 pub async fn history(
     State(app): State<App>,
@@ -449,6 +455,13 @@ pub async fn history(
     if !["locations", "state"].contains(&kind) {
         return Err(bad("Unknown history kind"));
     }
+    let recurrence = crate::recurrence::Recurrence {
+        every: query.every,
+        daily: query.daily,
+        timezone: query.timezone,
+        tolerance: query.tolerance,
+    };
+    recurrence.validate(query.from, query.to)?;
     let db = app.db.lock().unwrap();
     let exists: bool = db.query_row(
         "SELECT EXISTS(SELECT 1 FROM devices WHERE id=?)",
@@ -458,7 +471,30 @@ pub async fn history(
     if !exists {
         return Err(Error(StatusCode::NOT_FOUND, "Device not found"));
     }
-    let mut rows: Vec<Value> = if kind == "locations" {
+    let selected = recurrence.keys(
+        &db,
+        &id,
+        kind,
+        query.from,
+        query.to,
+        query.before.unwrap_or(i64::MAX),
+        limit,
+    )?;
+    let mut rows: Vec<Value> = if let Some(keys) = selected {
+        let mut result = Vec::new();
+        if kind == "locations" {
+            let mut q = db.prepare("SELECT observed_at,received_at,latitude,longitude,accuracy FROM location_history WHERE device_id=? AND observed_at=?")?;
+            for key in keys {
+                result.push(q.query_row(params![id,key], |r| Ok(json!({"observed_at":r.get::<_,i64>(0)?,"received_at":r.get::<_,i64>(1)?,"latitude":r.get::<_,f64>(2)?,"longitude":r.get::<_,f64>(3)?,"accuracy":r.get::<_,f64>(4)?})))?);
+            }
+        } else {
+            let mut q = db.prepare("SELECT id,received_at,battery,charging,device_owner FROM state_history WHERE device_id=? AND id=?")?;
+            for key in keys {
+                result.push(q.query_row(params![id,key], |r| Ok(json!({"id":r.get::<_,i64>(0)?,"received_at":r.get::<_,i64>(1)?,"battery":r.get::<_,u8>(2)?,"charging":r.get::<_,bool>(3)?,"device_owner":r.get::<_,bool>(4)?})))?);
+            }
+        }
+        result
+    } else if kind == "locations" {
         let mut q = db.prepare("SELECT observed_at,received_at,latitude,longitude,accuracy FROM location_history
             WHERE device_id=? AND observed_at>=? AND observed_at<=? AND observed_at<? ORDER BY observed_at DESC LIMIT ?")?;
         q.query_map(params![id,query.from,query.to,query.before.unwrap_or(i64::MAX),limit as i64 + 1], |r| {
@@ -543,6 +579,7 @@ fn erase_history(
 pub struct Command {
     kind: String,
     message: Option<String>,
+    password: Option<String>,
 }
 pub async fn command(
     State(app): State<App>,
@@ -553,6 +590,20 @@ pub async fn command(
     require_admin(&app, &headers)?;
     if !CAPABILITIES.contains(&input.kind.as_str()) {
         return Err(bad("Unsupported command"));
+    }
+    if input.kind == "reboot" {
+        rate_limit(&app, "reboot-reauth".into(), 5)?;
+        let password = input.password.unwrap_or_default();
+        if password.len() > 1024 {
+            return Err(denied());
+        }
+        let expected = app.admin_hash.clone();
+        if !tokio::task::spawn_blocking(move || password_matches(&password, &expected))
+            .await
+            .unwrap_or(false)
+        {
+            return Err(denied());
+        }
     }
     let text = input.message.unwrap_or_default();
     if input.kind == "message"
@@ -622,13 +673,13 @@ pub async fn ack(
 ) -> ApiResult<Json<Value>> {
     let id = verify_device(&app, &headers, "/v1/ack", &body)?;
     let input: Ack = serde_json::from_slice(&body).map_err(|_| bad("Invalid receipt"))?;
-    if !["executed", "rejected", "failed"].contains(&input.status.as_str())
+    if !["executed", "rejected", "failed", "accepted"].contains(&input.status.as_str())
         || input.result.len() > 256
     {
         return Err(bad("Invalid receipt values"));
     }
     let db = app.db.lock().unwrap();
-    let changed=db.execute("UPDATE commands SET status=?,result=? WHERE id=? AND device_id=? AND status='delivered' AND expires>?",params![input.status,input.result,input.id,id,now()])?;
+    let changed=db.execute("UPDATE commands SET status=?,result=? WHERE id=? AND device_id=? AND (?!='accepted' OR kind='reboot') AND (status='delivered' OR (status='accepted' AND kind='reboot' AND ?='failed')) AND expires>?",params![input.status,input.result,input.id,id,input.status,input.status,now()])?;
     if changed == 1 {
         store::audit(&db, "command.receipt", Some(&id), &input.status)?;
     }
@@ -643,7 +694,7 @@ pub async fn revoke(
     let mut db = app.db.lock().unwrap();
     let tx = db.transaction()?;
     let changed = tx.execute(
-        "UPDATE devices SET revoked=1,telemetry=NULL,last_location=NULL,wg_psk=NULL,capabilities='[]' WHERE id=? AND revoked=0",
+        "UPDATE devices SET revoked=1,telemetry=NULL,last_location=NULL,wg_psk=NULL,management_report=NULL,capabilities='[]' WHERE id=? AND revoked=0",
         [&id],
     )?;
     if changed != 1 {
@@ -653,6 +704,8 @@ pub async fn revoke(
     tx.execute("DELETE FROM commands WHERE device_id=?", [&id])?;
     tx.execute("DELETE FROM location_history WHERE device_id=?", [&id])?;
     tx.execute("DELETE FROM state_history WHERE device_id=?", [&id])?;
+    tx.execute("DELETE FROM dns_summary WHERE device_id=?", [&id])?;
+    tx.execute("DELETE FROM device_policies WHERE device_id=?", [&id])?;
     store::audit(
         &tx,
         "device.revoked",

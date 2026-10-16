@@ -557,6 +557,44 @@ test("live server: household enrollment, device signatures, commands, and revoca
       assert.equal((await (await history()).json()).records.length, before);
     },
   );
+  await t.test(
+    "recurrence queries sample full saved history and retain pagination boundaries",
+    async () => {
+      const base = telemetry.location.observed_at - 3600;
+      const path = `/api/devices/${id}/history?from=${base}&to=${base + 1200}&every=300&limit=1`;
+      let data = await (await admin(path)).json();
+      assert.ok(Array.isArray(data.records), JSON.stringify(data));
+      assert.equal(data.records.length, 1);
+      assert.equal(data.records[0].observed_at, base + 20);
+      const day = new Date(base * 1000).toISOString().slice(0, 10);
+      const time = new Date(base * 1000).toISOString().slice(11, 16);
+      data = await (
+        await admin(
+          `/api/devices/${id}/history?from=${Date.parse(day + "T00:00:00Z") / 1000}&to=${Date.parse(day + "T23:59:59Z") / 1000}&daily=${time}&timezone=UTC&tolerance=120`,
+        )
+      ).json();
+      assert.equal(data.records.length, 1);
+      const full = await (await history()).json();
+      assert.ok(full.records.length > data.records.length);
+      for (const extra of [
+        "every=0",
+        "every=86401",
+        "daily=24:99&timezone=UTC",
+        "daily=09:00&timezone=Bad/Zone",
+        "daily=09:00&timezone=UTC&every=300",
+        "daily=09:00&timezone=UTC&tolerance=7201",
+      ]) {
+        assert.equal(
+          (
+            await admin(
+              `/api/devices/${id}/history?from=${base}&to=${base + 1200}&${extra}`,
+            )
+          ).status,
+          400,
+        );
+      }
+    },
+  );
   await t.test("invalid coordinates cannot enter storage", async () =>
     assert.equal(
       (
@@ -653,6 +691,91 @@ test("live server: household enrollment, device signatures, commands, and revoca
       assert.equal(
         data.commands.find((c) => c.id === expired.id).status,
         "expired",
+      );
+    },
+  );
+  await t.test(
+    "secure reboot needs reauthentication and local capability; accepted is not executed",
+    async () => {
+      assert.equal(
+        (
+          await admin(`/api/devices/${id}/commands`, "POST", {
+            kind: "reboot",
+            password,
+          })
+        ).status,
+        400,
+      );
+      assert.equal(
+        (
+          await signed("/v1/telemetry", {
+            ...telemetry,
+            capabilities: [...telemetry.capabilities, "reboot"],
+          })
+        ).status,
+        200,
+      );
+      assert.equal(
+        (await admin(`/api/devices/${id}/commands`, "POST", { kind: "reboot" }))
+          .status,
+        401,
+      );
+      assert.equal(
+        (
+          await admin(`/api/devices/${id}/commands`, "POST", {
+            kind: "reboot",
+            password: "wrong",
+          })
+        ).status,
+        401,
+      );
+      const queued = await (
+        await admin(`/api/devices/${id}/commands`, "POST", {
+          kind: "reboot",
+          password,
+        })
+      ).json();
+      const polled = await (await signed("/v1/commands", {})).json();
+      assert.ok(
+        polled.commands.some((c) => c.id === queued.id && c.kind === "reboot"),
+      );
+      assert.equal(
+        (
+          await signed("/v1/ack", {
+            id: queued.id,
+            status: "accepted",
+            result: "Reboot accepted; completion unconfirmed",
+          })
+        ).status,
+        200,
+      );
+      const list = await (await admin("/api/devices")).json();
+      assert.equal(
+        list.commands.find((c) => c.id === queued.id).status,
+        "accepted",
+      );
+      assert.ok(
+        !(await (await signed("/v1/commands", {})).json()).commands.some(
+          (c) => c.id === queued.id,
+        ),
+      );
+      assert.equal(
+        (
+          await (
+            await signed("/v1/ack", {
+              id: queued.id,
+              status: "failed",
+              result: "Android rejected reboot",
+            })
+          ).json()
+        ).accepted,
+        true,
+      );
+      assert.equal(
+        (await (await admin("/api/devices")).json()).commands.find(
+          (c) => c.id === queued.id,
+        ).status,
+        "failed",
       );
     },
   );

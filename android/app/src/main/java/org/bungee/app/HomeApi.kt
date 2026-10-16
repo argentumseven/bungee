@@ -6,6 +6,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 import java.util.UUID
+import org.bungee.transport.Transport
 
 class HomeApi(private val identity: Identity) {
     private val bundle get() = JSONObject(checkNotNull(identity.bundle) { "Not paired" })
@@ -21,27 +22,46 @@ class HomeApi(private val identity: Identity) {
     }
     fun request(path: String, body: JSONObject = JSONObject(), signed: Boolean = true): JSONObject {
         check(HomeTunnel.state == com.wireguard.android.backend.Tunnel.State.UP) { "The private tunnel is disconnected" }
-        require(path in listOf("/v1/enroll", "/v1/telemetry", "/v1/commands", "/v1/ack"))
+        require(path in listOf("/v1/enroll", "/v1/telemetry", "/v1/commands", "/v1/ack", "/v1/sync"))
         val bytes = body.toString().toByteArray(Charsets.UTF_8)
-        val connection = URL("http://10.77.0.1:8081$path").openConnection() as HttpURLConnection
-        connection.requestMethod = "POST"; connection.connectTimeout = 10000; connection.readTimeout = 10000
-        connection.instanceFollowRedirects = false; connection.doOutput = true
-        connection.setRequestProperty("Content-Type", "application/json")
+        val headers = JSONObject()
         if (signed) {
             val timestamp = (System.currentTimeMillis() / 1000).toString()
             val nonce = UUID.randomUUID().toString()
             val hash = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
             val signature = identity.sign("BUNGEE-V1\nPOST\n$path\n$timestamp\n$nonce\n$hash")
-            connection.setRequestProperty("X-Bungee-Device", bundle.getString("device_id"))
-            connection.setRequestProperty("X-Bungee-Time", timestamp)
-            connection.setRequestProperty("X-Bungee-Nonce", nonce)
-            connection.setRequestProperty("X-Bungee-Signature", signature)
+            headers.put("X-Bungee-Device", bundle.getString("device_id"))
+            headers.put("X-Bungee-Time", timestamp)
+            headers.put("X-Bungee-Nonce", nonce)
+            headers.put("X-Bungee-Signature", signature)
         }
+        if (HomeTunnel.appContained) {
+            val response = JSONObject(Transport.exchange(path, body.toString(), headers.toString()))
+            val status = response.getInt("status")
+            val result = JSONObject(response.getString("body"))
+            if (status !in 200..299) error(result.optString("error", "Server rejected request ($status)"))
+            return result
+        }
+        val connection = URL("http://10.77.0.1:8081$path").openConnection() as HttpURLConnection
+        connection.requestMethod = "POST"; connection.connectTimeout = 10000; connection.readTimeout = 10000
+        connection.instanceFollowRedirects = false; connection.doOutput = true
+        connection.setRequestProperty("Content-Type", "application/json")
+        headers.keys().forEach { connection.setRequestProperty(it, headers.getString(it)) }
         try {
             connection.outputStream.use { it.write(bytes) }
             val status = connection.responseCode
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            val text = stream?.bufferedReader()?.use { it.readText().take(65536) } ?: "{}"
+            val text = stream?.use { source ->
+                val result = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(4096)
+                while (true) {
+                    val count = source.read(buffer)
+                    if (count < 0) break
+                    check(result.size() + count <= 65536) { "Server response is too large" }
+                    result.write(buffer, 0, count)
+                }
+                result.toString("UTF-8")
+            } ?: "{}"
             if (status !in 200..299) throw IllegalStateException(JSONObject(text).optString("error", "Server rejected request ($status)"))
             return JSONObject(text)
         } finally { connection.disconnect() }

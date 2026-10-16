@@ -50,11 +50,10 @@ class MainActivity : FragmentActivity() {
     private var pendingBundle: String? = null
     private var pairingText by mutableStateOf("")
     private var showPairing by mutableStateOf(false)
-    private val vpn = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { if (it.resultCode == RESULT_OK) finishPairing() else error = "VPN approval is required for the private connection." }
+    private val vpn = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { if (it.resultCode == RESULT_OK) startSharing() else error = "Android VPN approval is needed only for managed DNS / always-on mode." }
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-        if (TelemetryService.hasLocation(this)) {
-            ContextCompat.startForegroundService(this, Intent(this, TelemetryService::class.java))
-        } else error = "Location permission is needed for this foreground sharing session. You remain untracked while it is paused."
+        ContextCompat.startForegroundService(this, Intent(this, TelemetryService::class.java))
+        if (!TelemetryService.hasLocation(this)) error = "GPS permission was not granted. The connection and approved recovery controls can still work."
     }
     private val scan = registerForActivityResult(ScanContract()) { result -> result.contents?.let { pairingText = it; showPairing = true } }
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -82,8 +81,7 @@ class MainActivity : FragmentActivity() {
             require(bundle.getLong("expires") > System.currentTimeMillis()/1000) { "This invitation has expired" }
             require(bundle.getJSONObject("wireguard").getString("client_public_key") == identity.wgPublic) { "Invitation belongs to another phone" }
             pendingBundle = text
-            val request = VpnService.prepare(this)
-            if (request != null) vpn.launch(request) else finishPairing()
+            finishPairing()
         } catch (e: Exception) { error = e.message ?: "Invalid enrollment" }
     }
     private fun finishPairing() {
@@ -109,6 +107,10 @@ class MainActivity : FragmentActivity() {
         }
     }
     private fun startSharing() {
+        if (identity.managementConsent && ManagementAgent.isOwner(this)) {
+            val request = VpnService.prepare(this)
+            if (request != null) { vpn.launch(request); return }
+        }
         val needed = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
         if (Build.VERSION.SDK_INT >= 33) needed.add(Manifest.permission.POST_NOTIFICATIONS)
         permissions.launch(needed.toTypedArray())
@@ -129,6 +131,12 @@ class MainActivity : FragmentActivity() {
         var commands by remember { mutableStateOf(identity.allowCommands) }
         var confirmReset by remember { mutableStateOf(false) }
         var recovery by remember { mutableStateOf(identity.recoveryMessage) }
+        var managed by remember { mutableStateOf(identity.managementConsent) }
+        var resume by remember { mutableStateOf(identity.resumeConsent) }
+        var confirmManagement by remember { mutableStateOf(false) }
+        var reboot by remember { mutableStateOf(identity.allowReboot) }
+        var confirmReboot by remember { mutableStateOf(false) }
+        var confirmRelease by remember { mutableStateOf(false) }
         Column(Modifier.fillMaxSize().systemBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 25.dp)) {
             Row(Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 35.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(36.dp).background(Purple, RoundedCornerShape(11.dp)), contentAlignment = Alignment.Center) { Icon(Icons.Outlined.Sensors, null, tint = Color.White, modifier = Modifier.size(23.dp)) }
@@ -162,10 +170,14 @@ class MainActivity : FragmentActivity() {
                             Column(Modifier.padding(start = 13.dp)) { Text(if (status.connected) "Home is within reach." else if (status.running) "Finding the way home…" else "Take a little pause.", fontSize = 14.sp, fontWeight = FontWeight.SemiBold); Text(status.text, fontSize = 10.sp, color = Muted, modifier = Modifier.padding(top = 5.dp)) }
                         }
                         HorizontalDivider(Modifier.padding(vertical = 20.dp), color = Color(0xFFF0EDF5))
-                        Row { Icon(Icons.Outlined.VpnLock, null, tint = Purple, modifier = Modifier.size(17.dp)); Text("  Only household traffic uses the tunnel.", fontSize = 11.sp, color = Muted) }
-                        Text("Your browsing, calls, and other apps use their normal connection. Android allows one VPN per profile.", color = Muted, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
+                        Row { Icon(Icons.Outlined.VpnLock, null, tint = Purple, modifier = Modifier.size(17.dp)); Text(if (identity.managedDns) "  System DNS & household traffic use home." else "  Only household traffic uses the tunnel.", fontSize = 11.sp, color = Muted) }
+                        Text(if (identity.managedDns) "Ordinary traffic stays direct. Managed DNS uses Android’s one VPN slot in this profile." else "Bungee’s app-contained connection leaves Android’s VPN slot free for your other VPN. That VPN may still filter Bungee’s UDP connection.", color = Muted, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
                         status.lastSent?.let { Text("Last check-in · ${java.text.DateFormat.getTimeInstance().format(java.util.Date(it))}", color = Color(0xFF9BA99F), fontSize = 10.sp, modifier = Modifier.padding(top = 16.dp)) }
-                        Button(onClick = { if (status.running) stopService(Intent(this@MainActivity, TelemetryService::class.java)) else startSharing() }, modifier = Modifier.fillMaxWidth().padding(top = 20.dp), shape = RoundedCornerShape(11.dp)) { Text(if (status.running) "Pause sharing" else "Start sharing", Modifier.padding(6.dp)) }
+                        Button(onClick = {
+                            if (status.running && identity.managedDns) { identity.allowLocate = false; locate = false; startService(Intent(this@MainActivity, TelemetryService::class.java).setAction("STOP")) }
+                            else if (status.running) { identity.autoResume = false; stopService(Intent(this@MainActivity, TelemetryService::class.java)) }
+                            else startSharing()
+                        }, modifier = Modifier.fillMaxWidth().padding(top = 20.dp), shape = RoundedCornerShape(11.dp)) { Text(if (status.running && identity.managedDns) "Pause location · keep home DNS" else if (status.running) "Pause sharing" else "Start sharing", Modifier.padding(6.dp)) }
                     }
                 }
                 Text("YOU’RE IN CONTROL", color = Muted, fontSize = 9.sp, letterSpacing = 1.8.sp, modifier = Modifier.padding(top = 30.dp, bottom = 15.dp))
@@ -175,9 +187,23 @@ class MainActivity : FragmentActivity() {
                         HorizontalDivider(color = Color(0xFFF4F1F7))
                         SettingRow("Household commands", "Sound, recovery messages & permitted locking", commands) { commands = it; identity.allowCommands = it }
                         HorizontalDivider(color = Color(0xFFF4F1F7))
+                        SettingRow("Resume after restart", "Opt in to reconnect after first unlock; OS limits still apply", resume) { enabled -> unlock { resume = enabled; identity.resumeConsent = enabled; identity.autoResume = enabled } }
+                        HorizontalDivider(color = Color(0xFFF4F1F7))
                         SettingRow("Lock this app", "Use your phone’s secure screen lock", lockEnabled) { enabled ->
                             unlock { identity.appLock = enabled; lockEnabled = enabled; locked = false }
                         }
+                    }
+                }
+                Card(Modifier.fillMaxWidth().padding(top = 18.dp), colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(17.dp)) {
+                    Column(Modifier.padding(18.dp)) {
+                        Text("Optional household management", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Text(if (ManagementAgent.isOwner(this@MainActivity)) "Android device owner · managed by your own server" else "Personal phone · device ownership requires Android provisioning on an eligible device", fontSize = 10.sp, color = Muted, lineHeight = 17.sp, modifier = Modifier.padding(top = 8.dp))
+                        if (ManagementAgent.isOwner(this@MainActivity)) {
+                            SettingRow("Approve managed controls", "Home DNS, selected-app suspension & recovery policies", managed) { enabled -> if (enabled) confirmManagement = true else confirmRelease = true }
+                            if (managed) SettingRow("Allow remote secure reboot", "Requires a secure screen lock; recovery stops until first unlock", reboot) { enabled -> if (enabled) confirmReboot = true else { identity.allowReboot = false; reboot = false } }
+                            if (managed) Text("DNS summaries are kept at home, grouped by site. App-controlled encrypted or hard-coded DNS can bypass system DNS. Suspending a selected app stops that app entirely.", color = Muted, fontSize = 10.sp, lineHeight = 17.sp)
+                        }
+                        Text("No provider account, remote shell, or automatic wipe. Failed credential attempts are reported when Android delivers them; biometric failures are not assumed.", color = Muted, fontSize = 10.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 10.dp))
                     }
                 }
                 TextButton(onClick = { startActivity(Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, ComponentName(this@MainActivity, BungeeAdminReceiver::class.java)).putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Optional: let your household lock this phone. No remote wipe.")) }, modifier = Modifier.padding(top = 9.dp)) {
@@ -195,12 +221,18 @@ class MainActivity : FragmentActivity() {
             }
             Text("Early release · test device recommended · no Google Play services required", color = Color(0xFFB0ABB9), fontSize = 9.sp, modifier = Modifier.padding(bottom = 22.dp))
         }
+        if (confirmReboot) AlertDialog(onDismissRequest = { confirmReboot = false }, title = { Text("Allow remote reboot?") }, text = { Text("Your home administrator can restart this encrypted phone. After restart, Android requires the primary screen-lock credential and Bungee cannot reconnect until first unlock. This does not erase data, power off, or protect against every attack. Reboot can interrupt calls and other work.") }, confirmButton = { TextButton(onClick = { unlock { identity.allowReboot = true; reboot = true; confirmReboot = false } }) { Text("Allow reboot") } }, dismissButton = { TextButton(onClick = { confirmReboot = false }) { Text("Cancel") } })
+        if (confirmManagement) AlertDialog(onDismissRequest = { confirmManagement = false }, title = { Text("Approve household management?") }, text = { Text("Your enrolled home server can configure system DNS through WireGuard, summarize DNS site groups, suspend selected non-system apps, require a strong screen lock, protect recovery settings and keep the VPN connected. Ordinary app traffic stays direct. Management remains visible. You can release Bungee's policies here after authenticating. Android device ownership itself remains until separately removed.") }, confirmButton = { TextButton(onClick = { unlock { identity.managementConsent = true; managed = true; confirmManagement = false; startSharing() } }) { Text("Approve") } }, dismissButton = { TextButton(onClick = { confirmManagement = false }) { Text("Cancel") } })
+        if (confirmRelease) AlertDialog(onDismissRequest = { confirmRelease = false }, title = { Text("Release Bungee's policies?") }, text = { Text("This restores apps Bungee suspended, removes its restrictions and always-on policy, and returns system DNS selection to Android. Review Android Private DNS settings afterward. Pairing and saved server history remain. Android device ownership is not removed by this step.") }, confirmButton = { TextButton(onClick = { unlock { scope.launch {
+            try { withContext(Dispatchers.IO) { ManagementAgent.release(this@MainActivity, identity); HomeTunnel.connect(this@MainActivity, identity, JSONObject(identity.bundle!!)) }; managed = false; confirmRelease = false }
+            catch (_: Exception) { error = "Some policies could not be released. Keep management enabled and review its status." }
+        } } }) { Text("Release policies") } }, dismissButton = { TextButton(onClick = { confirmRelease = false }) { Text("Keep managed") } })
         if (showPairing) AlertDialog(onDismissRequest = { if (!busy) showPairing = false }, title = { Text("Connect to your home") }, text = {
             Column { Text("This creates a private tunnel and shares your phone’s location and battery with the server you chose. Timestamped GPS history stays on that server until explicitly erased or the device is revoked. Unsent GPS fixes are encrypted on this phone, up to 10,080 points. Continue only if you consent.", fontSize = 12.sp, lineHeight = 20.sp); OutlinedTextField(value = pairingText, onValueChange = { pairingText = it }, label = { Text("Enrollment invitation") }, modifier = Modifier.fillMaxWidth().padding(top = 16.dp), minLines = 4); error?.let { Text(it, color = Color(0xFFB97777), fontSize = 11.sp) } }
         }, confirmButton = { TextButton(onClick = { pair(pairingText) }, enabled = !busy) { Text("Agree & pair") } }, dismissButton = { TextButton(onClick = { showPairing = false }, enabled = !busy) { Text("Cancel") } })
         if (confirmReset) AlertDialog(onDismissRequest = { confirmReset = false }, title = { Text("Unpair this phone?") }, text = { Text("This erases local keys and stops sharing. Also revoke this device on the server to erase its location history and remove the peer.") }, confirmButton = { TextButton(onClick = { unlock {
             stopService(Intent(this@MainActivity, TelemetryService::class.java))
-            scope.launch { withContext(Dispatchers.IO) { HomeTunnel.disconnect() }; identity.reset(); identity = Identity(this@MainActivity); enrolled = false; confirmReset = false }
+            scope.launch { try { withContext(Dispatchers.IO) { if (identity.managementConsent) ManagementAgent.release(this@MainActivity, identity); HomeTunnel.disconnect() }; identity.reset(); identity = Identity(this@MainActivity); enrolled = false; confirmReset = false } catch (_: Exception) { error = "Policies could not be released. Review management status before unpairing."; startSharing() } }
         } }) { Text("Unpair") } }, dismissButton = { TextButton(onClick = { confirmReset = false }) { Text("Keep paired") } })
     }
     @Composable private fun SettingRow(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
