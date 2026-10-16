@@ -1,0 +1,5 @@
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false"><trust-anchors><certificates src="system"/></trust-anchors></base-config>
+    <!-- HTTP is allowed only to the single WireGuard peer IP, inside its encrypted tunnel. -->
+    <domain-config cleartextTrafficPermitted="true"><domain includeSubdomains="false">10.77.0.1</domain></domain-config>
+</network-security-config>

@@ -1,0 +1,67 @@
+name: bungee
+services:
+  gateway:
+    build: ./deploy/wireguard
+    restart: unless-stopped
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, CHOWN, DAC_OVERRIDE]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs: [/run:mode=0700]
+    ports: ["51820:51820/udp"]
+    sysctls:
+      net.ipv4.ip_forward: "0"
+      net.ipv6.conf.all.forwarding: "0"
+    volumes:
+      - gateway-private:/private
+      - gateway-peers:/peers
+    healthcheck:
+      test: [CMD, wg, show, wg0]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [home]
+  server:
+    build: .
+    restart: unless-stopped
+    network_mode: service:gateway
+    depends_on:
+      gateway: {condition: service_healthy}
+    environment:
+      BUNGEE_PUBLIC_ORIGIN: https://${BUNGEE_DOMAIN:?Set BUNGEE_DOMAIN in .env}
+      BUNGEE_ADMIN_BIND: 0.0.0.0:8080
+      BUNGEE_DEVICE_BIND: 10.77.0.1:8081
+      BUNGEE_WG_ENDPOINT: ${BUNGEE_WG_ENDPOINT:?Set BUNGEE_WG_ENDPOINT to your public host:51820}
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs: [/tmp:size=16m]
+    volumes:
+      - server-data:/state
+      - gateway-peers:/state/wireguard
+  web:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    environment:
+      BUNGEE_DOMAIN: ${BUNGEE_DOMAIN:?Set BUNGEE_DOMAIN in .env}
+    ports: ["80:80", "443:443", "443:443/udp"]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs: [/tmp:size=16m]
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      server: {condition: service_healthy}
+    networks: [home]
+volumes:
+  server-data:
+  gateway-private:
+  gateway-peers:
+  caddy-data:
+  caddy-config:
+networks:
+  home:

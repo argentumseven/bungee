@@ -1,0 +1,14 @@
+**/target/
+**/node_modules/
+**/dist/
+**/build/
+**/.gradle/
+**/local.properties
+.env
+.state/
+.tools/
+*.log
+*.jks
+*.keystore
+*.tsbuildinfo
+docs/research/

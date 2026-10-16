@@ -1,0 +1,10 @@
+.git
+.state
+.env
+**/node_modules
+**/target
+**/dist
+**/build
+**/.gradle
+android
+docs/research

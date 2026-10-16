@@ -1,0 +1,6 @@
+<resources>
+    <style name="Theme.Bungee" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item><item name="android:windowLightStatusBar">true</item><item name="android:statusBarColor">#FAF9FD</item><item name="android:navigationBarColor">#FAF9FD</item><item name="android:windowActionModeOverlay">true</item>
+    </style>
+    <string name="admin_description">Allow your household server to lock this phone. No remote wipe or password changes. You can revoke access in Android settings.</string>
+</resources>
