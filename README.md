@@ -6,6 +6,12 @@ This is a working **early foundation**, not an audited anti-theft or MDM product
 
 ![Bungee dashboard](docs/screenshots/dashboard.png)
 
+## Download the Android test build
+
+Download **bungee-debug.apk** and its SHA-256 checksum from [GitHub Releases](https://github.com/argentumseven/bungee/releases). Tagged previews are published only after the server/web checks and Android build/lint pass. Ordinary CI runs also attach an APK under the run’s **Artifacts** section in [GitHub Actions](https://github.com/argentumseven/bungee/actions).
+
+This is a signed **debug build** for Android 12+ test devices, with the prototype limitations below. CI generates development signing keys; a later test build may require uninstalling the previous one and pairing again. Production signing and stable updates are separate work. APK binaries and private signing keys are not committed into the source tree.
+
 ## What is here
 
 - **Rust server:** separate administrator/device listeners; SQLite; Argon2id administrator authentication; HttpOnly, SameSite cookies; exact-origin CSRF checks; bounded requests and authentication rate limits.
