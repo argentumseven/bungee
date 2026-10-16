@@ -23,7 +23,14 @@ pub struct Policy {
     pub recovery_message: String,
 }
 impl Policy {
-    pub fn needs_owner(&self) -> bool {
+    pub fn reversible(&self) -> Self {
+        Self {
+            lost_mode: self.lost_mode,
+            recovery_message: self.recovery_message.clone(),
+            ..Self::default()
+        }
+    }
+    pub fn has_persistent_controls(&self) -> bool {
         self.managed_dns
             || self.auto_resume
             || self.always_on
@@ -112,7 +119,7 @@ pub async fn get_policy(
     let report = report.ok_or(Error(StatusCode::NOT_FOUND, "Device not found"))?;
     let (revision, policy) = read(&db, &id)?;
     Ok(Json(
-        json!({"revision":revision,"policy":policy,"report":report.and_then(|s|serde_json::from_str::<Value>(&s).ok()),"dns_configured":app.dns.is_some(),"dns_upstream":app.dns.as_ref().map(|d|d.upstream.to_string())}),
+        json!({"revision":revision,"policy":policy.reversible(),"persistent_controls_enabled":false,"legacy_policy_present":policy.has_persistent_controls(),"report":report.and_then(|s|serde_json::from_str::<Value>(&s).ok()),"dns_configured":app.dns.is_some(),"dns_upstream":app.dns.as_ref().map(|d|d.upstream.to_string())}),
     ))
 }
 #[derive(Deserialize)]
@@ -131,8 +138,10 @@ pub async fn save_policy(
     if !input.policy.valid() || input.expected_revision < 0 {
         return Err(bad("Invalid policy, package list or recovery message"));
     }
-    if input.policy.managed_dns && app.dns.is_none() {
-        return Err(bad("Configure your private home DNS upstream first"));
+    if input.policy.has_persistent_controls() {
+        return Err(bad(
+            "Persistent device-owner controls are disabled by the reversibility policy",
+        ));
     }
     let mut db = app.db.lock().unwrap();
     let tx = db.transaction()?;
@@ -141,12 +150,7 @@ pub async fn save_policy(
         .ok_or(Error(StatusCode::NOT_FOUND, "Enrolled phone not found"))?
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
-    if input.policy.needs_owner() && !(report.owner && report.consent) {
-        return Err(bad(
-            "The phone must be device owner and locally approve household management",
-        ));
-    }
-    if (input.policy.lost_mode || input.policy.auto_resume) && !report.recovery_consent {
+    if input.policy.lost_mode && !report.recovery_consent {
         return Err(bad("The phone must locally approve recovery controls"));
     }
     let (revision, _) = read(&tx, &id)?;
@@ -207,7 +211,7 @@ pub async fn sync(
         return Err(denied());
     }
     Ok(Json(
-        json!({"revision":revision,"policy":policy,"dns_available":app.dns.is_some()}),
+        json!({"revision":revision,"policy":policy.reversible(),"dns_available":false,"persistent_controls_enabled":false}),
     ))
 }
 pub fn dns_peer(db: &rusqlite::Connection, address: &str) -> ApiResult<Option<String>> {

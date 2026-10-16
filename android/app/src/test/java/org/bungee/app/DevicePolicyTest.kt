@@ -11,12 +11,11 @@ class DevicePolicyTest {
         assertFalse(policy.managedDns); assertFalse(policy.alwaysOn); assertFalse(policy.protectSettings)
         assertFalse(policy.preventUninstall); assertFalse(policy.lostMode); assertTrue(policy.blockedApps.isEmpty())
     }
-    @Test fun managedDnsNeedsAlwaysOnAndSelectedAppsAreBounded() {
-        assertThrows(IllegalArgumentException::class.java) { DevicePolicy.parse(JSONObject().put("managed_dns", true)) }
-        val policy = DevicePolicy.parse(JSONObject().put("managed_dns", true).put("always_on", true)
-            .put("blocked_apps", JSONArray(listOf("org.mozilla.firefox"))))
-        assertTrue(policy.managedDns); assertEquals(setOf("org.mozilla.firefox"), policy.blockedApps)
-        for (name in listOf("com.android.settings", "android", "org.bungee.app", "bad;name.app")) {
+    @Test fun persistentControlsAreRejectedEvenIfAServerRequestsThem() {
+        for (key in listOf("managed_dns", "always_on", "auto_resume", "protect_settings", "prevent_uninstall", "require_strong_lock")) {
+            assertThrows(IllegalArgumentException::class.java) { DevicePolicy.parse(JSONObject().put(key, true)) }
+        }
+        for (name in listOf("org.mozilla.firefox", "com.android.settings", "android", "org.bungee.app", "bad;name.app")) {
             assertThrows(IllegalArgumentException::class.java) { DevicePolicy.parse(JSONObject().put("blocked_apps", JSONArray(listOf(name)))) }
         }
     }

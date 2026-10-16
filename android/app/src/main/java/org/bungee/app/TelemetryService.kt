@@ -29,28 +29,33 @@ class TelemetryService : Service() {
     private var ringJob: Job? = null
     override fun onBind(intent: Intent?) = null
     override fun onCreate() {
-        super.onCreate(); identity = Identity(this)
+        super.onCreate()
+        if (LocalSafety.isStopped(this) || ManagementAgent.isOwner(this)) { stopSelf(); return }
+        identity = Identity(this)
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel("sharing", "Private household connection", NotificationManager.IMPORTANCE_LOW))
         nm.createNotificationChannel(NotificationChannel("recovery", "Phone recovery messages", NotificationManager.IMPORTANCE_HIGH).apply { lockscreenVisibility = Notification.VISIBILITY_PUBLIC })
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (LocalSafety.isStopped(this) || ManagementAgent.isOwner(this)) { stopSelf(); return START_NOT_STICKY }
+        if (intent == null && !LocalSafety.isRestartAllowed(this)) { stopSelf(); return START_NOT_STICKY }
         if (intent?.action == "STOP") {
-            if (ManagementAgent.usesAndroidVpn(this, identity)) { identity.allowLocate = false }
-            else { identity.autoResume = false; stopSelf(); return START_NOT_STICKY }
+            runCatching { LocalSafety.setStopped(this, true) }.onFailure { android.widget.Toast.makeText(this, "Stop could not be saved. Force-stop Bungee in Android Settings.", android.widget.Toast.LENGTH_LONG).show() }; stopSelf(); return START_NOT_STICKY
         }
         if (intent?.action == "STOP_RING") { stopRinging(); return START_NOT_STICKY }
         if (!identity.enrolled) { stopSelf(); return START_NOT_STICKY }
         val locationType = hasLocation(this) && identity.allowLocate && (intent?.action != "AUTO_START" || ManagementAgent.isOwner(this))
-        try { startForeground(1, notification(), if (locationType) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE) }
-        catch (_: SecurityException) { startForeground(1, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE) }
-        if (worker?.isActive == true) return if (identity.autoResume || identity.managedDns) START_STICKY else START_NOT_STICKY
+        val fallbackType = if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE
+        try { startForeground(1, notification(), if (locationType) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else fallbackType) }
+        catch (_: SecurityException) { startForeground(1, notification(), fallbackType) }
+        if (worker?.isActive == true) return if (LocalSafety.isRestartAllowed(this)) START_STICKY else START_NOT_STICKY
         worker = scope.launch {
             val api = HomeApi(identity)
             var nextTelemetry = 0L
             var nextSample = 0L
             var latest: Location? = null
             while (isActive) {
+                if (LocalSafety.isStopped(this@TelemetryService)) { stopSelf(); break }
                 try {
                     // Collect before trying the network; an outage must not stop the local trail.
                     if (System.currentTimeMillis() >= nextSample) {
@@ -62,7 +67,7 @@ class TelemetryService : Service() {
                     withContext(Dispatchers.IO) { HomeTunnel.connect(this@TelemetryService, identity, JSONObject(identity.bundle!!)) }
                     withContext(Dispatchers.IO) {
                         val desired = api.request("/v1/sync", JSONObject().put("report", ManagementAgent.report(this@TelemetryService, identity)))
-                        ManagementAgent.apply(this@TelemetryService, identity, desired.getLong("revision"), desired.getJSONObject("policy"), desired.getBoolean("dns_available"))
+                        ManagementAgent.apply(this@TelemetryService, identity, desired.getLong("revision"), desired.getJSONObject("policy"))
                         HomeTunnel.connect(this@TelemetryService, identity, JSONObject(identity.bundle!!))
                         api.request("/v1/sync", JSONObject().put("report", ManagementAgent.report(this@TelemetryService, identity)))
                     }
@@ -81,16 +86,16 @@ class TelemetryService : Service() {
                 delay(15000)
             }
         }
-        return if (identity.autoResume || identity.managedDns) START_STICKY else START_NOT_STICKY
+        return if (LocalSafety.isRestartAllowed(this)) START_STICKY else START_NOT_STICKY
     }
     private fun notification(): Notification {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val pause = PendingIntent.getService(this, 1, Intent(this, TelemetryService::class.java).setAction("STOP"), PendingIntent.FLAG_IMMUTABLE)
         val hush = PendingIntent.getService(this, 2, Intent(this, TelemetryService::class.java).setAction("STOP_RING"), PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, "sharing").setSmallIcon(R.drawable.ic_bungee).setContentTitle("Bungee sharing is active")
-            .setContentText(if (ManagementAgent.usesAndroidVpn(this, identity)) "Managed recovery connection · location can be paused" else "GPS fixes queue locally until home is reachable")
+            .setContentText("GPS fixes queue locally until home is reachable")
             .setContentIntent(open).setOngoing(true).setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-            .addAction(0, if (ManagementAgent.usesAndroidVpn(this, identity)) "Pause location" else "Pause sharing", pause).addAction(0, "Stop sound", hush).build()
+            .addAction(0, "Pause sharing", pause).addAction(0, "Stop sound", hush).build()
     }
     private fun lastLocation(): Location? {
         if (!identity.allowLocate || !hasLocation(this)) return null
@@ -134,6 +139,7 @@ class TelemetryService : Service() {
         status.value = status.value.copy(lastSent = System.currentTimeMillis())
     }
     private suspend fun execute(api: HomeApi, command: JSONObject) {
+        if (LocalSafety.isStopped(this) || ManagementAgent.isOwner(this)) return
         val id = command.getString("id")
         val old = identity.result(id)
         if (old != null) { withContext(Dispatchers.IO) { api.request("/v1/ack", old) }; return }
@@ -148,29 +154,19 @@ class TelemetryService : Service() {
             } else {
                 val result = when (kind) {
                     "locate" -> { val fix = freshLocation() ?: error("No location fix available"); upload(api, fix); "Fresh location uploaded" }
-                    "ring" -> { startRinging(); "Sound started for up to 30 seconds" }
+                    "ring" -> { LocalSafety.ifAllowed(this) { startRinging() }; "Sound started for up to 30 seconds" }
                     "stop_ringing" -> { stopRinging(); "Sound stopped" }
                     "message" -> {
                         val text = command.getJSONObject("payload").getString("message").take(240)
                         identity.recoveryMessage = text
                         val open = PendingIntent.getActivity(this, 3, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
-                        getSystemService(NotificationManager::class.java).notify(2, NotificationCompat.Builder(this, "recovery")
+                        LocalSafety.ifAllowed(this) { getSystemService(NotificationManager::class.java).notify(2, NotificationCompat.Builder(this, "recovery")
                             .setSmallIcon(R.drawable.ic_bungee).setContentTitle("A message from your household").setContentText(text)
-                            .setStyle(NotificationCompat.BigTextStyle().bigText(text)).setVisibility(NotificationCompat.VISIBILITY_PUBLIC).setContentIntent(open).setOngoing(true).build())
+                            .setStyle(NotificationCompat.BigTextStyle().bigText(text)).setVisibility(NotificationCompat.VISIBILITY_PUBLIC).setContentIntent(open).setOngoing(true).build()) }
                         "Recovery notification posted"
                     }
                     "clear_message" -> { identity.recoveryMessage = null; getSystemService(NotificationManager::class.java).cancel(2); "Message cleared" }
-                    "reboot" -> {
-                        check(ManagementAgent.isOwner(this) && identity.managementConsent && identity.allowReboot && getSystemService(KeyguardManager::class.java).isDeviceSecure)
-                        // Persist and acknowledge intent before asking Android. Never report an unobserved reboot as executed.
-                        receipt.put("status", "accepted").put("result", "Reboot accepted; completion unconfirmed. Recovery pauses until first unlock.")
-                        identity.saveResult(id, receipt)
-                        val accepted = withContext(Dispatchers.IO) { api.request("/v1/ack", receipt).getBoolean("accepted") }
-                        check(accepted)
-                        getSystemService(DevicePolicyManager::class.java).reboot(ComponentName(this, BungeeAdminReceiver::class.java))
-                        return
-                    }
-                    "lock" -> { getSystemService(DevicePolicyManager::class.java).lockNow(); "Device lock requested" }
+                    "lock" -> { LocalSafety.ifAllowed(this) { getSystemService(DevicePolicyManager::class.java).lockNow() }; "Device lock requested" }
                     else -> error("Unknown command")
                 }
                 receipt.put("status", "executed").put("result", result)
@@ -200,11 +196,11 @@ class TelemetryService : Service() {
         val status = MutableStateFlow(SharingStatus())
         fun hasLocation(context: Context) = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
         fun capabilities(context: Context, identity: Identity): List<String> = buildList {
+            if (LocalSafety.isStopped(context) || ManagementAgent.isOwner(context)) return@buildList
             if (identity.allowLocate && hasLocation(context)) add("locate")
             if (identity.allowCommands) {
                 addAll(listOf("ring", "stop_ringing"))
                 if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) addAll(listOf("message", "clear_message"))
-                if (identity.allowReboot && identity.managementConsent && ManagementAgent.isOwner(context) && context.getSystemService(KeyguardManager::class.java).isDeviceSecure) add("reboot")
                 if (context.getSystemService(DevicePolicyManager::class.java).isAdminActive(ComponentName(context, BungeeAdminReceiver::class.java))) add("lock")
             }
         }

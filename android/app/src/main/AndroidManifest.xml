@@ -1,4 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
@@ -17,16 +17,20 @@
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
         </activity>
+        <activity android:name=".LocalRecoveryActivity" android:label="Bungee recovery" android:exported="true">
+            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+        </activity>
+        <service android:name="com.wireguard.android.backend.GoBackend$VpnService" tools:node="remove"/>
         <service android:name=".TelemetryService" android:exported="false" android:foregroundServiceType="location|specialUse">
-            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-visible private VPN, DNS and recovery connection while location is paused"/>
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-visible private household recovery connection while location is paused"/>
         </service>
         <receiver android:name=".RecoveryBootReceiver" android:exported="false">
             <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/><action android:name="android.intent.action.MY_PACKAGE_REPLACED"/></intent-filter>
         </receiver>
-        <activity android:name=".ProvisioningModeActivity" android:exported="true" android:permission="android.permission.BIND_DEVICE_ADMIN">
+        <activity android:name=".ProvisioningModeActivity" android:enabled="false" android:exported="true" android:permission="android.permission.BIND_DEVICE_ADMIN">
             <intent-filter><action android:name="android.app.action.GET_PROVISIONING_MODE"/><category android:name="android.intent.category.DEFAULT"/></intent-filter>
         </activity>
-        <activity android:name=".ProvisioningComplianceActivity" android:exported="true" android:permission="android.permission.BIND_DEVICE_ADMIN">
+        <activity android:name=".ProvisioningComplianceActivity" android:enabled="false" android:exported="true" android:permission="android.permission.BIND_DEVICE_ADMIN">
             <intent-filter><action android:name="android.app.action.ADMIN_POLICY_COMPLIANCE"/><category android:name="android.intent.category.DEFAULT"/></intent-filter>
         </activity>
         <receiver android:name=".BungeeAdminReceiver" android:label="Bungee device management" android:description="@string/admin_description" android:permission="android.permission.BIND_DEVICE_ADMIN" android:exported="true">

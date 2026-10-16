@@ -695,17 +695,8 @@ test("live server: household enrollment, device signatures, commands, and revoca
     },
   );
   await t.test(
-    "secure reboot needs reauthentication and local capability; accepted is not executed",
+    "reboot is refused even for a legacy capable phone, and old queued reboots cannot be delivered",
     async () => {
-      assert.equal(
-        (
-          await admin(`/api/devices/${id}/commands`, "POST", {
-            kind: "reboot",
-            password,
-          })
-        ).status,
-        400,
-      );
       assert.equal(
         (
           await signed("/v1/telemetry", {
@@ -715,67 +706,26 @@ test("live server: household enrollment, device signatures, commands, and revoca
         ).status,
         200,
       );
-      assert.equal(
-        (await admin(`/api/devices/${id}/commands`, "POST", { kind: "reboot" }))
-          .status,
-        401,
-      );
-      assert.equal(
-        (
-          await admin(`/api/devices/${id}/commands`, "POST", {
-            kind: "reboot",
-            password: "wrong",
-          })
-        ).status,
-        401,
-      );
-      const queued = await (
-        await admin(`/api/devices/${id}/commands`, "POST", {
+      for (const supplied of [undefined, "wrong", password]) {
+        const response = await admin(`/api/devices/${id}/commands`, "POST", {
           kind: "reboot",
-          password,
-        })
-      ).json();
+          password: supplied,
+        });
+        assert.equal(response.status, 400);
+        assert.match((await response.json()).error, /reversibility/);
+      }
+      const commandId = randomUUID(),
+        time = Math.floor(Date.now() / 1000);
+      sql(
+        "INSERT INTO commands(id,device_id,kind,payload,created,expires,status) VALUES(?,?,?,?,?,?,?)",
+        [commandId, id, "reboot", "{}", time, time + 300, "pending"],
+      );
       const polled = await (await signed("/v1/commands", {})).json();
-      assert.ok(
-        polled.commands.some((c) => c.id === queued.id && c.kind === "reboot"),
-      );
+      assert.ok(!polled.commands.some((c) => c.id === commandId));
+      const saved = await (await admin("/api/devices")).json();
       assert.equal(
-        (
-          await signed("/v1/ack", {
-            id: queued.id,
-            status: "accepted",
-            result: "Reboot accepted; completion unconfirmed",
-          })
-        ).status,
-        200,
-      );
-      const list = await (await admin("/api/devices")).json();
-      assert.equal(
-        list.commands.find((c) => c.id === queued.id).status,
-        "accepted",
-      );
-      assert.ok(
-        !(await (await signed("/v1/commands", {})).json()).commands.some(
-          (c) => c.id === queued.id,
-        ),
-      );
-      assert.equal(
-        (
-          await (
-            await signed("/v1/ack", {
-              id: queued.id,
-              status: "failed",
-              result: "Android rejected reboot",
-            })
-          ).json()
-        ).accepted,
-        true,
-      );
-      assert.equal(
-        (await (await admin("/api/devices")).json()).commands.find(
-          (c) => c.id === queued.id,
-        ).status,
-        "failed",
+        saved.commands.find((c) => c.id === commandId).status,
+        "rejected",
       );
     },
   );

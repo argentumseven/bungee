@@ -173,7 +173,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     const body = JSON.stringify({
       battery: 72,
       charging: false,
-      device_owner: true,
+      device_owner: false,
       capabilities: ["reboot", "locate", "ring", "message", "lock"],
       locations: Array.from({ length: 10 }, (_, i) => ({
         latitude: 37.78 + i * 0.0003,
@@ -212,8 +212,8 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     assert.equal(uploaded.status, 200);
     await phoneRequest("/v1/sync", {
       report: {
-        owner: true,
-        consent: true,
+        owner: false,
+        consent: false,
         recovery_consent: true,
         revision: 0,
         android_version: "16",
@@ -298,7 +298,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     fullPage: true,
   });
   await t.test(
-    "device care saves explicit lost-mode intent, selected-app policy and shows private DNS summaries",
+    "device care exposes reversible recovery and no persistent management or reboot controls",
     async () => {
       await page
         .getByRole("button", { name: "Device care", exact: true })
@@ -315,13 +315,11 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
         .fill(
           "This test phone is lost. Contact the household at +1 202 555 0142.",
         );
-      await page
-        .getByText("Optional device-owner controls", { exact: true })
-        .click();
-      await page.getByLabel("Use home DNS", { exact: false }).check();
-      await page
-        .getByLabel("Suspend selected apps")
-        .fill("org.mozilla.firefox");
+      assert.equal(
+        await page.getByLabel("Use home DNS", { exact: false }).count(),
+        0,
+      );
+      assert.equal(await page.getByLabel("Suspend selected apps").count(), 0);
       await page.getByRole("button", { name: "Save device care" }).click();
       await page
         .getByRole("status")
@@ -329,24 +327,21 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
         .waitFor();
       const desired = await phoneRequest("/v1/sync", {
         report: {
-          owner: true,
-          consent: true,
+          owner: false,
+          consent: false,
           recovery_consent: true,
           revision: 0,
         },
       });
-      assert.equal(desired.policy.managed_dns, true);
-      assert.deepEqual(desired.policy.blocked_apps, ["org.mozilla.firefox"]);
+      assert.equal(desired.policy.managed_dns, false);
+      assert.deepEqual(desired.policy.blocked_apps, []);
       await phoneRequest("/v1/sync", {
         report: {
-          owner: true,
-          consent: true,
+          owner: false,
+          consent: false,
           recovery_consent: true,
           revision: desired.revision,
-          dns_active: true,
-          always_on: true,
           lost_mode_active: true,
-          blocked_apps: ["org.mozilla.firefox"],
           android_version: "16",
           security_patch: "2026-10-05",
           secure_lock: true,
@@ -358,14 +353,6 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       await page
         .getByText("Requested state reported", { exact: true })
         .waitFor();
-      await page.evaluate(() => scrollTo(0, 0));
-      await page.screenshot({
-        path: "docs/screenshots/device-owner-controls.png",
-        fullPage: true,
-      });
-      await page
-        .getByText("Optional device-owner controls", { exact: true })
-        .click();
       await page.evaluate(() => scrollTo(0, 0));
       await page.screenshot({
         path: "docs/screenshots/device-care.png",
@@ -384,28 +371,13 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
         fullPage: true,
       });
       await page.setViewportSize({ width: 1440, height: 1050 });
-      await page
-        .getByText("Optional device-owner controls", { exact: true })
-        .click();
-      await page
-        .getByLabel("Suspend selected apps")
-        .fill("com.android.settings");
-      await page.getByRole("button", { name: "Save device care" }).click();
-      await page.getByRole("alert").waitFor();
       await page.getByRole("button", { name: "Overview", exact: true }).click();
-      await page
-        .getByRole("button", { name: "Secure reboot", exact: true })
-        .click();
-      await page
-        .getByRole("dialog")
-        .getByRole("heading", { name: /Secure reboot/ })
-        .waitFor();
-      await page.evaluate(() => scrollTo(0, 0));
-      await page.screenshot({
-        path: "docs/screenshots/secure-reboot.png",
-        fullPage: true,
-      });
-      await page.getByRole("button", { name: "Cancel", exact: true }).click();
+      assert.equal(
+        await page
+          .getByRole("button", { name: "Secure reboot", exact: true })
+          .count(),
+        0,
+      );
     },
   );
   await t.test("activity and settings show real state", async () => {

@@ -11,7 +11,7 @@ import org.json.JSONObject
 /** OS-protected credential callbacks. No biometric assumptions or credential contents are read. */
 class BungeeAdminReceiver : DeviceAdminReceiver() {
     override fun onPasswordFailed(context: Context, intent: Intent, user: UserHandle) {
-        if (user != Process.myUserHandle()) return
+        if (user != Process.myUserHandle() || LocalSafety.isStopped(context)) return
         runCatching {
             val identity = Identity(context)
             if (!identity.enrolled || !identity.allowCommands) return
@@ -20,7 +20,7 @@ class BungeeAdminReceiver : DeviceAdminReceiver() {
         }
     }
     override fun onPasswordSucceeded(context: Context, intent: Intent, user: UserHandle) {
-        if (user != Process.myUserHandle()) return
+        if (user != Process.myUserHandle() || LocalSafety.isStopped(context)) return
         runCatching { val identity = Identity(context); val signals = identity.state("unlock"); signals.put("failed", 0); identity.saveState("unlock", signals) }
     }
 }

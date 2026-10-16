@@ -47,6 +47,8 @@ type Saved = {
   report: Report | null;
   dns_configured: boolean;
   dns_upstream: string | null;
+  persistent_controls_enabled: false;
+  legacy_policy_present: boolean;
 };
 type DnsRow = {
   domain: string;
@@ -75,8 +77,7 @@ export function DeviceCare({
 }) {
   const [saved, setSaved] = useState<Saved | null>(null),
     [draft, setDraft] = useState<Policy | null>(null);
-  const [revision, setRevision] = useState(0),
-    [packages, setPackages] = useState("");
+  const [revision, setRevision] = useState(0);
   const [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false);
@@ -92,7 +93,6 @@ export function DeviceCare({
           if (initial) {
             setDraft(data.policy);
             setRevision(data.revision);
-            setPackages(data.policy.blocked_apps.join("\n"));
           }
         })
         .catch((e) => {
@@ -119,18 +119,9 @@ export function DeviceCare({
       });
     return () => abort.abort();
   }, [device.id, days, dnsReload]);
-  const report = saved?.report,
-    managed = !!(report?.owner && report.consent);
+  const report = saved?.report;
   const set = (key: keyof Policy, value: boolean) =>
-    setDraft((old) =>
-      old
-        ? {
-            ...old,
-            [key]: value,
-            ...(key === "managed_dns" && value ? { always_on: true } : {}),
-          }
-        : old,
-    );
+    setDraft((old) => (old ? { ...old, [key]: value } : old));
   async function save(e: React.FormEvent) {
     e.preventDefault();
     if (!draft) return;
@@ -138,9 +129,16 @@ export function DeviceCare({
     setError("");
     setNotice("");
     try {
-      const blocked = packages.split(/\s+/).filter(Boolean);
-      if (blocked.length > 20) throw Error("Choose at most 20 apps.");
-      const policy = { ...draft, blocked_apps: blocked };
+      const policy = {
+        ...draft,
+        managed_dns: false,
+        always_on: false,
+        auto_resume: false,
+        protect_settings: false,
+        prevent_uninstall: false,
+        require_strong_lock: false,
+        blocked_apps: [],
+      };
       const result = await api<{ revision: number; policy: Policy }>(
         `/devices/${device.id}/policy`,
         {
@@ -163,7 +161,7 @@ export function DeviceCare({
   async function eraseDns() {
     if (
       !window.confirm(
-        `Erase saved DNS summaries for ${device.name}? New activity can appear while managed DNS is enabled.`,
+        `Erase saved DNS summaries for ${device.name} from this server?`,
       )
     )
       return;
@@ -199,7 +197,7 @@ export function DeviceCare({
                   Recovery & management
                 </h2>
                 <span className="map-badge">
-                  {report?.owner ? "DEVICE OWNER" : "PERSONAL"}
+                  {report?.owner ? "LEGACY OWNER" : "PERSONAL"}
                 </span>
               </div>
               <Toggle
@@ -226,84 +224,25 @@ export function DeviceCare({
                 Android permissions still apply. Sirens remain short-lived
                 commands.
               </p>
-              <details className="managed-options">
-                <summary>
-                  <ShieldCheck size={16} />
-                  Optional device-owner controls
-                </summary>
-                {!managed && (
-                  <p className="care-muted">
-                    Provision this phone as Android device owner and approve
-                    “managed controls” inside Bungee first. Personal phones keep
-                    their existing permissions.
-                  </p>
-                )}
-                <Toggle
-                  label="Use home DNS"
-                  checked={draft.managed_dns}
-                  disabled={!managed || !saved.dns_configured || busy}
-                  onChange={(v) => set("managed_dns", v)}
-                  note="Send Android system DNS to Bungee through WireGuard. Enabling this also requests always-on VPN."
-                />
-                {!saved.dns_configured && (
-                  <p className="care-muted">
-                    The server operator must configure a private home DNS
-                    upstream before this can be enabled.
-                  </p>
-                )}
-                <Toggle
-                  label="Always-on connection"
-                  checked={draft.always_on}
-                  disabled={!managed || draft.managed_dns || busy}
-                  onChange={(v) => set("always_on", v)}
-                  note="Reconnect Bungee automatically. VPN lockdown stays off so ordinary traffic can remain direct."
-                />
-                <Toggle
-                  label="Resume recovery after restart"
-                  checked={draft.auto_resume}
-                  disabled={!managed || busy}
-                  onChange={(v) => set("auto_resume", v)}
-                  note="Resume after first unlock, subject to Android background and location rules."
-                />
-                <Toggle
-                  label="Protect recovery settings"
-                  checked={draft.protect_settings}
-                  disabled={!managed || busy}
-                  onChange={(v) => set("protect_settings", v)}
-                  note="Restrict VPN changes, adding users, safe boot and factory reset through Settings. Hardware recovery and power-off remain outside app control."
-                />
-                <Toggle
-                  label="Prevent ordinary uninstall"
-                  checked={draft.prevent_uninstall}
-                  disabled={!managed || busy}
-                  onChange={(v) => set("prevent_uninstall", v)}
-                  note="Request Android uninstall protection. Device-owner status already has its own removal rules."
-                />
-                <Toggle
-                  label="Require a strong screen lock"
-                  checked={draft.require_strong_lock}
-                  disabled={!managed || busy}
-                  onChange={(v) => set("require_strong_lock", v)}
-                  note="Ask Android to enforce high password complexity; Bungee never reads or sets your PIN."
-                />
-                <label htmlFor="suspended-apps">Suspend selected apps</label>
-                <textarea
-                  id="suspended-apps"
-                  value={packages}
-                  disabled={!managed || busy}
-                  onChange={(e) => setPackages(e.target.value)}
-                  placeholder="org.mozilla.firefox\nOne package name per line"
-                />
-                <p className="fine">
-                  Up to 20 user-installed apps. Suspension stops the entire app,
-                  including its private DNS traffic. Core Android, system apps
-                  and Bungee are protected. Allowed apps can still use their own
-                  encrypted or hard-coded resolvers.
-                </p>
-              </details>
+              <div className="notice">
+                Device-owner enrollment and persistent controls are disabled.
+                This build cannot enforce DNS/always-on, suspend apps, prevent
+                uninstall, change lock requirements or block Android recovery
+                settings. Use the phone's separate “Bungee recovery” entry to
+                stop controls offline.
+              </div>
+              {(report?.owner || saved.legacy_policy_present) && (
+                <div className="error" role="alert">
+                  Legacy device ownership or policy detected. Do not uninstall,
+                  clear app data or change APK signing keys. Local cleanup can
+                  release known policies but cannot guarantee removing Android
+                  ownership without a reset.
+                </div>
+              )}
+
               <button
                 className="primary"
-                disabled={busy || (!report?.recovery_consent && !managed)}
+                disabled={busy || !report?.recovery_consent}
               >
                 Save device care
               </button>
@@ -368,7 +307,7 @@ export function DeviceCare({
                       <dd>
                         {report.dns_active
                           ? "Configured on phone"
-                          : "Off / awaiting configuration"}
+                          : "Disabled for new deployments"}
                       </dd>
                     </div>
                     <div>
@@ -409,11 +348,12 @@ export function DeviceCare({
                 they do not count every biometric attempt.
               </p>
               <div className="notice">
-                Managed DNS covers Android's system resolver in this profile.
-                App-supplied DoH/DoT, hard-coded DNS, other profiles and periods
-                without the VPN are coverage limits. Suspend selected apps when
-                you need to stop their traffic. This view is not a
-                browsing-history or app-attribution claim.
+                Managed DNS is disabled for new policies. Older previews used
+                Android's system resolver in the managed profile. App-supplied
+                DoH/DoT, hard-coded DNS, other profiles and periods without the
+                VPN are coverage limits. App suspension is unavailable in this
+                build. This view is not a browsing-history or
+                app-attribution claim.
               </div>
             </section>
           </div>
@@ -504,18 +444,17 @@ export function DeviceCare({
                   </div>
                 ) : (
                   <p className="care-muted">
-                    No forwarded DNS activity in this range. Enable home DNS on
-                    an approved managed phone to begin.
+                    No saved DNS summaries in this range. Managed DNS is
+                    disabled for new deployments.
                   </p>
                 )}
                 <p className="fine">
                   Top 100 groups. Subdomains are folded using a bundled
                   public-suffix list. A/AAAA/HTTPS and retries in the same
                   10-second window count as one activity; known system probes
-                  are combined. Only five-minute rollups are stored, with no
-                  raw subdomains, answer addresses, payloads or remote lookups
-                  for classification. Time ranges include their boundary
-                  rollups.
+                  are combined. Only five-minute rollups are stored, with no raw
+                  subdomains, answer addresses, payloads or remote lookups for
+                  classification. Time ranges include their boundary rollups.
                 </p>
                 <button className="text-button danger-text" onClick={eraseDns}>
                   <Trash2 size={14} />

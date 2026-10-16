@@ -310,44 +310,63 @@ test("managed DNS: authenticated policy, UDP/TCP forwarding, summaries and revoc
     },
   );
   await t.test(
-    "a managed policy needs local owner consent and protects core packages",
+    "persistent controls are refused regardless of owner consent; old policy is projected to reversible recovery",
     async () => {
+      assert.equal((await signed(id, { report })).status, 200);
+      for (const field of [
+        "managed_dns",
+        "always_on",
+        "auto_resume",
+        "protect_settings",
+        "prevent_uninstall",
+        "require_strong_lock",
+      ]) {
+        const unsafe = {
+          [field]: true,
+          ...(field === "managed_dns" ? { always_on: true } : {}),
+        };
+        const response = await admin(policyPath, "POST", {
+          expected_revision: 0,
+          policy: unsafe,
+        });
+        assert.equal(response.status, 400);
+        assert.match((await response.json()).error, /reversibility/);
+      }
       assert.equal(
-        (await signed(id, { report: { ...report, consent: false } })).status,
-        200,
-      );
-      assert.equal(
-        (await admin(policyPath, "POST", { expected_revision: 0, policy }))
-          .status,
+        (
+          await admin(policyPath, "POST", {
+            expected_revision: 0,
+            policy: { blocked_apps: ["org.mozilla.firefox"] },
+          })
+        ).status,
         400,
       );
-      assert.equal((await signed(id, { report })).status, 200);
-      for (const bad of [
-        { ...policy, blocked_apps: ["com.android.settings"] },
-        { ...policy, blocked_apps: ["org.bungee.app"] },
-        { ...policy, always_on: false },
-        { ...policy, recovery_message: "" },
-      ])
-        assert.equal(
-          (
-            await admin(policyPath, "POST", {
-              expected_revision: 0,
-              policy: bad,
-            })
-          ).status,
-          400,
-        );
       const saved = await admin(policyPath, "POST", {
         expected_revision: 0,
-        policy,
+        policy: { lost_mode: true, recovery_message: "Call the household" },
       });
       assert.equal(saved.status, 200);
-      assert.equal((await saved.json()).revision, 1);
       assert.equal(
-        (await admin(policyPath, "POST", { expected_revision: 0, policy }))
+        (await admin(policyPath, "POST", { expected_revision: 0, policy: {} }))
           .status,
         409,
       );
+      // Explicit legacy fixture, not an enrollment path: keep testing old resolver isolation/erasure.
+      execFileSync("python3", [
+        "-c",
+        "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('UPDATE device_policies SET policy=? WHERE device_id=?',(sys.argv[3],sys.argv[2])); c.commit()",
+        join(dir, "bungee.sqlite3"),
+        id,
+        JSON.stringify(policy),
+      ]);
+      const desired = await (await signed(id, { report })).json();
+      assert.equal(desired.policy.managed_dns, false);
+      assert.equal(desired.policy.always_on, false);
+      assert.deepEqual(desired.policy.blocked_apps, []);
+      assert.equal(desired.policy.lost_mode, true);
+      const shown = await (await admin(policyPath)).json();
+      assert.equal(shown.legacy_policy_present, true);
+      assert.equal(shown.persistent_controls_enabled, false);
     },
   );
   await t.test(

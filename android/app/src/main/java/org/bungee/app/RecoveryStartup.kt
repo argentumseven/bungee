@@ -5,22 +5,19 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
-import com.wireguard.android.backend.GoBackend
 
 class BungeeApplication : Application() {
     override fun onCreate() {
         super.onCreate()
-        GoBackend.setAlwaysOnCallback { RecoveryStartup.startIfApproved(this) }
+        // No device-owner or always-on activation. Local recovery initializes no pairing keys.
     }
 }
 object RecoveryStartup {
     fun startIfApproved(context: Context) {
         runCatching {
+            if (!LocalSafety.isRestartAllowed(context) || ManagementAgent.isOwner(context)) return
             val identity = Identity(context)
-            val policy = identity.state("management").optJSONObject("policy")
-            val managed = ManagementAgent.isOwner(context) && identity.managementConsent &&
-                (identity.managedDns || policy?.optBoolean("always_on") == true)
-            if (identity.enrolled && (identity.autoResume || managed)) {
+            if (identity.enrolled) {
                 ContextCompat.startForegroundService(context, Intent(context, TelemetryService::class.java).setAction("AUTO_START"))
             }
         }

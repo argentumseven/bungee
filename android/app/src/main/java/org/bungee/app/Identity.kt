@@ -62,21 +62,6 @@ class Identity(context: Context) {
     var allowCommands: Boolean
         get() = prefs.getBoolean("allow_commands", true)
         set(value) { prefs.edit().putBoolean("allow_commands", value).commit() }
-    var allowReboot: Boolean
-        get() = prefs.getBoolean("allow_reboot", false)
-        set(value) { prefs.edit().putBoolean("allow_reboot", value).commit() }
-    var managementConsent: Boolean
-        get() = prefs.getBoolean("management_consent", false)
-        set(value) { prefs.edit().putBoolean("management_consent", value).commit() }
-    var resumeConsent: Boolean
-        get() = prefs.getBoolean("resume_consent", false)
-        set(value) { prefs.edit().putBoolean("resume_consent", value).commit() }
-    var autoResume: Boolean
-        get() = prefs.getBoolean("auto_resume", false)
-        set(value) { prefs.edit().putBoolean("auto_resume", value).commit() }
-    var managedDns: Boolean
-        get() = prefs.getBoolean("managed_dns", false)
-        set(value) { prefs.edit().putBoolean("managed_dns", value).commit() }
     internal fun state(name: String): JSONObject = secret("state_$name")?.let(::JSONObject) ?: JSONObject()
     internal fun saveState(name: String, value: JSONObject) = putSecret("state_$name", value.toString())
     var recoveryMessage: String?
@@ -124,5 +109,18 @@ class Identity(context: Context) {
         cipher.init(Cipher.DECRYPT_MODE, keys.getKey("bungee-storage", null) as SecretKey, GCMParameterSpec(128, data.copyOfRange(0, 12)))
         cipher.doFinal(data.copyOfRange(12, data.size)).toString(Charsets.UTF_8)
     }
-    companion object { fun encode(bytes: ByteArray): String = Base64.encodeToString(bytes, Base64.NO_WRAP) }
+    companion object {
+        fun encode(bytes: ByteArray): String = Base64.encodeToString(bytes, Base64.NO_WRAP)
+        /** Read legacy recovery records without generating/replacing a key or changing identity state. */
+        fun readExistingState(context: Context, name: String): JSONObject {
+            val value = context.getSharedPreferences("identity", Context.MODE_PRIVATE).getString("state_$name", null) ?: return JSONObject()
+            val keys = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            val key = keys.getKey("bungee-storage", null) as? SecretKey ?: error("Existing storage key unavailable")
+            val bytes = Base64.decode(value, Base64.NO_WRAP)
+            require(bytes.size >= 28)
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, bytes.copyOfRange(0, 12)))
+            return JSONObject(cipher.doFinal(bytes.copyOfRange(12, bytes.size)).toString(Charsets.UTF_8))
+        }
+    }
 }

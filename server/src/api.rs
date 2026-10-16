@@ -105,7 +105,7 @@ pub async fn devices(State(app): State<App>, headers: HeaderMap) -> ApiResult<Js
         "id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"address":r.get::<_,String>(2)?,
         "created":r.get::<_,i64>(3)?,"last_seen":r.get::<_,Option<i64>>(4)?,"revoked":r.get::<_,bool>(5)?,
         "telemetry":telemetry,
-        "capabilities":serde_json::from_str::<Value>(&r.get::<_,String>(7)?).unwrap_or(json!([])),
+        "capabilities":serde_json::from_str::<Vec<String>>(&r.get::<_,String>(7)?).unwrap_or_default().into_iter().filter(|kind|kind!="reboot").collect::<Vec<_>>(),
         "enrolled":r.get::<_,bool>(8)?,
         "preshared_key":r.get::<_,bool>(10)?,
         "management":r.get::<_,Option<String>>(11)?.and_then(|s|serde_json::from_str::<Value>(&s).ok()),
@@ -579,7 +579,8 @@ fn erase_history(
 pub struct Command {
     kind: String,
     message: Option<String>,
-    password: Option<String>,
+    #[serde(rename = "password")]
+    _password: Option<String>,
 }
 pub async fn command(
     State(app): State<App>,
@@ -592,18 +593,7 @@ pub async fn command(
         return Err(bad("Unsupported command"));
     }
     if input.kind == "reboot" {
-        rate_limit(&app, "reboot-reauth".into(), 5)?;
-        let password = input.password.unwrap_or_default();
-        if password.len() > 1024 {
-            return Err(denied());
-        }
-        let expected = app.admin_hash.clone();
-        if !tokio::task::spawn_blocking(move || password_matches(&password, &expected))
-            .await
-            .unwrap_or(false)
-        {
-            return Err(denied());
-        }
+        return Err(bad("Remote reboot is disabled by the reversibility policy"));
     }
     let text = input.message.unwrap_or_default();
     if input.kind == "message"
@@ -653,6 +643,7 @@ pub async fn poll(
         return Err(bad("Expected empty object"));
     }
     let db = app.db.lock().unwrap();
+    db.execute("UPDATE commands SET status='rejected',result='Disabled by reversibility policy' WHERE device_id=? AND kind='reboot' AND status IN ('pending','delivered')", [&id])?;
     let mut q=db.prepare("SELECT id,kind,payload,expires FROM commands WHERE device_id=? AND status IN ('pending','delivered') AND expires>? ORDER BY created LIMIT 10")?;
     let list=q.query_map(params![id,now()],|r|Ok(json!({"id":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"payload":serde_json::from_str::<Value>(&r.get::<_,String>(2)?).unwrap_or(json!({})),"expires":r.get::<_,i64>(3)?})))?.collect::<Result<Vec<_>,_>>()?;
     db.execute("UPDATE commands SET status='delivered' WHERE device_id=? AND status='pending' AND expires>?",params![id,now()])?;

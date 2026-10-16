@@ -18,4 +18,4 @@ source scripts/dev-env.sh
 apk=android/app/build/outputs/apk/release/app-release.apk
 "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$apk"
 sha256sum "$apk"
-printf 'Keep the same signing key for every managed-device update: %s\n' "$apk"
+printf 'Keep the same signing key for in-place updates (device-owner enrollment is unsupported): %s\n' "$apk"

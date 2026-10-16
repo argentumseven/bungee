@@ -2,8 +2,6 @@ package org.bungee.app
 
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 import java.security.MessageDigest
 import java.util.UUID
 import org.bungee.transport.Transport
@@ -35,35 +33,11 @@ class HomeApi(private val identity: Identity) {
             headers.put("X-Bungee-Nonce", nonce)
             headers.put("X-Bungee-Signature", signature)
         }
-        if (HomeTunnel.appContained) {
-            val response = JSONObject(Transport.exchange(path, body.toString(), headers.toString()))
-            val status = response.getInt("status")
-            val result = JSONObject(response.getString("body"))
-            if (status !in 200..299) error(result.optString("error", "Server rejected request ($status)"))
-            return result
-        }
-        val connection = URL("http://10.77.0.1:8081$path").openConnection() as HttpURLConnection
-        connection.requestMethod = "POST"; connection.connectTimeout = 10000; connection.readTimeout = 10000
-        connection.instanceFollowRedirects = false; connection.doOutput = true
-        connection.setRequestProperty("Content-Type", "application/json")
-        headers.keys().forEach { connection.setRequestProperty(it, headers.getString(it)) }
-        try {
-            connection.outputStream.use { it.write(bytes) }
-            val status = connection.responseCode
-            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            val text = stream?.use { source ->
-                val result = java.io.ByteArrayOutputStream()
-                val buffer = ByteArray(4096)
-                while (true) {
-                    val count = source.read(buffer)
-                    if (count < 0) break
-                    check(result.size() + count <= 65536) { "Server response is too large" }
-                    result.write(buffer, 0, count)
-                }
-                result.toString("UTF-8")
-            } ?: "{}"
-            if (status !in 200..299) throw IllegalStateException(JSONObject(text).optString("error", "Server rejected request ($status)"))
-            return JSONObject(text)
-        } finally { connection.disconnect() }
+        check(HomeTunnel.appContained) { "The app-contained connection is unavailable" }
+        val response = JSONObject(Transport.exchange(path, body.toString(), headers.toString()))
+        val status = response.getInt("status")
+        val result = JSONObject(response.getString("body"))
+        if (status !in 200..299) error(result.optString("error", "Server rejected request ($status)"))
+        return result
     }
 }

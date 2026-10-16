@@ -13,9 +13,11 @@ data class DevicePolicy(
         fun safePackage(name: String) = name.length <= 160 && name.contains('.') && name != "org.bungee.app" && name != "android" && !name.startsWith("com.android.") && name.split('.').all { it.matches(Regex("[A-Za-z][A-Za-z0-9_]*")) }
         fun parse(json: JSONObject): DevicePolicy {
             require(!json.optBoolean("managed_dns") || json.optBoolean("always_on")) { "Managed DNS requires always-on VPN" }
+            require(listOf("managed_dns", "always_on", "auto_resume", "protect_settings", "prevent_uninstall", "require_strong_lock").none { json.optBoolean(it) }) { "Persistent device-owner controls are disabled by the reversibility policy" }
             val packages = json.optJSONArray("blocked_apps")
             require((packages?.length() ?: 0) <= 20) { "Too many managed packages" }
             val blocked = (0 until (packages?.length() ?: 0)).map { packages!!.getString(it) }.toSet()
+            require(blocked.isEmpty()) { "App suspension is disabled by the reversibility policy" }
             require(blocked.all(::safePackage)) { "Core Android and Bungee packages cannot be suspended" }
             val message = json.optString("recovery_message", "")
             require(message.codePointCount(0, message.length) <= 240 && message.none { it.isISOControl() && it != '\n' }) { "Invalid recovery message" }

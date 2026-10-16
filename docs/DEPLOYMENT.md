@@ -1,12 +1,14 @@
 # Deployment and enrollment
 
+Alpha.6 supports personal-app installation only. Device-owner enrollment/operation and persistent controls are disabled by the [safety contract](SAFETY.md). Do not use ADB or enterprise provisioning to assign ownership.
+
 ## Host and network requirements
 
 Use Linux with kernel WireGuard, Docker Compose v2, working IPv4/IPv6 iptables/conntrack support inside a NET_ADMIN container, encrypted persistent storage, and encrypted backups. A firewall setup error fails closed. The cloud development machine builds the images but cannot create a kernel WireGuard interface and has no /dev/net/tun; real phone/tunnel verification is still required.
 
 Choose an unused UDP port yourself. **There is no default, and 51820 is rejected by the gateway, server endpoint validation, and Android client.** A different port does not replace cryptographic protection. Match BUNGEE_WG_PORT to your host's UDP port and BUNGEE_WG_ENDPOINT to the externally reachable numeric IP:port (IPv6 uses [IP]:port). Forward that chosen UDP port on your router when using public IPv4. DNS endpoint resolution is intentionally disabled; update the endpoint and re-provision if your home address changes. An authenticated endpoint-update flow remains future work.
 
-Wireshark analyzes packets; WireGuard creates an encrypted tunnel. Neither gives a CGNAT home connection a reachable public listener. A reachable public IPv4 address, correctly firewalled IPv6 path, or an end-to-end-encrypted relay is still required for away-from-home use. No relay mode is implemented. Personal app-contained mode can coexist with a mesh VPN, but the endpoint still must be reachable numerically through that network; it is not an automatic relay or discovery integration. Managed system DNS / Android always-on still consumes one VPN slot per profile.
+Wireshark analyzes packets; WireGuard creates an encrypted tunnel. Neither gives a CGNAT home connection a reachable public listener. A reachable public IPv4 address, correctly firewalled IPv6 path, or an end-to-end-encrypted relay is still required for away-from-home use. No relay mode is implemented. Personal app-contained mode can coexist with a mesh VPN, but the endpoint still must be reachable numerically through that network; it is not an automatic relay or discovery integration. Managed system DNS / Android always-on is disabled in the current app.
 
 ## Private dashboard deployment
 
@@ -39,9 +41,9 @@ Back up application state coherently while Rust is stopped, or use SQLite's onli
 4. The phone verifies its public-key match, mandatory PSK, exact /32 route and numeric custom-port endpoint, starts its app-contained userspace transport without taking the Android VPN slot, and establishes WireGuard with the PSK.
 5. Inside the tunnel it redeems the invitation and proves possession of the signing key. The server verifies the tunnel source and binds that key. Subsequent requests are signed, timestamped and nonce-protected. Invitation expiry is only for first enrollment; the paired device does not expire while offline.
 
-Default personal mode sends only Bungee's fixed home API through an app-contained WireGuard/TCP stack, with no OS VPN routes. Managed DNS / Android always-on mode instead uses VpnService and the home /32; ordinary traffic remains direct and lockdown must stay off. See [mode selection, private DNS and device ownership](MANAGEMENT.md).
+Default personal mode sends only Bungee's fixed home API through an app-contained WireGuard/TCP stack, with no OS VPN routes. The current app exposes no Android VPN service and installs no system DNS/always-on policy. Older managed modes are unsupported. See [mode selection, private DNS and device ownership](MANAGEMENT.md).
 
-**Upgrading from alpha.1/alpha.2:** existing checkpoints migrate into history; overwritten historical positions cannot be recovered. Legacy peers have no PSK and are blocked after this server upgrade. Their saved data remains visible; dashboard settings flag that re-pairing is required. Install the new app and reset its old identity, then generate a new invitation. CI debug signatures can require uninstalling the old APK first. Export any needed legacy data before revoking that old server identity: revocation intentionally erases it. For persistent management, build with your own stable signing identity before provisioning; ephemeral CI debug keys cannot provide update continuity.
+**Upgrading from alpha.1/alpha.2:** existing checkpoints migrate into history; overwritten historical positions cannot be recovered. Legacy peers have no PSK and are blocked after this server upgrade. Their saved data remains visible; dashboard settings flag that re-pairing is required. For a personal installation, install the new app and reset only its Bungee identity, then generate a new invitation. CI debug signatures can require uninstalling the old personal APK first. If any old device ownership exists, do not uninstall or discard identity; follow the legacy recovery guide instead. Export any needed legacy data before revoking that old server identity: revocation intentionally erases it. For in-place personal-app updates, use a stable signing identity. Device-owner provisioning is unsupported; do not attempt it with any APK.
 
 WireGuard PSK protection and hybrid TLS key exchange do not make all signatures post-quantum. Read [the cryptographic limits](SECURITY.md#post-quantum-protection-and-limits) before making security claims.
 
@@ -61,7 +63,7 @@ The server reads the password file at startup and keeps an Argon2id verifier in 
 
 ## Optional management and home DNS
 
-See [MANAGEMENT.md](MANAGEMENT.md) for stable APK signing, dedicated-device enrollment, local consent, internal home DNS upstream configuration, DNS scope/rollups, selected-app suspension, lost mode, secure reboot, policy release and Android ownership decommissioning. Do not provision a persistent device owner using ephemeral CI debug signing.
+See [MANAGEMENT.md](MANAGEMENT.md) for supported personal operation, local recovery, stable signing and legacy ownership limitations. Leave the legacy DNS upstream unset for new deployments; new managed-DNS policies are refused.
 
 ## Proxy-aware image builds in Codex cloud
 

@@ -105,13 +105,7 @@ function App() {
     [selected, setSelected] = useState(""),
     [page, setPage] = useState("Overview");
   const [modal, setModal] = useState<
-      | "enroll"
-      | "message"
-      | "revoke"
-      | "clear_location"
-      | "help"
-      | "reboot"
-      | null
+      "enroll" | "message" | "revoke" | "clear_location" | "help" | null
     >(null),
     [toast, setToast] = useState("");
   const [name, setName] = useState(""),
@@ -120,8 +114,6 @@ function App() {
     [qr, setQr] = useState(""),
     [message, setMessage] = useState(""),
     [lastRefresh, setLastRefresh] = useState<number | null>(null);
-  const [rebootPassword, setRebootPassword] = useState("");
-  const [rebootTarget, setRebootTarget] = useState<Device | null>(null);
   const [clearTarget, setClearTarget] = useState<Device | null>(null);
   const active = devices.filter((d) => !d.revoked),
     device = active.find((d) => d.id === selected) || active[0];
@@ -153,8 +145,6 @@ function App() {
       setModal(null);
       setClearTarget(null);
       setBundle("");
-      setRebootPassword("");
-      setRebootTarget(null);
     };
     window.addEventListener("bungee:session-expired", expire);
     return () => window.removeEventListener("bungee:session-expired", expire);
@@ -205,22 +195,16 @@ function App() {
     if (!device) return;
     setBusy(true);
     try {
-      await api(
-        `/devices/${kind === "reboot" ? rebootTarget!.id : device.id}/commands`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            kind,
-            message: text,
-            ...(kind === "reboot" ? { password: rebootPassword } : {}),
-          }),
-        },
-      );
+      await api(`/devices/${device.id}/commands`, {
+        method: "POST",
+        body: JSON.stringify({
+          kind,
+          message: text,
+        }),
+      });
       setToast("Command queued. The phone will acknowledge it when connected.");
       setModal(null);
       setMessage("");
-      setRebootPassword("");
-      setRebootTarget(null);
       await load();
     } catch (e) {
       setError((e as Error).message);
@@ -467,7 +451,7 @@ function App() {
                   : page === "Devices"
                     ? "Manage the phones that belong to your household."
                     : page === "Device care"
-                      ? "Recovery, optional management and a quiet view of home DNS."
+                      ? "Recovery, local safety and any saved DNS summaries."
                       : page === "History"
                         ? "Look back through GPS fixes and device check-ins. Stored only here."
                         : page === "Activity"
@@ -697,19 +681,6 @@ function App() {
                       >
                         Clear recovery message
                       </button>
-                      <button
-                        className="text-button danger-text"
-                        disabled={
-                          !device.capabilities.includes("reboot") || busy
-                        }
-                        onClick={() => {
-                          setRebootTarget(device);
-                          setRebootPassword("");
-                          setModal("reboot");
-                        }}
-                      >
-                        Secure reboot
-                      </button>
                     </div>
                   )}
                 </section>
@@ -798,7 +769,8 @@ function App() {
                 <DeviceCare key={device.id} device={device} />
               ) : (
                 <section className="panel history-panel">
-                  Pair a phone to configure recovery and optional management.
+                  Pair a phone to configure recovery and review its reported
+                  state.
                 </section>
               )}
             </>
@@ -867,10 +839,11 @@ function App() {
                 <KeyRound size={26} />
                 <h2>Device consent & management</h2>
                 <p>
-                  Phones grant capabilities during enrollment. Optional
-                  device-owner provisioning supports a future MDM control plane.
-                  Android permits one VPN per profile; this tunnel occupies that
-                  slot.
+                  Phones grant removable capabilities during enrollment.
+                  Device-owner enrollment and persistent restrictions are
+                  disabled. Bungee uses app-contained WireGuard and leaves
+                  Android’s VPN slot free. A separate Bungee recovery entry can
+                  stop controls offline.
                 </p>
                 <p>
                   Background failed-unlock photos and lock-screen overlays are
@@ -882,7 +855,7 @@ function App() {
                     <strong>{d.name}</strong>
                     <small>
                       {d.telemetry?.device_owner
-                        ? "Device-owner enrolled"
+                        ? "Legacy device owner · unsupported"
                         : "Personal-device mode"}{" "}
                       · {d.capabilities.join(", ") || "Awaiting consent"}
                     </small>
@@ -944,73 +917,7 @@ function App() {
           </button>
         </div>
       )}
-      {modal === "reboot" && rebootTarget && (
-        <div
-          className="modal-backdrop"
-          onClick={() => {
-            if (!busy) {
-              setModal(null);
-              setRebootPassword("");
-            }
-          }}
-        >
-          <section
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="reboot-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 id="reboot-title">Secure reboot · {rebootTarget.name}</h2>
-            <p>
-              Restart this encrypted phone into the state before first unlock.
-              Android will require its primary screen-lock credential. This does
-              not erase data or power off the device, and is not equivalent to a
-              wipe.
-            </p>
-            <div className="notice">
-              Location, commands and managed DNS stop until someone first
-              unlocks the phone. A receipt confirms acceptance, not successful
-              reboot. An active call or Android policy can prevent it.
-            </div>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void send("reboot");
-              }}
-            >
-              <label>
-                Confirm administrator password
-                <input
-                  aria-label="Reboot administrator password"
-                  type="password"
-                  autoComplete="current-password"
-                  required
-                  maxLength={1024}
-                  value={rebootPassword}
-                  disabled={busy}
-                  onChange={(e) => setRebootPassword(e.target.value)}
-                />
-              </label>
-              <button className="primary" disabled={busy}>
-                Confirm secure reboot
-              </button>
-              <button
-                className="secondary"
-                type="button"
-                disabled={busy}
-                onClick={() => {
-                  setModal(null);
-                  setRebootPassword("");
-                }}
-              >
-                Cancel
-              </button>
-            </form>
-          </section>
-        </div>
-      )}
-      {modal && modal !== "reboot" && (
+      {modal && (
         <div className="modal-backdrop" onClick={close}>
           <section
             className="modal"
