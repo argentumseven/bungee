@@ -36,7 +36,7 @@ class TelemetryService : Service() {
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "STOP") {
-            if (identity.managedDns && identity.managementConsent) { identity.allowLocate = false }
+            if (ManagementAgent.usesAndroidVpn(this, identity)) { identity.allowLocate = false }
             else { identity.autoResume = false; stopSelf(); return START_NOT_STICKY }
         }
         if (intent?.action == "STOP_RING") { stopRinging(); return START_NOT_STICKY }
@@ -88,9 +88,9 @@ class TelemetryService : Service() {
         val pause = PendingIntent.getService(this, 1, Intent(this, TelemetryService::class.java).setAction("STOP"), PendingIntent.FLAG_IMMUTABLE)
         val hush = PendingIntent.getService(this, 2, Intent(this, TelemetryService::class.java).setAction("STOP_RING"), PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, "sharing").setSmallIcon(R.drawable.ic_bungee).setContentTitle("Bungee sharing is active")
-            .setContentText(if (identity.managedDns) "Managed home DNS & recovery · location can be paused" else "GPS fixes queue locally until home is reachable")
+            .setContentText(if (ManagementAgent.usesAndroidVpn(this, identity)) "Managed recovery connection · location can be paused" else "GPS fixes queue locally until home is reachable")
             .setContentIntent(open).setOngoing(true).setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-            .addAction(0, if (identity.managedDns) "Pause location" else "Pause sharing", pause).addAction(0, "Stop sound", hush).build()
+            .addAction(0, if (ManagementAgent.usesAndroidVpn(this, identity)) "Pause location" else "Pause sharing", pause).addAction(0, "Stop sound", hush).build()
     }
     private fun lastLocation(): Location? {
         if (!identity.allowLocate || !hasLocation(this)) return null

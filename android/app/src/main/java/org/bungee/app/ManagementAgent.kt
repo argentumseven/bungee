@@ -17,6 +17,8 @@ import org.json.JSONObject
 /** Finite, disclosed policies. No scripts, credential resets, remote wipes or arbitrary settings. */
 object ManagementAgent {
     fun isOwner(context: Context) = context.getSystemService(DevicePolicyManager::class.java).isDeviceOwnerApp(context.packageName)
+    fun usesAndroidVpn(context: Context, identity: Identity) = isOwner(context) && identity.managementConsent &&
+        (identity.managedDns || identity.state("management").optJSONObject("policy")?.optBoolean("always_on") == true)
     private fun admin(context: Context) = ComponentName(context, BungeeAdminReceiver::class.java)
     @Synchronized fun report(context: Context, identity: Identity): JSONObject {
         val dpm = context.getSystemService(DevicePolicyManager::class.java)

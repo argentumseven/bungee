@@ -107,7 +107,7 @@ class MainActivity : FragmentActivity() {
         }
     }
     private fun startSharing() {
-        if (identity.managementConsent && ManagementAgent.isOwner(this)) {
+        if (ManagementAgent.usesAndroidVpn(this, identity)) {
             val request = VpnService.prepare(this)
             if (request != null) { vpn.launch(request); return }
         }
@@ -126,6 +126,7 @@ class MainActivity : FragmentActivity() {
     }
     @Composable private fun HomeScreen() {
         val status by TelemetryService.status.collectAsState()
+        val usesAndroidVpn = ManagementAgent.usesAndroidVpn(this, identity)
         var lockEnabled by remember { mutableStateOf(identity.appLock) }
         var locate by remember { mutableStateOf(identity.allowLocate) }
         var commands by remember { mutableStateOf(identity.allowCommands) }
@@ -170,14 +171,14 @@ class MainActivity : FragmentActivity() {
                             Column(Modifier.padding(start = 13.dp)) { Text(if (status.connected) "Home is within reach." else if (status.running) "Finding the way home…" else "Take a little pause.", fontSize = 14.sp, fontWeight = FontWeight.SemiBold); Text(status.text, fontSize = 10.sp, color = Muted, modifier = Modifier.padding(top = 5.dp)) }
                         }
                         HorizontalDivider(Modifier.padding(vertical = 20.dp), color = Color(0xFFF0EDF5))
-                        Row { Icon(Icons.Outlined.VpnLock, null, tint = Purple, modifier = Modifier.size(17.dp)); Text(if (identity.managedDns) "  System DNS & household traffic use home." else "  Only household traffic uses the tunnel.", fontSize = 11.sp, color = Muted) }
-                        Text(if (identity.managedDns) "Ordinary traffic stays direct. Managed DNS uses Android’s one VPN slot in this profile." else "Bungee’s app-contained connection leaves Android’s VPN slot free for your other VPN. That VPN may still filter Bungee’s UDP connection.", color = Muted, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
+                        Row { Icon(Icons.Outlined.VpnLock, null, tint = Purple, modifier = Modifier.size(17.dp)); Text(if (identity.managedDns) "  System DNS & household traffic use home." else if (usesAndroidVpn) "  Household traffic uses Android’s VPN service." else "  Household traffic uses app-contained WireGuard.", fontSize = 11.sp, color = Muted) }
+                        Text(if (usesAndroidVpn) "Ordinary traffic stays direct. Managed DNS / always-on uses Android’s one VPN slot in this profile." else "Bungee’s app-contained connection leaves Android’s VPN slot free for your other VPN. That VPN may still filter Bungee’s UDP connection.", color = Muted, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
                         status.lastSent?.let { Text("Last check-in · ${java.text.DateFormat.getTimeInstance().format(java.util.Date(it))}", color = Color(0xFF9BA99F), fontSize = 10.sp, modifier = Modifier.padding(top = 16.dp)) }
                         Button(onClick = {
-                            if (status.running && identity.managedDns) { identity.allowLocate = false; locate = false; startService(Intent(this@MainActivity, TelemetryService::class.java).setAction("STOP")) }
+                            if (status.running && usesAndroidVpn) { identity.allowLocate = false; locate = false; startService(Intent(this@MainActivity, TelemetryService::class.java).setAction("STOP")) }
                             else if (status.running) { identity.autoResume = false; stopService(Intent(this@MainActivity, TelemetryService::class.java)) }
                             else startSharing()
-                        }, modifier = Modifier.fillMaxWidth().padding(top = 20.dp), shape = RoundedCornerShape(11.dp)) { Text(if (status.running && identity.managedDns) "Pause location · keep home DNS" else if (status.running) "Pause sharing" else "Start sharing", Modifier.padding(6.dp)) }
+                        }, modifier = Modifier.fillMaxWidth().padding(top = 20.dp), shape = RoundedCornerShape(11.dp)) { Text(if (status.running && usesAndroidVpn) "Pause location · keep recovery" else if (status.running) "Pause sharing" else "Start sharing", Modifier.padding(6.dp)) }
                     }
                 }
                 Text("YOU’RE IN CONTROL", color = Muted, fontSize = 9.sp, letterSpacing = 1.8.sp, modifier = Modifier.padding(top = 30.dp, bottom = 15.dp))

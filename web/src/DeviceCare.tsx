@@ -513,7 +513,7 @@ export function DeviceCare({
                   public-suffix list. A/AAAA/HTTPS and retries in the same
                   10-second window count as one activity; known system probes
                   are combined. Only five-minute rollups are stored, with no
-                  full hostnames, answer addresses, payloads or remote lookups
+                  raw subdomains, answer addresses, payloads or remote lookups
                   for classification. Time ranges include their boundary
                   rollups.
                 </p>
