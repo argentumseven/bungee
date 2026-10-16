@@ -51,7 +51,8 @@ Commands are typed data, never executable scripts. Local consent and Android per
 - Exact `Origin` verification on mutations, no CORS access, same-origin CSP, framing disabled, no referrers, no caching, HTTPS HSTS.
 - Login/enrollment/device request rate limits, 32-KiB request bodies, typed parsing, input bounds, parameterized SQL, finite coordinate validation.
 - Private state directory, encrypted Android secret storage, Android screenshots/backups disabled. App lock protects the UI; background sharing intentionally continues without a biometric prompt for every packet.
-- Latest telemetry only; bounded audit log; periodic retention cleanup. Deletion is logical and does not erase old filesystem blocks or existing backups.
+- Latest device state and last-known location persist through outages and server restarts until explicit erasure or device revocation. Location is stored separately from the latest check-in, with its original observation timestamp. Null or older fixes do not erase or replace it. This is a single checkpoint, not an unbounded travel history. Command/session/invitation cleanup has separate expiration rules.
+- Administrator-authenticated, same-origin location erasure keeps enrollment and battery state. A stored timestamp cutoff prevents an old cached fix from restoring the erased point. New observations can be stored while location sharing remains enabled. Device revocation explicitly erases both current telemetry and the saved point. Deletion is logical and does not erase old filesystem blocks or backups.
 - No arbitrary code execution, remote wipe, remote camera activation, or silent enrollment endpoint.
 
 ## Container boundaries

@@ -77,7 +77,8 @@ class TelemetryService : Service() {
     private fun lastLocation(): Location? {
         if (!identity.allowLocate || !hasLocation(this)) return null
         val manager = getSystemService(LocationManager::class.java)
-        return try { manager.getProviders(true).mapNotNull { manager.getLastKnownLocation(it) }.filter { System.currentTimeMillis()-it.time in 0..86400000 }.maxByOrNull { it.time } } catch (_: SecurityException) { null }
+        // An old, timestamped fix can still be valuable after a long outage; never age it out here.
+        return try { manager.getProviders(true).mapNotNull { manager.getLastKnownLocation(it) }.filter { it.time > 0 && it.time <= System.currentTimeMillis() + 120000 }.maxByOrNull { it.time } } catch (_: SecurityException) { null }
     }
     private suspend fun freshLocation(): Location? {
         if (!identity.allowLocate || !hasLocation(this)) return null

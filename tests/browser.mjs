@@ -5,7 +5,13 @@ import { spawn } from "node:child_process";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
-import { randomBytes } from "node:crypto";
+import {
+  randomBytes,
+  generateKeyPairSync,
+  sign,
+  createHash,
+  randomUUID,
+} from "node:crypto";
 import { createServer } from "node:net";
 async function freePort() {
   const s = createServer();
@@ -99,6 +105,73 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await page
       .getByRole("img", { name: "One-time Bungee enrollment QR code" })
       .waitFor();
+    const bundle = JSON.parse(
+      await page
+        .getByRole("textbox", {
+          name: "Enrollment bundle",
+          includeHidden: true,
+        })
+        .inputValue(),
+    );
+    const key = generateKeyPairSync("ec", { namedCurve: "P-256" });
+    const publicKey = key.publicKey
+      .export({ type: "spki", format: "der" })
+      .toString("base64");
+    const proof = sign(
+      "sha256",
+      Buffer.from(
+        `BUNGEE-ENROLL-V1\n${bundle.token}\n${bundle.wireguard.client_public_key}\n${publicKey}`,
+      ),
+      key.privateKey,
+    ).toString("base64");
+    const enrolled = await fetch(`http://127.0.0.1:${devicePort}/v1/enroll`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token: bundle.token,
+        public_key: publicKey,
+        wg_public_key: bundle.wireguard.client_public_key,
+        proof,
+        capabilities: [],
+      }),
+    });
+    assert.equal(enrolled.status, 200);
+    const time = String(Math.floor(Date.now() / 1000)),
+      nonce = randomUUID();
+    const body = JSON.stringify({
+      battery: 72,
+      charging: false,
+      device_owner: false,
+      capabilities: [],
+      location: {
+        latitude: 37.78,
+        longitude: -122.42,
+        accuracy: 12,
+        observed_at: Number(time),
+      },
+    });
+    const signature = sign(
+      "sha256",
+      Buffer.from(
+        `BUNGEE-V1\nPOST\n/v1/telemetry\n${time}\n${nonce}\n${createHash("sha256").update(body).digest("hex")}`,
+      ),
+      key.privateKey,
+    ).toString("base64");
+    const uploaded = await fetch(
+      `http://127.0.0.1:${devicePort}/v1/telemetry`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Bungee-Device": bundle.device_id,
+          "X-Bungee-Time": time,
+          "X-Bungee-Nonce": nonce,
+          "X-Bungee-Signature": signature,
+        },
+        body,
+      },
+    );
+    assert.equal(uploaded.status, 200);
     await page.getByRole("button", { name: "Close dialog" }).click();
     await page.getByRole("button", { name: /Browser test phone/ }).waitFor();
   });
@@ -111,6 +184,36 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       .waitFor();
     await page.getByText("Browser test phone", { exact: true }).waitFor();
   });
+  await t.test(
+    "saved location can be erased from settings while the phone stays paired",
+    async () => {
+      await page
+        .getByRole("button", { name: "Clear saved location", exact: true })
+        .click();
+      await page
+        .getByRole("heading", { name: "Erase this saved location?" })
+        .waitFor();
+      await page
+        .getByRole("button", { name: "Erase saved location", exact: true })
+        .click();
+      await page
+        .getByRole("status")
+        .filter({ hasText: "Saved location erased" })
+        .waitFor();
+      await page
+        .getByRole("button", { name: "Clear saved location", exact: true })
+        .waitFor({ state: "hidden" });
+      assert.equal(
+        await page
+          .getByRole("button", { name: "Clear saved location", exact: true })
+          .count(),
+        0,
+      );
+      await page.getByRole("button", { name: "Overview", exact: true }).click();
+      await page.getByText("Waiting for a location", { exact: true }).waitFor();
+      await page.getByRole("button", { name: /Browser test phone/ }).waitFor();
+    },
+  );
   await t.test("mobile layout fits a 390-pixel viewport", async () => {
     await page.getByRole("button", { name: "Overview", exact: true }).click();
     await page.setViewportSize({ width: 390, height: 844 });

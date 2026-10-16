@@ -115,7 +115,7 @@ function App() {
     [selected, setSelected] = useState(""),
     [page, setPage] = useState("Overview");
   const [modal, setModal] = useState<
-      "enroll" | "message" | "revoke" | "help" | null
+      "enroll" | "message" | "revoke" | "clear_location" | "help" | null
     >(null),
     [toast, setToast] = useState("");
   const [name, setName] = useState(""),
@@ -124,6 +124,7 @@ function App() {
     [qr, setQr] = useState(""),
     [message, setMessage] = useState(""),
     [lastRefresh, setLastRefresh] = useState<number | null>(null);
+  const [clearTarget, setClearTarget] = useState<Device | null>(null);
   const active = devices.filter((d) => !d.revoked),
     device = active.find((d) => d.id === selected) || active[0];
   const load = async () => {
@@ -152,6 +153,7 @@ function App() {
       setEvents([]);
       setSelected("");
       setModal(null);
+      setClearTarget(null);
       setBundle("");
     };
     window.addEventListener("bungee:session-expired", expire);
@@ -249,8 +251,26 @@ function App() {
       setBusy(false);
     }
   }
+  async function clearLocation() {
+    if (!clearTarget) return;
+    setBusy(true);
+    try {
+      await api(`/devices/${clearTarget.id}/location`, { method: "DELETE" });
+      setModal(null);
+      setClearTarget(null);
+      setToast(
+        "Saved location erased. New fixes can appear while sharing remains enabled.",
+      );
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
   function close() {
     setModal(null);
+    setClearTarget(null);
     setBundle("");
     setQr("");
     setError("");
@@ -743,7 +763,10 @@ function App() {
                   <code>10.77.0.1/32</code> through WireGuard.
                 </p>
                 <ul>
-                  <li>Last-known point retained for up to 24 hours</li>
+                  <li>
+                    Last-known location and device state stay until erased or
+                    the device is revoked
+                  </li>
                   <li>One-use enrollment expires in 10 minutes</li>
                   <li>Remote commands expire in 5 minutes</li>
                   <li>No cloud push service or external map tiles</li>
@@ -778,6 +801,18 @@ function App() {
                         : "Personal-device mode"}{" "}
                       · {d.capabilities.join(", ") || "Awaiting consent"}
                     </small>
+                    {d.telemetry?.location && (
+                      <button
+                        className="text-button"
+                        onClick={() => {
+                          setClearTarget(d);
+                          setModal("clear_location");
+                        }}
+                      >
+                        Clear saved location
+                      </button>
+                    )}
+                    <br />
                     <button
                       className="danger-text"
                       onClick={() => {
@@ -842,9 +877,11 @@ function App() {
                 ? "A private way home."
                 : modal === "message"
                   ? "Leave a recovery message."
-                  : modal === "revoke"
-                    ? "Revoke this device?"
-                    : "Welcome to your household."}
+                  : modal === "clear_location"
+                    ? "Erase this saved location?"
+                    : modal === "revoke"
+                      ? "Revoke this device?"
+                      : "Welcome to your household."}
             </h2>
             {modal === "enroll" && !bundle && (
               <form onSubmit={enroll}>
@@ -954,6 +991,26 @@ function App() {
                   Queue message
                 </button>
               </form>
+            )}
+            {modal === "clear_location" && (
+              <>
+                <p>
+                  Erase the last-known location for {clearTarget?.name}? The
+                  phone stays paired. New fixes can appear while sharing is
+                  enabled; older cached fixes will not restore the erased point.
+                </p>
+                <p>
+                  To stop future location updates, turn off location sharing on
+                  the phone.
+                </p>
+                <button
+                  className="primary danger full"
+                  disabled={busy || !clearTarget}
+                  onClick={clearLocation}
+                >
+                  Erase saved location
+                </button>
+              </>
             )}
             {modal === "revoke" && (
               <>

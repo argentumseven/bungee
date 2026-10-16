@@ -34,33 +34,46 @@ test("live server: household enrollment, device signatures, commands, and revoca
     join(dir, "wireguard/server-public-key"),
     randomBytes(32).toString("base64"),
   );
-  const server = spawn(resolve("server/target/debug/bungee-server"), [], {
-    env: {
-      ...process.env,
-      BUNGEE_STATE_DIR: dir,
-      BUNGEE_ADMIN_BIND: `127.0.0.1:${port}`,
-      BUNGEE_DEVICE_BIND: `127.0.0.1:${devicePort}`,
-      BUNGEE_PUBLIC_ORIGIN: origin,
-      BUNGEE_WG_ENDPOINT: "home.example.com:51820",
-      BUNGEE_WEB_DIR: resolve("web/dist"),
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const launch = () => {
+    const instance = spawn(resolve("server/target/debug/bungee-server"), [], {
+      env: {
+        ...process.env,
+        BUNGEE_STATE_DIR: dir,
+        BUNGEE_ADMIN_BIND: `127.0.0.1:${port}`,
+        BUNGEE_DEVICE_BIND: `127.0.0.1:${devicePort}`,
+        BUNGEE_PUBLIC_ORIGIN: origin,
+        BUNGEE_WG_ENDPOINT: "home.example.com:51820",
+        BUNGEE_WEB_DIR: resolve("web/dist"),
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    instance.stdout.on("data", (b) => (logs += b));
+    instance.stderr.on("data", (b) => (logs += b));
+    return instance;
+  };
   let logs = "";
-  server.stdout.on("data", (b) => (logs += b));
-  server.stderr.on("data", (b) => (logs += b));
-  t.after(async () => {
+  let server = launch();
+  const stop = async () => {
+    if (server.exitCode !== null) return;
+    const done = new Promise((r) => server.once("exit", r));
     server.kill("SIGINT");
-    await new Promise((r) => server.once("exit", r));
+    await done;
+  };
+  const waitForServer = async () => {
+    for (let n = 0; n < 100; n++) {
+      try {
+        if ((await fetch(origin + "/healthz")).ok) return;
+      } catch {}
+      if (server.exitCode !== null) throw Error(logs);
+      await pause(50);
+    }
+    throw Error("Server did not become ready");
+  };
+  t.after(async () => {
+    await stop();
     await rm(dir, { recursive: true, force: true });
   });
-  for (let n = 0; n < 100; n++) {
-    try {
-      if ((await fetch(origin + "/healthz")).ok) break;
-    } catch {}
-    if (server.exitCode !== null) throw Error(logs);
-    await pause(50);
-  }
+  await waitForServer();
   let cookie = "";
   const admin = (path, method = "GET", body, extra = {}) =>
     fetch(origin + path, {
@@ -298,6 +311,46 @@ test("live server: household enrollment, device signatures, commands, and revoca
       assert.equal((await device("/v1/telemetry", body, headers)).status, 401);
     },
   );
+  const cachedFix = {
+    ...telemetry.location,
+    observed_at: Math.floor(Date.now() / 1000) - 90 * 86400,
+  };
+  await t.test(
+    "a valid cached fix is accepted even after a long outage",
+    async () => {
+      assert.equal(
+        (await signed("/v1/telemetry", { ...telemetry, location: cachedFix }))
+          .status,
+        200,
+      );
+      const data = await (await admin("/api/devices")).json();
+      assert.deepEqual(data.devices[0].telemetry.location, cachedFix);
+    },
+  );
+  await t.test(
+    "an offline location survives reads, cleanup, and a server restart",
+    async () => {
+      sql("UPDATE devices SET last_seen=? WHERE id=?", [
+        cachedFix.observed_at,
+        id,
+      ]);
+      let data = await (await admin("/api/devices")).json();
+      assert.deepEqual(data.devices[0].telemetry.location, cachedFix);
+      const replay = auth("/v1/commands", "{}");
+      assert.equal((await device("/v1/commands", "{}", replay)).status, 200);
+      await stop();
+      server = launch();
+      await waitForServer();
+      assert.equal((await admin("/api/devices")).status, 401);
+      const login = await admin("/api/session", "POST", { password });
+      assert.equal(login.status, 200);
+      cookie = login.headers.get("set-cookie").split(";")[0];
+      data = await (await admin("/api/devices")).json();
+      assert.equal(data.devices[0].last_seen, cachedFix.observed_at);
+      assert.deepEqual(data.devices[0].telemetry.location, cachedFix);
+      assert.equal((await device("/v1/commands", "{}", replay)).status, 409);
+    },
+  );
   await t.test("accepted telemetry appears in the dashboard", async () => {
     assert.equal((await signed("/v1/telemetry", telemetry)).status, 200);
     const data = await (await admin("/api/devices")).json();
@@ -305,6 +358,49 @@ test("live server: household enrollment, device signatures, commands, and revoca
     assert.equal(data.devices[0].telemetry.location.latitude, 37.78);
     assert.equal(data.devices[0].enrolled, true);
   });
+  await t.test(
+    "a check-in without a GPS fix refreshes battery without erasing location",
+    async () => {
+      assert.equal(
+        (
+          await signed("/v1/telemetry", {
+            ...telemetry,
+            battery: 64,
+            location: null,
+          })
+        ).status,
+        200,
+      );
+      const data = await (await admin("/api/devices")).json();
+      assert.equal(data.devices[0].telemetry.battery, 64);
+      assert.ok(data.devices[0].last_seen > cachedFix.observed_at);
+      assert.deepEqual(data.devices[0].telemetry.location, telemetry.location);
+    },
+  );
+  await t.test(
+    "older and duplicate fixes cannot move the last-known location backward",
+    async () => {
+      for (const observed_at of [
+        cachedFix.observed_at,
+        telemetry.location.observed_at,
+      ]) {
+        assert.equal(
+          (
+            await signed("/v1/telemetry", {
+              ...telemetry,
+              location: { ...telemetry.location, latitude: 42, observed_at },
+            })
+          ).status,
+          200,
+        );
+        const data = await (await admin("/api/devices")).json();
+        assert.deepEqual(
+          data.devices[0].telemetry.location,
+          telemetry.location,
+        );
+      }
+    },
+  );
   await t.test("signed request replay is rejected", async () => {
     const body = "{}",
       h = auth("/v1/commands", body);
@@ -422,6 +518,67 @@ test("live server: household enrollment, device signatures, commands, and revoca
       400,
     );
   });
+  await t.test(
+    "erasing a saved location requires administrator authentication and same-origin intent",
+    async () => {
+      assert.equal(
+        (
+          await admin(`/api/devices/${id}/location`, "DELETE", undefined, {
+            Cookie: "",
+          })
+        ).status,
+        401,
+      );
+      assert.equal(
+        (
+          await admin(`/api/devices/${id}/location`, "DELETE", undefined, {
+            Origin: "https://evil.example",
+          })
+        ).status,
+        403,
+      );
+    },
+  );
+  await t.test(
+    "an owner can erase the saved fix without unpairing or erasing battery state",
+    async () => {
+      assert.equal(
+        (await admin(`/api/devices/${id}/location`, "DELETE")).status,
+        200,
+      );
+      const data = await (await admin("/api/devices")).json();
+      assert.equal(data.devices[0].telemetry.location, null);
+      assert.equal(data.devices[0].telemetry.battery, telemetry.battery);
+      assert.equal(data.devices[0].enrolled, true);
+      assert.equal(data.devices[0].revoked, false);
+    },
+  );
+  await t.test(
+    "a cached old fix cannot restore an explicitly erased location",
+    async () => {
+      assert.equal((await signed("/v1/telemetry", telemetry)).status, 200);
+      const data = await (await admin("/api/devices")).json();
+      assert.equal(data.devices[0].telemetry.location, null);
+    },
+  );
+  await t.test(
+    "a genuinely newer fix can be saved after explicit erasure",
+    async () => {
+      await pause(1100);
+      const newer = {
+        ...telemetry.location,
+        latitude: 37.79,
+        observed_at: Math.floor(Date.now() / 1000),
+      };
+      assert.equal(
+        (await signed("/v1/telemetry", { ...telemetry, location: newer }))
+          .status,
+        200,
+      );
+      const data = await (await admin("/api/devices")).json();
+      assert.deepEqual(data.devices[0].telemetry.location, newer);
+    },
+  );
   await t.test(
     "revocation erases telemetry and removes tunnel access",
     async () => {

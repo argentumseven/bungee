@@ -31,7 +31,33 @@ The server reads the password file at process startup and computes an Argon2id v
 
 Install the Android app, copy its WireGuard public key, and create an invitation in the HTTPS dashboard. The phone scans/pastes the invitation, validates the key/route, obtains VPN consent, pairs through the tunnel, and then asks for location/notification permission. Approximate location is supported; GPS accuracy and availability depend on permissions and the device. Ordinary phone traffic is not routed through home.
 
-Pause sharing on the phone to stop its telemetry service and disconnect its tunnel. Revoke in the dashboard to invalidate server access, erase stored telemetry and commands, and remove its peer. Unpair on the phone to erase its local identity and generate a new one. A new identity needs a new invitation. The current service does not restart itself after reboot/force-stop; start sharing again from the phone.
+Pause sharing on the phone to stop its telemetry service and disconnect its tunnel. The last-known location and device state stay saved, including through long outages and server restarts. **Clear saved location** in dashboard settings erases the checkpoint without unpairing; new fixes can appear if sharing stays enabled. Revoke in the dashboard to invalidate server access, explicitly erase stored telemetry and commands, and remove its peer. Do not revoke a missing phone if you want it to reconnect and keep reporting. Unpair on the phone to erase its local identity and generate a new one. A new identity needs a new invitation. The current service does not restart itself after reboot/force-stop; start sharing again from the phone.
+
+## How pairing crosses the network
+
+Pairing has an out-of-band step before any device API request:
+
+1. The phone generates its own WireGuard private key and signing key. Copy only its WireGuard **public** key to **Add a device** in the authenticated dashboard.
+2. The server temporarily approves that peer and assigns its private tunnel address. The QR invitation contains the server's public key, reachable UDP endpoint, phone address/public key, a one-use code, and the fixed device API route. It contains no phone private key.
+3. The phone scans the QR, checks that the invitation matches its own key, obtains Android VPN approval, and establishes the WireGuard tunnel.
+4. Through that tunnel it sends the one-use code and a proof made with its signing key. The server binds that key to the approved peer. Subsequent telemetry/polling requests are individually signed and replay-protected.
+
+The ten-minute invitation lifetime is a limit on completing first enrollment. An enrolled phone does not expire because it has been offline. WireGuard authentication still requires the approved private key; a reachable public UDP endpoint does not make the device API public.
+
+## Port forwarding, CGNAT, and relay options
+
+**Wireshark** is a packet analyzer. **WireGuard** is the encrypted tunnel protocol. WireGuard's persistent keepalive maintains the phone's outbound NAT mapping; it does not make an unreachable home server publicly reachable by itself.
+
+| Deployment | Reachability requirement | Current support |
+| --- | --- | --- |
+| Direct to home over public IPv4 | Forward UDP 51820 to the Docker host; allow it in the host firewall. Use a stable LAN address for that host. DNS or dynamic DNS should point at the home's public IP. | Implemented direct mode; real-network testing remains required |
+| Same home LAN only | The endpoint can be a reachable LAN address. No router WAN forwarding is needed for the WireGuard connection, but the administrator dashboard still needs appropriate HTTPS configuration. | Endpoint format accepts LAN IPv4/hostnames; this does not provide away-from-home access |
+| Public IPv6 | Inbound UDP needs to be permitted by the home firewall and supported by the Docker host's IPv6 networking. IPv4 NAT forwarding is unnecessary for that IPv6 path. | Requires host/network configuration and real-network validation |
+| Home behind CGNAT or blocked inbound traffic | A publicly reachable relay/rendezvous or an ISP-provided reachable address is needed. Forwarding only your own router cannot remove the ISP's NAT. | No relay mode in the app yet |
+
+The current Compose stack also publishes TCP **80/443** for Caddy's HTTPS dashboard and certificate issuance. Do **not** forward port 8081: the device API belongs only inside WireGuard. A generic HTTPS reverse proxy for the dashboard does not carry the WireGuard UDP traffic. Dynamic DNS keeps a hostname current; it does not bypass NAT. If a changed endpoint is not picked up while the tunnel remains active in this prototype, pause/restart sharing to reconnect; automatic endpoint refresh and network handoff testing remain roadmap work.
+
+For a future no-port-forwarding mode, both the phone and home server should initiate outbound connections to a reachable relay, with end-to-end encryption between phone and home. Merely terminating WireGuard on a VPS and forwarding this version's inner HTTP would expose telemetry at that VPS; a relay design must preserve the phone-to-home encryption boundary. A mesh VPN such as Tailscale, or a compatible client using self-hosted Headscale plus a reachable relay, can handle NAT traversal and relay fallback, but it is not a drop-in mode of this APK. Android allows one active VpnService per profile; Bungee's current embedded WireGuard and a separate mesh VPN app cannot run as two simultaneous VPNs in that profile. Integration needs a single transport choice rather than an instruction to enable both.
 
 ## Device-owner experimentation
 

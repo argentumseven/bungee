@@ -89,6 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/devices", get(api::devices))
         .route("/api/enrollments", post(api::create_enrollment))
         .route("/api/devices/{id}", delete(api::revoke))
+        .route("/api/devices/{id}/location", delete(api::clear_location))
         .route("/api/devices/{id}/commands", post(api::command))
         .route("/api/audit", get(api::audit))
         .fallback_service(

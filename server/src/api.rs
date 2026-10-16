@@ -91,19 +91,22 @@ pub async fn logout(State(app): State<App>, headers: HeaderMap) -> ApiResult<imp
 pub async fn devices(State(app): State<App>, headers: HeaderMap) -> ApiResult<Json<Value>> {
     require_admin(&app, &headers)?;
     let db = app.db.lock().unwrap();
-    // The first release retains a single last-known point for at most 24 hours, not a travel history.
-    db.execute(
-        "UPDATE devices SET telemetry=NULL WHERE last_seen<?",
-        [now() - 86400],
-    )?;
-    let mut q=db.prepare("SELECT id,name,address,created,last_seen,revoked,telemetry,capabilities,public_key IS NOT NULL FROM devices ORDER BY created")?;
-    let rows=q.query_map([],|r|Ok(json!({
+    // Recovery data survives long outages. Freshness is described by timestamps, not deletion.
+    let mut q=db.prepare("SELECT id,name,address,created,last_seen,revoked,telemetry,capabilities,public_key IS NOT NULL,last_location FROM devices ORDER BY created")?;
+    let rows=q.query_map([],|r| {
+        let location = r.get::<_,Option<String>>(9)?.and_then(|s|serde_json::from_str::<Value>(&s).ok());
+        let mut telemetry = r.get::<_,Option<String>>(6)?.and_then(|s|serde_json::from_str::<Value>(&s).ok());
+        // Keep the existing response shape, while storing the latest fix independently.
+        if let Some(Value::Object(ref mut state)) = telemetry {
+            state.insert("location".into(), location.unwrap_or(Value::Null));
+        }
+        Ok(json!({
         "id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"address":r.get::<_,String>(2)?,
         "created":r.get::<_,i64>(3)?,"last_seen":r.get::<_,Option<i64>>(4)?,"revoked":r.get::<_,bool>(5)?,
-        "telemetry":r.get::<_,Option<String>>(6)?.and_then(|s|serde_json::from_str::<Value>(&s).ok()),
+        "telemetry":telemetry,
         "capabilities":serde_json::from_str::<Value>(&r.get::<_,String>(7)?).unwrap_or(json!([])),
         "enrolled":r.get::<_,bool>(8)?,
-    })))?.collect::<Result<Vec<_>,_>>()?;
+    }))})?.collect::<Result<Vec<_>,_>>()?;
     let mut q=db.prepare("SELECT id,device_id,kind,created,expires,status,result FROM commands ORDER BY created DESC LIMIT 50")?;
     let commands=q.query_map([],|r| Ok(json!({"id":r.get::<_,String>(0)?,"device_id":r.get::<_,String>(1)?,"kind":r.get::<_,String>(2)?,"created":r.get::<_,i64>(3)?,"expires":r.get::<_,i64>(4)?,"status":if r.get::<_,i64>(4)?<now() && ["pending","delivered"].contains(&r.get::<_,String>(5)?.as_str()) {"expired".to_owned()} else {r.get(5)?},"result":r.get::<_,Option<String>>(6)?})))?.collect::<Result<Vec<_>,_>>()?;
     Ok(Json(
@@ -148,10 +151,6 @@ fn sync_peers(app: &App, db: &rusqlite::Connection) -> ApiResult<()> {
 
 pub fn housekeeping(app: &App) -> ApiResult<()> {
     let db = app.db.lock().unwrap();
-    db.execute(
-        "UPDATE devices SET telemetry=NULL WHERE last_seen<?",
-        [now() - 86400],
-    )?;
     db.execute("DELETE FROM commands WHERE created<?", [now() - 86400])?;
     db.execute("DELETE FROM sessions WHERE expires<?", [now()])?;
     db.execute("DELETE FROM enrollments WHERE expires<?", [now()])?;
@@ -328,7 +327,8 @@ pub async fn telemetry(
     body: Bytes,
 ) -> ApiResult<Json<Value>> {
     let id = verify_device(&app, &headers, "/v1/telemetry", &body)?;
-    let input: Telemetry = serde_json::from_slice(&body).map_err(|_| bad("Invalid telemetry"))?;
+    let mut input: Telemetry =
+        serde_json::from_slice(&body).map_err(|_| bad("Invalid telemetry"))?;
     if input.battery > 100 || !valid_capabilities(&input.capabilities) {
         return Err(bad("Invalid telemetry values"));
     }
@@ -337,23 +337,70 @@ pub async fn telemetry(
             || !(-180.0..=180.0).contains(&l.longitude)
             || !(0.0..=100000.0).contains(&l.accuracy)
             || l.observed_at > now() + 120
-            || l.observed_at < now() - 86400)
+            || l.observed_at <= 0)
     {
-        return Err(bad("Invalid or expired location"));
+        return Err(bad("Invalid location values or timestamp"));
     }
     let db = app.db.lock().unwrap();
+    let (mut location, floor): (Option<String>, i64) = db
+        .query_row(
+            "SELECT last_location,location_floor FROM devices WHERE id=? AND revoked=0",
+            [&id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?
+        .ok_or_else(denied)?;
+    let previous = location
+        .as_deref()
+        .map(serde_json::from_str::<Location>)
+        .transpose()
+        .map_err(|_| {
+            Error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Stored location could not be read",
+            )
+        })?;
+    if let Some(fix) = input.location.take()
+        && fix.observed_at > floor
+        && previous
+            .as_ref()
+            .is_none_or(|old| fix.observed_at > old.observed_at)
+    {
+        location = Some(serde_json::to_string(&fix).map_err(|_| bad("Invalid location"))?);
+    }
     db.execute(
-        "UPDATE devices SET telemetry=?,last_seen=?,capabilities=? WHERE id=? AND revoked=0",
+        "UPDATE devices SET telemetry=?,last_location=?,last_seen=?,capabilities=? WHERE id=? AND revoked=0",
         params![
             serde_json::to_string(&input).map_err(|_| bad("Invalid telemetry"))?,
+            location,
             now(),
             serde_json::to_string(&input.capabilities).unwrap(),
             id
         ],
     )?;
-    // Read these fields to keep the schema explicit while preserving the exact signed telemetry body.
-    let _ = (input.charging, input.device_owner);
     Ok(Json(json!({"accepted":true,"server_time":now()})))
+}
+
+pub async fn clear_location(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    require_admin(&app, &headers)?;
+    let db = app.db.lock().unwrap();
+    let changed = db.execute("UPDATE devices SET
+        location_floor=MAX(location_floor,COALESCE(json_extract(last_location,'$.observed_at'),0),?),
+        last_location=NULL WHERE id=? AND revoked=0 AND public_key IS NOT NULL", params![now(),id])?;
+    if changed != 1 {
+        return Err(Error(StatusCode::NOT_FOUND, "Enrolled device not found"));
+    }
+    store::audit(
+        &db,
+        "location.erased",
+        Some(&id),
+        "Saved location erased; cached older fixes will not restore it",
+    )?;
+    Ok(Json(json!({"cleared":true})))
 }
 
 #[derive(Deserialize)]
@@ -459,7 +506,7 @@ pub async fn revoke(
     require_admin(&app, &headers)?;
     let db = app.db.lock().unwrap();
     let changed = db.execute(
-        "UPDATE devices SET revoked=1,telemetry=NULL,capabilities='[]' WHERE id=? AND revoked=0",
+        "UPDATE devices SET revoked=1,telemetry=NULL,last_location=NULL,capabilities='[]' WHERE id=? AND revoked=0",
         [&id],
     )?;
     if changed != 1 {
