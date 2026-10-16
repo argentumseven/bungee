@@ -1,8 +1,12 @@
 mod api;
 mod dns;
+mod enrollment;
+mod export;
 mod geography;
+mod history;
 mod management;
 mod recurrence;
+mod release;
 mod security;
 mod store;
 
@@ -46,6 +50,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     security::private_dir(&dir)?;
     let origin = env::var("BUNGEE_PUBLIC_ORIGIN").unwrap_or("http://127.0.0.1:8080".into());
     let secure_cookie = origin.starts_with("https://");
+    let device_bind =
+        security::device_bind(&env::var("BUNGEE_DEVICE_BIND").unwrap_or("127.0.0.1:8081".into()))?;
     let admin_bind: SocketAddr = env::var("BUNGEE_ADMIN_BIND")
         .unwrap_or("127.0.0.1:8080".into())
         .parse()?;
@@ -114,7 +120,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Err(e) = geography::collect(&housekeeping) {
                 tracing::error!(error=%e.1, "Network observation failed");
             }
-            if let Err(e) = api::housekeeping(&housekeeping) {
+            if let Err(e) = enrollment::housekeeping(&housekeeping) {
                 tracing::error!(error=%e.1, "Retention or peer synchronization failed");
             }
         }
@@ -129,14 +135,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/geography", get(geography::status))
         .route("/api/maps/{z}/{x}/{y}", get(geography::tile))
         .route("/api/devices", get(api::devices))
-        .route("/api/enrollments", post(api::create_enrollment))
+        .route("/api/enrollments", post(enrollment::create_enrollment))
         .route("/api/devices/{id}", delete(api::revoke))
         .route("/api/devices/{id}/location", delete(api::clear_location))
         .route(
             "/api/devices/{id}/history",
-            get(api::history).delete(api::clear_history),
+            get(history::history).delete(api::clear_history),
         )
         .route("/api/devices/{id}/commands", post(api::command))
+        .route("/api/devices/{id}/history.csv", get(export::history_csv))
         .route(
             "/api/devices/{id}/policy",
             get(management::get_policy).post(management::save_policy),
@@ -169,9 +176,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(axum::extract::DefaultBodyLimit::max(32 * 1024))
         .with_state(app.clone());
     dns::start(app).await?;
-    let device_bind = env::var("BUNGEE_DEVICE_BIND").unwrap_or("127.0.0.1:8081".into());
     let admin_listener = tokio::net::TcpListener::bind(admin_bind).await?;
-    let device_listener = tokio::net::TcpListener::bind(&device_bind).await?;
+    let device_listener = tokio::net::TcpListener::bind(device_bind).await?;
     tracing::info!(%admin_bind, %device_bind, "Bungee listening; admin and device APIs are separate");
     tokio::try_join!(
         axum::serve(

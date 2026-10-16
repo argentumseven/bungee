@@ -146,6 +146,8 @@ jobs:
           python3 - <<'PY'
           import json, os, pathlib, re, time
           version = os.environ['RELEASE_VERSION'].removeprefix('v')
+          release = json.loads(pathlib.Path('release.json').read_text())
+          assert version == release['version'], 'Tag and release manifest must match'
           assert re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-alpha\.[1-9][0-9]*)?', version)
           images = {}
           for service in ('server', 'gateway', 'web'):
@@ -153,7 +155,7 @@ jobs:
               assert re.fullmatch(r'sha256:[a-f0-9]{64}', digest)
               images[service] = f'ghcr.io/argentumseven/bungee-{service}@{digest}'
           path = pathlib.Path('release-bundle'); path.mkdir()
-          (path / 'release.json').write_text(json.dumps({'format': 1, 'host_api': 1, 'data_contract': 1, 'version': version, 'published_at': int(time.time()), 'images': images}))
+          (path / 'release.json').write_text(json.dumps({'format': 1, 'host_api': release['host_api'], 'data_contract': release['data_contract'], 'version': version, 'published_at': int(time.time()), 'images': images}))
           PY
           if [[ "$RELEASE_VERSION" == *-* ]]; then channel=preview; else channel=stable; fi
           echo "BUNGEE_RELEASE_CHANNEL=$channel" >> "$GITHUB_ENV"
@@ -229,6 +231,8 @@ jobs:
           Alpha.8 adds DDIL handling: network-aware jittered backoff, independent encrypted GPS collection, adaptive bounded catch-up, durable command receipt retries and explicit expired/unconfirmed status. Update the SERVER FIRST, then the APK. Request authentication/expiry and local stop remain enforced; no radio/airplane-mode automation or provider fallback is added. See docs/DDIL.md for queue limits, clock assumptions and physical-test limits.
 
           Alpha.9 corrects confirmed independent-review defects: explicit optional background-location permission for GPS restart after first unlock, truthful GPS-paused reporting, incremental encrypted SQLite GPS storage, separate source/authenticated/admin limiter budgets, trusted loopback Caddy identity, offered-command labels, explicit receipt reconciliation and authentication cooldown protected from network flapping. Physical GrapheneOS acceptance, publisher-signature enforcement and built-in encrypted backup archives remain open. Read docs/REVIEW-2026-10.md.
+
+          Alpha.10 adds explicit command consent (off by default, including after upgrade), checked security-preference writes, recoverable transactional invitation reissue/peer-file publication, safe device-API bind validation, bounded server-streamed CSV and coordinated host/APK/server release metadata. Core regression checks include full address-pool recovery, storage-failure injection and a 500,000-row synthetic export. Physical GrapheneOS acceptance, publisher-signature enforcement and encrypted snapshot archives remain open. Read docs/REVIEW-2026-10-SECOND.md.
 
           Update BOTH server and APK. Choose a custom UDP port (51820 rejected). Version-2 pairing requires a per-peer random 256-bit WireGuard PSK. Dashboard HTTPS requires the trusted local CA and TLS 1.3 X25519MLKEM768. Certificate/device/APK signatures remain classical; this is not a wholly quantum-proof product. Runtime egress is denied except an explicitly configured legacy private home DNS upstream; leave it unset for new deployments. No public DNS fallback, telemetry provider, analytics or cloud push.
 

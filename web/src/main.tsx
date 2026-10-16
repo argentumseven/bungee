@@ -57,6 +57,8 @@ type Device = {
   last_contact?: number | null;
   revoked: boolean;
   enrolled: boolean;
+  enrollment_state?: "pending" | "expired" | "enrolled" | "revoked";
+  wg_public_key?: string;
   preshared_key: boolean;
   capabilities: string[];
   network?: NetworkObservation | null;
@@ -561,7 +563,7 @@ function App() {
                                 className={`status-dot ${online(d) ? "" : "offline"}`}
                               />
                               {!d.enrolled
-                                ? "Awaiting enrollment"
+                                ? d.enrollment_state === "expired" ? "Invitation expired · reissue in Settings" : "Awaiting enrollment"
                                 : online(d)
                                   ? "Connected"
                                   : "Offline"}
@@ -862,8 +864,9 @@ function App() {
                 <KeyRound size={26} />
                 <h2>Device consent & management</h2>
                 <p>
-                  Phones grant removable capabilities during enrollment.
-                  Device-owner enrollment and persistent restrictions are
+                  Pairing approves telemetry. Household recovery commands need
+                  separate approval on the phone; remote locking also needs
+                  optional Android administration. Device-owner enrollment and persistent restrictions are
                   disabled. Bungee uses app-contained WireGuard and leaves
                   Android’s VPN slot free. A separate Bungee recovery entry can
                   stop controls offline.
@@ -882,7 +885,12 @@ function App() {
                         : "Personal-device mode"}{" "}
                       · {d.capabilities.join(", ") || "Awaiting consent"}
                     </small>
-                    {!d.preshared_key && (
+                    {!d.enrolled && d.wg_public_key && (
+                      <button className="text-button" onClick={() => { setName(d.name); setWgKey(d.wg_public_key!); setBundle(""); setModal("enroll"); }}>
+                        Reissue invitation
+                      </button>
+                    )}
+                    {!d.preshared_key && d.enrolled && (
                       <p className="error">
                         Re-pair required: this legacy identity has no preshared
                         key and its tunnel is blocked.
@@ -996,7 +1004,8 @@ function App() {
                 />
                 <p className="fine">
                   Both people should agree to location sharing. No background
-                  enrollment or silent tracking.
+                  enrollment or silent tracking. Reissuing a never-enrolled
+                  phone key replaces its earlier invitation and tunnel secret.
                 </p>
                 <button className="primary full" disabled={busy}>
                   <Plus size={17} />
@@ -1194,6 +1203,7 @@ function HistoryView({ device }: { device: Device }) {
   const [chosen, setChosen] = useState<HistoryRecord | null>(null);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const [exportStarted, setExportStarted] = useState(false);
   const request = useRef<AbortController | null>(null);
   const endpoint = (before?: number | null) =>
     `/devices/${device.id}/history?${new URLSearchParams({ from: String(range.from), to: String(range.to), kind: range.kind, limit: "200", ...(range.recurrence === "interval" ? { every: String(range.minutes * 60) } : range.recurrence === "daily" ? { daily: range.daily, timezone: range.timezone, tolerance: String(range.tolerance * 60) } : {}), ...(before ? { before: String(before) } : {}) })}`;
@@ -1232,65 +1242,12 @@ function HistoryView({ device }: { device: Device }) {
       if (!signal.aborted) setBusy(false);
     }
   }
-  async function download() {
-    const signal = request.current!.signal;
-    setBusy(true);
-    setError("");
-    try {
-      const lines = [
-        range.kind === "locations"
-          ? "observed_at_utc,received_at_utc,latitude,longitude,accuracy_m"
-          : range.kind === "network"
-            ? "observed_at_utc,received_at_utc,ip,geoip_json"
-            : "received_at_utc,battery_percent,charging,device_owner",
-      ];
-      let cursor: number | null = null;
-      do {
-        const data: HistoryPage = await api<HistoryPage>(endpoint(cursor), {
-          signal,
-        });
-        for (const r of data.records)
-          lines.push(
-            range.kind === "locations"
-              ? [
-                  new Date(r.observed_at! * 1000).toISOString(),
-                  new Date(r.received_at * 1000).toISOString(),
-                  r.latitude,
-                  r.longitude,
-                  r.accuracy,
-                ].join(",")
-              : range.kind === "network"
-                ? [
-                    new Date(r.observed_at! * 1000).toISOString(),
-                    new Date(r.received_at * 1000).toISOString(),
-                    r.ip,
-                    '"' +
-                      JSON.stringify(r.geoip ?? null).replaceAll('"', '""') +
-                      '"',
-                  ].join(",")
-                : [
-                    new Date(r.received_at * 1000).toISOString(),
-                    r.battery,
-                    r.charging,
-                    r.device_owner,
-                  ].join(","),
-          );
-        cursor = data.next_before;
-      } while (cursor !== null);
-      if (signal.aborted) return;
-      const url = URL.createObjectURL(
-        new Blob([lines.join("\n") + "\n"], { type: "text/csv;charset=utf-8" }),
-      );
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `bungee-${device.id}-${range.kind}${range.recurrence === "interval" ? `-every-${range.minutes}m` : range.recurrence === "daily" ? "-daily" : ""}.csv`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (e) {
-      if (!signal.aborted) setError((e as Error).message);
-    } finally {
-      if (!signal.aborted) setBusy(false);
-    }
+  function download() {
+    const a = document.createElement("a");
+    a.href = `/api${endpoint().replace("/history?", "/history.csv?")}`;
+    a.download = `bungee-history-${range.kind}.csv`;
+    a.click();
+    setExportStarted(true);
   }
   const points = records
     .filter((r) => r.latitude !== undefined)
@@ -1483,6 +1440,7 @@ function HistoryView({ device }: { device: Device }) {
           Export CSV
         </button>
       </form>
+      {exportStarted && <p className="fine" role="status">CSV streams directly to your browser. Cancel in its Downloads panel. Exports stop after five minutes; use a smaller time range if needed.</p>}
       {error && (
         <div className="error" role="alert">
           {error}

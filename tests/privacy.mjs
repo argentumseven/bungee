@@ -36,6 +36,17 @@ test("server rejects default ports and DNS-dependent endpoints before listening"
   }
 });
 
+test("device listener rejects wildcard, public, unrelated LAN and DNS binds at startup", async t=>{
+  const dir=await mkdtemp(join(tmpdir(),"bungee-device-bind-"));
+  t.after(()=>rm(dir,{recursive:true,force:true}));
+  for(const bind of ["0.0.0.0:8081","[::]:8081","203.0.113.10:8081","192.168.1.5:8081","10.77.0.2:8081","10.77.0.1:9090","localhost:8081","127.0.0.1:0"]) {
+    const child=spawn(resolve("server/target/debug/bungee-server"),[],{env:{...process.env,BUNGEE_STATE_DIR:dir,BUNGEE_DEVICE_BIND:bind},stdio:["ignore","ignore","pipe"]});
+    let error=""; child.stderr.on("data",b=>error+=b);
+    const code=await new Promise(r=>child.once("exit",r));
+    assert.notEqual(code,0,bind); assert.match(error,/BUNGEE_DEVICE_BIND/);
+  }
+});
+
 test("gateway validates the chosen port and installs outbound-deny rules for the shared namespace", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "bungee-gateway-"));
   t.after(() => rm(dir, { recursive: true, force: true }));

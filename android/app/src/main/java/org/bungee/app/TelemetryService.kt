@@ -246,9 +246,9 @@ class TelemetryService : Service() {
             } else {
                 val result = when (kind) {
                     "locate" -> { val available = minOf(deadline - elapsed(), (expires - api.clock.upperNow(elapsed())) * 1000).coerceAtLeast(0); val fix = withTimeoutOrNull(available) { freshLocation() } ?: error("No timely location fix available"); upload(api, fix); "Fresh location uploaded" }
-                    "ring" -> { LocalSafety.ifAllowed(this) { startRinging() }; "Sound started for up to 30 seconds" }
-                    "stop_ringing" -> { stopRinging(); "Sound stopped" }
-                    "message" -> {
+                    "ring" -> { identity.ifCommandsAllowed { LocalSafety.ifAllowed(this) { startRinging() } }; "Sound started for up to 30 seconds" }
+                    "stop_ringing" -> { identity.ifCommandsAllowed { stopRinging() }; "Sound stopped" }
+                    "message" -> identity.ifCommandsAllowed {
                         val text = command.getJSONObject("payload").getString("message").take(240)
                         identity.recoveryMessage = text
                         val open = PendingIntent.getActivity(this, 3, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
@@ -257,8 +257,8 @@ class TelemetryService : Service() {
                             .setStyle(NotificationCompat.BigTextStyle().bigText(text)).setVisibility(NotificationCompat.VISIBILITY_PUBLIC).setContentIntent(open).setOngoing(true).build()) }
                         "Recovery notification posted"
                     }
-                    "clear_message" -> { identity.recoveryMessage = null; getSystemService(NotificationManager::class.java).cancel(2); "Message cleared" }
-                    "lock" -> { LocalSafety.ifAllowed(this) { getSystemService(DevicePolicyManager::class.java).lockNow() }; "Device lock requested" }
+                    "clear_message" -> identity.ifCommandsAllowed { identity.recoveryMessage = null; getSystemService(NotificationManager::class.java).cancel(2); "Message cleared" }
+                    "lock" -> { identity.ifCommandsAllowed { LocalSafety.ifAllowed(this) { getSystemService(DevicePolicyManager::class.java).lockNow() } }; "Device lock requested" }
                     else -> error("Unknown command")
                 }
                 receipt.put("status", "executed").put("result", result)
@@ -274,7 +274,10 @@ class TelemetryService : Service() {
         stopRinging()
         tone = ToneGenerator(AudioManager.STREAM_ALARM, 100)
         ringJob = scope.launch {
-            repeat(30) { tone?.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 700); delay(1000) }
+            repeat(30) {
+                if (!identity.allowCommands || LocalSafety.isStopped(this@TelemetryService)) { stopRinging(); return@launch }
+                tone?.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 700); delay(1000)
+            }
             stopRinging()
         }
     }
@@ -292,8 +295,8 @@ class TelemetryService : Service() {
         fun hasBackgroundLocation(context: Context) = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
         fun capabilities(context: Context, identity: Identity): List<String> = buildList {
             if (LocalSafety.isStopped(context) || ManagementAgent.isOwner(context)) return@buildList
-            if (identity.allowLocate && hasLocation(context) && status.value.gpsAccess in listOf("foreground", "background")) add("locate")
             if (identity.allowCommands) {
+                if (identity.allowLocate && hasLocation(context) && status.value.gpsAccess in listOf("foreground", "background")) add("locate")
                 addAll(listOf("ring", "stop_ringing"))
                 if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) addAll(listOf("message", "clear_message"))
                 if (context.getSystemService(DevicePolicyManager::class.java).isAdminActive(ComponentName(context, BungeeAdminReceiver::class.java))) add("lock")

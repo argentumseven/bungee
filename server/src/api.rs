@@ -2,7 +2,7 @@ use crate::{App, security::*, store};
 use axum::{
     Json,
     body::Bytes,
-    extract::{ConnectInfo, Path, Query, State},
+    extract::{ConnectInfo, Path, State},
     http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
 };
@@ -11,14 +11,13 @@ use p256::{
     ecdsa::{Signature, VerifyingKey, signature::Verifier},
     pkcs8::DecodePublicKey,
 };
-use rand::RngCore;
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{fs, net::SocketAddr};
+use std::net::SocketAddr;
 
 pub async fn health() -> Json<Value> {
-    Json(json!({"status":"ok","version":env!("CARGO_PKG_VERSION")}))
+    Json(json!({"status":"ok","version":crate::release::version()}))
 }
 
 #[derive(Deserialize)]
@@ -106,7 +105,7 @@ pub async fn devices(State(app): State<App>, headers: HeaderMap) -> ApiResult<Js
     }
     let db = app.db.lock().unwrap();
     // Recovery data survives long outages. Freshness is described by timestamps, not deletion.
-    let mut q=db.prepare("SELECT id,name,address,created,last_seen,revoked,telemetry,capabilities,public_key IS NOT NULL,last_location,wg_psk IS NOT NULL,management_report,last_contact FROM devices ORDER BY created")?;
+    let mut q=db.prepare("SELECT id,name,address,created,last_seen,revoked,telemetry,capabilities,public_key IS NOT NULL,last_location,wg_psk IS NOT NULL,management_report,last_contact,(SELECT MAX(expires) FROM enrollments WHERE device_id=devices.id),wg_key FROM devices ORDER BY created")?;
     let rows=q.query_map([],|r| {
         let location = r.get::<_,Option<String>>(9)?.and_then(|s|serde_json::from_str::<Value>(&s).ok());
         let mut telemetry = r.get::<_,Option<String>>(6)?.and_then(|s|serde_json::from_str::<Value>(&s).ok());
@@ -121,6 +120,9 @@ pub async fn devices(State(app): State<App>, headers: HeaderMap) -> ApiResult<Js
         "network":crate::geography::latest(&db,&r.get::<_,String>(0)?)?,
         "capabilities":serde_json::from_str::<Vec<String>>(&r.get::<_,String>(7)?).unwrap_or_default().into_iter().filter(|kind|kind!="reboot").collect::<Vec<_>>(),
         "enrolled":r.get::<_,bool>(8)?,
+        "enrollment_state":if r.get::<_,bool>(5)? {"revoked"} else if r.get::<_,bool>(8)? {"enrolled"} else if r.get::<_,Option<i64>>(13)?.is_some_and(|v|v>now()) {"pending"} else {"expired"},
+        "invitation_expires_at":r.get::<_,Option<i64>>(13)?,
+        "wg_public_key":r.get::<_,String>(14)?,
         "preshared_key":r.get::<_,bool>(10)?,
         "management":r.get::<_,Option<String>>(11)?.and_then(|s|serde_json::from_str::<Value>(&s).ok()),
     }))})?.collect::<Result<Vec<_>,_>>()?;
@@ -128,140 +130,6 @@ pub async fn devices(State(app): State<App>, headers: HeaderMap) -> ApiResult<Js
     let commands=q.query_map([],|r| Ok(json!({"id":r.get::<_,String>(0)?,"device_id":r.get::<_,String>(1)?,"kind":r.get::<_,String>(2)?,"created":r.get::<_,i64>(3)?,"expires":r.get::<_,i64>(4)?,"status":if r.get::<_,i64>(4)?<now() && ["pending","delivered"].contains(&r.get::<_,String>(5)?.as_str()) {"expired".to_owned()} else {r.get(5)?},"result":r.get::<_,Option<String>>(6)?,"receipt_received_at":r.get::<_,Option<i64>>(7)?,"delivery_uncertain":r.get::<_,String>(5)?=="delivered" && r.get::<_,i64>(4)?<now()})))?.collect::<Result<Vec<_>,_>>()?;
     Ok(Json(
         json!({"devices":rows,"commands":commands,"server_time":now()}),
-    ))
-}
-
-#[derive(Deserialize)]
-pub struct Enrollment {
-    name: String,
-    wg_public_key: String,
-}
-fn wg_key(key: &str) -> bool {
-    STANDARD
-        .decode(key)
-        .is_ok_and(|v| v.len() == 32 && v.iter().any(|b| *b != 0))
-}
-fn sync_peers(app: &App, db: &rusqlite::Connection) -> ApiResult<()> {
-    let dir = app.state_dir.join("wireguard");
-    fs::create_dir_all(&dir)?;
-    private_dir(&dir)?;
-    // Legacy peers stay recorded for recovery/history but may not bypass mandatory PSK protection.
-    let mut q=db.prepare("SELECT wg_key,address,wg_psk FROM devices WHERE revoked=0 AND wg_psk IS NOT NULL AND (public_key IS NOT NULL OR id IN (SELECT device_id FROM enrollments WHERE expires>?))")?;
-    let rows = q.query_map([now()], |r| {
-        Ok((
-            r.get::<_, String>(0)?,
-            r.get::<_, String>(1)?,
-            r.get::<_, String>(2)?,
-        ))
-    })?;
-    let mut text = String::new();
-    for row in rows {
-        let (key, ip, psk) = row?;
-        if !wg_key(&key) || !wg_key(&psk) || ip.parse::<std::net::Ipv4Addr>().is_err() {
-            return Err(bad("Invalid stored peer configuration"));
-        }
-        text.push_str(&format!(
-            "[Peer]\nPublicKey = {key}\nPresharedKey = {psk}\nAllowedIPs = {ip}/32\n\n"
-        ));
-    }
-    let temp = dir.join("peers.next");
-    // Only this process writes this file, while holding the database lock.
-    if temp.exists() {
-        fs::remove_file(&temp)?;
-    }
-    private_write(&temp, text.as_bytes())?;
-    fs::rename(temp, dir.join("peers.conf"))?;
-    Ok(())
-}
-
-pub fn housekeeping(app: &App) -> ApiResult<()> {
-    let db = app.db.lock().unwrap();
-    db.execute("DELETE FROM commands WHERE created<?", [now() - 86400])?;
-    db.execute("DELETE FROM sessions WHERE expires<?", [now()])?;
-    db.execute("DELETE FROM enrollments WHERE expires<?", [now()])?;
-    sync_peers(app, &db)?;
-    Ok(())
-}
-pub async fn create_enrollment(
-    State(app): State<App>,
-    headers: HeaderMap,
-    Json(input): Json<Enrollment>,
-) -> ApiResult<Json<Value>> {
-    require_admin(&app, &headers)?;
-    if input.name.trim().is_empty()
-        || input.name.chars().count() > 60
-        || input.name.chars().any(char::is_control)
-        || !wg_key(&input.wg_public_key)
-    {
-        return Err(bad("Enter a device name and a valid WireGuard public key"));
-    }
-    let endpoint = app.wg_endpoint.clone().ok_or(Error(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "WireGuard gateway is not configured",
-    ))?;
-    let key =
-        fs::read_to_string(app.state_dir.join("wireguard/server-public-key")).map_err(|_| {
-            Error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "WireGuard gateway is not ready",
-            )
-        })?;
-    if !wg_key(key.trim()) {
-        return Err(Error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Invalid gateway public key",
-        ));
-    }
-    let id = uuid::Uuid::new_v4().to_string();
-    let code = token();
-    let mut psk = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut psk);
-    let psk = STANDARD.encode(psk);
-    let db = app.db.lock().unwrap();
-    let existing: bool = db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM devices WHERE wg_key=?)",
-        [&input.wg_public_key],
-        |r| r.get(0),
-    )?;
-    if existing {
-        return Err(bad(
-            "This phone key is already registered; reset pairing on the phone to generate a new one",
-        ));
-    }
-    let used = db
-        .prepare("SELECT address FROM devices")?
-        .query_map([], |r| r.get::<_, String>(0))?
-        .collect::<Result<Vec<_>, _>>()?;
-    let address = (2..=254)
-        .map(|n| format!("10.77.0.{n}"))
-        .find(|ip| !used.contains(ip))
-        .ok_or(bad("Household device limit reached"))?;
-    db.execute(
-        "INSERT INTO devices(id,name,wg_key,address,created,wg_psk) VALUES(?,?,?,?,?,?)",
-        params![
-            id,
-            input.name.trim(),
-            input.wg_public_key,
-            address,
-            now(),
-            psk
-        ],
-    )?;
-    db.execute(
-        "INSERT INTO enrollments(hash,device_id,expires) VALUES(?,?,?)",
-        params![hash(&code), id, now() + 600],
-    )?;
-    sync_peers(&app, &db)?;
-    store::audit(
-        &db,
-        "enrollment.created",
-        Some(&id),
-        "Expires in 10 minutes",
-    )?;
-    Ok(Json(
-        json!({"version":2,"device_id":id,"name":input.name.trim(),"token":code,"expires":now()+600,
-      "wireguard":{"endpoint":endpoint,"server_public_key":key.trim(),"client_public_key":input.wg_public_key,"preshared_key":psk,"address":format!("{address}/32"),"allowed_ip":"10.77.0.1/32"},
-      "api_url":"http://10.77.0.1:8081"}),
     ))
 }
 
@@ -436,124 +304,6 @@ pub async fn telemetry(
     Ok(Json(json!({"accepted":true,"server_time":now()})))
 }
 
-#[derive(Deserialize)]
-pub struct HistoryQuery {
-    from: i64,
-    to: i64,
-    before: Option<i64>,
-    limit: Option<usize>,
-    kind: Option<String>,
-    every: Option<i64>,
-    daily: Option<String>,
-    timezone: Option<String>,
-    tolerance: Option<i64>,
-}
-pub async fn history(
-    State(app): State<App>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-    Query(query): Query<HistoryQuery>,
-) -> ApiResult<Json<Value>> {
-    require_admin(&app, &headers)?;
-    let limit = query.limit.unwrap_or(200);
-    if query.from < 0
-        || query.to < query.from
-        || !(1..=1000).contains(&limit)
-        || query.before.is_some_and(|v| v <= 0)
-    {
-        return Err(bad(
-            "Use an ordered Unix-second range and a limit from 1 to 1000",
-        ));
-    }
-    let kind = query.kind.as_deref().unwrap_or("locations");
-    if !["locations", "state", "network"].contains(&kind) {
-        return Err(bad("Unknown history kind"));
-    }
-    let recurrence = crate::recurrence::Recurrence {
-        every: query.every,
-        daily: query.daily,
-        timezone: query.timezone,
-        tolerance: query.tolerance,
-    };
-    recurrence.validate(query.from, query.to)?;
-    let db = app.db.lock().unwrap();
-    let exists: bool = db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM devices WHERE id=?)",
-        [&id],
-        |r| r.get(0),
-    )?;
-    if !exists {
-        return Err(Error(StatusCode::NOT_FOUND, "Device not found"));
-    }
-    let selected = recurrence.keys(
-        &db,
-        &id,
-        kind,
-        query.from,
-        query.to,
-        query.before.unwrap_or(i64::MAX),
-        limit,
-    )?;
-    let mut rows: Vec<Value> = if let Some(keys) = selected {
-        let mut result = Vec::new();
-        if kind == "locations" {
-            let mut q = db.prepare("SELECT observed_at,received_at,latitude,longitude,accuracy FROM location_history WHERE device_id=? AND observed_at=?")?;
-            for key in keys {
-                result.push(q.query_row(params![id,key], |r| Ok(json!({"observed_at":r.get::<_,i64>(0)?,"received_at":r.get::<_,i64>(1)?,"latitude":r.get::<_,f64>(2)?,"longitude":r.get::<_,f64>(3)?,"accuracy":r.get::<_,f64>(4)?})))?);
-            }
-        } else if kind == "network" {
-            let mut q = db.prepare("SELECT observed_at,received_at,ip,geoip FROM network_history WHERE device_id=? AND observed_at=?")?;
-            for key in keys {
-                result.push(q.query_row(params![id, key], crate::geography::record)?);
-            }
-        } else {
-            let mut q = db.prepare("SELECT id,received_at,battery,charging,device_owner FROM state_history WHERE device_id=? AND id=?")?;
-            for key in keys {
-                result.push(q.query_row(params![id,key], |r| Ok(json!({"id":r.get::<_,i64>(0)?,"received_at":r.get::<_,i64>(1)?,"battery":r.get::<_,u8>(2)?,"charging":r.get::<_,bool>(3)?,"device_owner":r.get::<_,bool>(4)?})))?);
-            }
-        }
-        result
-    } else if kind == "locations" {
-        let mut q = db.prepare("SELECT observed_at,received_at,latitude,longitude,accuracy FROM location_history
-            WHERE device_id=? AND observed_at>=? AND observed_at<=? AND observed_at<? ORDER BY observed_at DESC LIMIT ?")?;
-        q.query_map(params![id,query.from,query.to,query.before.unwrap_or(i64::MAX),limit as i64 + 1], |r| {
-            Ok(json!({"observed_at":r.get::<_,i64>(0)?,"received_at":r.get::<_,i64>(1)?,
-                "latitude":r.get::<_,f64>(2)?,"longitude":r.get::<_,f64>(3)?,"accuracy":r.get::<_,f64>(4)?}))
-        })?.collect::<Result<Vec<_>,_>>()?
-    } else if kind == "network" {
-        let mut q = db.prepare("SELECT observed_at,received_at,ip,geoip FROM network_history WHERE device_id=? AND observed_at>=? AND observed_at<=? AND observed_at<? ORDER BY observed_at DESC LIMIT ?")?;
-        q.query_map(
-            params![
-                id,
-                query.from,
-                query.to,
-                query.before.unwrap_or(i64::MAX),
-                limit as i64 + 1
-            ],
-            crate::geography::record,
-        )?
-        .collect::<Result<Vec<_>, _>>()?
-    } else {
-        let mut q = db.prepare("SELECT id,received_at,battery,charging,device_owner FROM state_history
-            WHERE device_id=? AND received_at>=? AND received_at<=? AND id<? ORDER BY id DESC LIMIT ?")?;
-        q.query_map(params![id,query.from,query.to,query.before.unwrap_or(i64::MAX),limit as i64 + 1], |r| {
-            Ok(json!({"id":r.get::<_,i64>(0)?,"received_at":r.get::<_,i64>(1)?,"battery":r.get::<_,u8>(2)?,
-                "charging":r.get::<_,bool>(3)?,"device_owner":r.get::<_,bool>(4)?}))
-        })?.collect::<Result<Vec<_>,_>>()?
-    };
-    let more = rows.len() > limit;
-    rows.truncate(limit);
-    let next = if more {
-        rows.last()
-            .and_then(|r| r[if kind != "state" { "observed_at" } else { "id" }].as_i64())
-    } else {
-        None
-    };
-    Ok(Json(
-        json!({"kind":kind,"records":rows,"next_before":next,"from":query.from,"to":query.to}),
-    ))
-}
-
 pub async fn clear_location(
     State(app): State<App>,
     headers: HeaderMap,
@@ -577,7 +327,7 @@ fn erase_history(
     require_admin(app, headers)?;
     let mut db = app.db.lock().unwrap();
     let tx = db.transaction()?;
-    let changed = tx.execute("UPDATE devices SET
+    let changed = tx.execute("UPDATE devices SET history_revision=history_revision+1,
         location_floor=MAX(location_floor,COALESCE(json_extract(last_location,'$.observed_at'),0),?),
         last_location=NULL WHERE id=? AND revoked=0 AND public_key IS NOT NULL", params![now(),id])?;
     if changed != 1 {
@@ -784,7 +534,7 @@ pub async fn revoke(
     )?;
     tx.commit()?;
     // Authentication is already revoked if filesystem synchronization fails; housekeeping retries it.
-    sync_peers(&app, &db)?;
+    crate::enrollment::sync_peers(&app, &db)?;
     Ok(Json(json!({"revoked":true})))
 }
 pub async fn audit(State(app): State<App>, headers: HeaderMap) -> ApiResult<Json<Value>> {

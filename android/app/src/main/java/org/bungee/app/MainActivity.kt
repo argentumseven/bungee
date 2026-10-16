@@ -53,6 +53,7 @@ class MainActivity : FragmentActivity() {
     private var backgroundLocation by mutableStateOf(false)
     private var showBackgroundGuide by mutableStateOf(false)
     private var backgroundGuideForRestart by mutableStateOf(false)
+    private var showCommandConsent by mutableStateOf(false)
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         runCatching { ContextCompat.startForegroundService(this, Intent(this, TelemetryService::class.java).setAction("USER_START")) }
             .onFailure { error = "Android did not allow sharing to start. Keep Bungee open and try again." }
@@ -210,7 +211,21 @@ class MainActivity : FragmentActivity() {
                             }
                         }
                         HorizontalDivider(color = Color(0xFFF4F1F7))
-                        SettingRow("Household commands", "Sound, recovery messages & permitted locking", commands) { commands = it; identity.allowCommands = it }
+                        SettingRow("Household commands", "Off until you approve sound, messages, fresh GPS & optional locking", commands) { enabled ->
+                            if (enabled) showCommandConsent = true
+                            else scope.launch {
+                                try {
+                                    withContext(Dispatchers.IO) { identity.allowCommands = false }
+                                    commands = false
+                                    getSystemService(NotificationManager::class.java).cancel(2)
+                                    withContext(Dispatchers.IO) { identity.recoveryMessage = null }
+                                } catch (e: Exception) {
+                                    if (e is CancellationException) throw e
+                                    commands = identity.allowCommands
+                                    error = "Command consent or message cleanup failed. Force-stop Bungee in Android Settings before restarting."
+                                }
+                            }
+                        }
                         HorizontalDivider(color = Color(0xFFF4F1F7))
                         SettingRow("Resume after restart", "After first unlock; automatic GPS needs background location", resume) { enabled -> unlock {
                             if (enabled && locate && !backgroundLocation) { backgroundGuideForRestart = true; showBackgroundGuide = true }
@@ -219,7 +234,11 @@ class MainActivity : FragmentActivity() {
                         if (locate && !backgroundLocation) TextButton(onClick = { backgroundGuideForRestart = false; showBackgroundGuide = true }) { Text("Allow GPS after restart") }
                         HorizontalDivider(color = Color(0xFFF4F1F7))
                         SettingRow("Lock this app", "Use your phone’s secure screen lock", lockEnabled) { enabled ->
-                            unlock { identity.appLock = enabled; lockEnabled = enabled; locked = false }
+                            unlock {
+                                runCatching { identity.appLock = enabled }
+                                    .onSuccess { lockEnabled = enabled; locked = false }
+                                    .onFailure { lockEnabled = identity.appLock; locked = true; error = "App-lock preference was not saved. This session remains locked; fix storage and retry before relying on restart protection." }
+                            }
                         }
                     }
                 }
@@ -245,6 +264,21 @@ class MainActivity : FragmentActivity() {
             }
             Text("Early release · test device recommended · no Google Play services required", color = Color(0xFFB0ABB9), fontSize = 9.sp, modifier = Modifier.padding(bottom = 22.dp))
         }
+        if (showCommandConsent) AlertDialog(onDismissRequest = { showCommandConsent = false }, title = { Text("Allow household recovery commands?") }, text = {
+            Text("Your home server administrator can request a fresh GPS fix, play or stop a sound, and display or clear a recovery message. Screen locking additionally needs your separate, removable Android administrator approval. Lost mode can apply those permitted actions, including an existing request after you enable this. GPS sharing alone does not grant these commands. You can turn them off here or stop Bungee through local recovery or Android Settings.")
+        }, confirmButton = { TextButton(onClick = {
+            showCommandConsent = false
+            unlock {
+                scope.launch {
+                    try { withContext(Dispatchers.IO) { identity.allowCommands = true }; commands = true }
+                    catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        commands = identity.allowCommands
+                        error = "Command consent was not saved. Sharing was asked to stop; use Android force-stop before restarting."
+                    }
+                }
+            }
+        }) { Text("Approve with phone unlock") } }, dismissButton = { TextButton(onClick = { showCommandConsent = false }) { Text("Keep commands off") } })
         if (showBackgroundGuide) AlertDialog(onDismissRequest = { showBackgroundGuide = false }, title = { Text("GPS after restart") }, text = {
             Text("Bungee records your GPS trail for your home server. To resume GPS after reboot and first unlock, Android requires Location → Allow all the time, with precise location enabled. This is optional and reversible in Android Settings. Without it, automatic restart can reconnect but GPS stays paused until you open Bungee and resume GPS. No data is available before the first unlock.")
         }, confirmButton = { TextButton(onClick = {
@@ -258,7 +292,7 @@ class MainActivity : FragmentActivity() {
             }
         })
         if (showPairing) AlertDialog(onDismissRequest = { if (!busy) showPairing = false }, title = { Text("Connect to your home") }, text = {
-            Column { Text("This creates a private tunnel and shares your phone’s location and battery with the server you chose. Timestamped GPS history stays on that server until explicitly erased or the device is revoked. Unsent GPS fixes are encrypted on this phone, up to 10,080 points. Continue only if you consent.", fontSize = 12.sp, lineHeight = 20.sp); OutlinedTextField(value = pairingText, onValueChange = { pairingText = it }, label = { Text("Enrollment invitation") }, modifier = Modifier.fillMaxWidth().padding(top = 16.dp), minLines = 4); error?.let { Text(it, color = Color(0xFFB97777), fontSize = 11.sp) } }
+            Column { Text("This creates a private tunnel and shares your phone’s location and battery with the server you chose. Timestamped GPS history stays on that server until explicitly erased or the device is revoked. Unsent GPS fixes are encrypted on this phone, up to 10,080 points. Household recovery commands start off and need separate approval after pairing. Continue only if you consent.", fontSize = 12.sp, lineHeight = 20.sp); OutlinedTextField(value = pairingText, onValueChange = { pairingText = it }, label = { Text("Enrollment invitation") }, modifier = Modifier.fillMaxWidth().padding(top = 16.dp), minLines = 4); error?.let { Text(it, color = Color(0xFFB97777), fontSize = 11.sp) } }
         }, confirmButton = { TextButton(onClick = { pair(pairingText) }, enabled = !busy) { Text("Agree & pair") } }, dismissButton = { TextButton(onClick = { showPairing = false }, enabled = !busy) { Text("Cancel") } })
         if (confirmReset) AlertDialog(onDismissRequest = { confirmReset = false }, title = { Text("Unpair this phone?") }, text = { Text("This erases local keys and stops sharing. Also revoke this device on the server to erase its location history and remove the peer.") }, confirmButton = { TextButton(onClick = { unlock {
             if (ManagementAgent.isOwner(this@MainActivity)) { error = "Use Bungee recovery first. Do not discard the identity while device ownership remains."; return@unlock }

@@ -50,4 +50,10 @@ A delayed, freshly signed receipt may reconcile a command retained by the server
 - An authenticated contact updates `last_contact` independently of `last_seen` (latest accepted telemetry). A short command-only connection can establish presence while the battery reading remains older; the dashboard's battery tooltip identifies the saved telemetry age.
 - A configured tunnel is not proof of delivery. Records become acknowledged only on an accepted home-server response.
 
-Update the **server first, then the APK** to alpha.9. New phones report fields that older servers reject; the queue is retained if that mismatch occurs. Stable local APK signing is still required for reliable in-place updates. No production deployment, physical DDIL/jamming trial or real GrapheneOS background/sleep validation is claimed. See [VALIDATION.md](VALIDATION.md) for automated evidence and [SAFETY.md](SAFETY.md) for the recovery boundary.
+Update the **server first, then the APK** to alpha.10. New phones report fields that older servers reject; the queue is retained if that mismatch occurs. Stable local APK signing is still required for reliable in-place updates. No production deployment, physical DDIL/jamming trial or real GrapheneOS background/sleep validation is claimed. See [VALIDATION.md](VALIDATION.md) for automated evidence and [SAFETY.md](SAFETY.md) for the recovery boundary.
+
+## Explicit command consent and invitation recovery (alpha.10)
+
+Pairing authorizes telemetry; household commands start off until separately approved on the phone with local unlock. Upgrade ignores the earlier implicit-consent key. The command guard is rechecked at actuation, and failed persistence vetoes commands in the current process while attempting an independent stop. No lasting stop can be promised if storage rejects every write; use Android force-stop as shown by the error. Lost-mode requests cannot override that consent.
+
+A never-enrolled invitation may be reissued after expiry, a lost response or gateway publication failure with the same phone key/address. Tokens and PSKs rotate; paired signing identities cannot be rebound. Transactional staging/publication and resource-bounded CSV are described in [the second review](REVIEW-2026-10-SECOND.md).

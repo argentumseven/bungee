@@ -69,3 +69,7 @@ Network callbacks, monotonic retries, independent GPS sampling and bounded uploa
 ## Restart location permission
 
 Automatic GPS recovery after first unlock requires precise and background location permission, explicitly granted through Android Settings, plus the independent restart opt-in. The grant is optional and can be revoked normally. Without it, automatic restart can reconnect in a connection-only foreground service and reports GPS paused; open Bungee and resume GPS from the visible screen. A blocked foreground-service start posts an attention notification when notifications are allowed. No identity or GPS access is promised before first unlock. Physical GrapheneOS cold-boot/lock/Doze acceptance is still open; see [the review follow-up](REVIEW-2026-10.md).
+
+## Command consent and failed persistence (alpha.10)
+
+Household commands, including remote fresh-location requests, are off until separately explained/approved with local phone unlock. Old implicit command-consent preferences do not authorize the new build. Permission checks and a shared guard precede command/lost-mode actuation. Consent or app-lock writes must succeed before the UI reports success. A failed command write vetoes the current process and attempts independent local-stop persistence/service shutdown. If storage rejects that too, the UI directs the user to Android force-stop; restart persistence is not claimed. App-lock write failures keep the current session locked and expose an error. See [the second review](REVIEW-2026-10-SECOND.md) for physical fault tests still required.

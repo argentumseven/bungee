@@ -60,6 +60,20 @@ pub fn now() -> i64 {
         .unwrap()
         .as_secs() as i64
 }
+pub fn device_bind(value: &str) -> Result<std::net::SocketAddr, &'static str> {
+    let bind: std::net::SocketAddr = value
+        .parse()
+        .map_err(|_| "BUNGEE_DEVICE_BIND must be a numeric loopback or 10.77.0.1 address")?;
+    if bind.port() == 0
+        || !(bind.ip().is_loopback()
+            || (bind.ip() == IpAddr::from([10, 77, 0, 1]) && bind.port() == 8081))
+    {
+        return Err(
+            "BUNGEE_DEVICE_BIND must use a nonzero loopback port or the fixed WireGuard API 10.77.0.1:8081; wildcard/public/LAN binds are forbidden",
+        );
+    }
+    Ok(bind)
+}
 pub fn token() -> String {
     let mut b = [0u8; 32];
     OsRng.fill_bytes(&mut b);

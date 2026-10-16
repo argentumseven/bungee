@@ -155,6 +155,7 @@ dependencies = [
  "base64",
  "chrono",
  "chrono-tz",
+ "futures-core",
  "hex",
  "hickory-proto",
  "maxminddb",

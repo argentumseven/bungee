@@ -1,12 +1,15 @@
+import groovy.json.JsonSlurper
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+val bungeeRelease = JsonSlurper().parse(rootProject.file("../release.json")) as Map<*, *>
 android {
     namespace = "org.bungee.app"
     compileSdk = 36
-    defaultConfig { applicationId = "org.bungee.app"; minSdk = 31; targetSdk = 36; versionCode = 9; versionName = "0.1.0-alpha.9"; ndk { abiFilters += setOf("arm64-v8a", "x86_64") } }
+    defaultConfig { applicationId = "org.bungee.app"; minSdk = 31; targetSdk = 36; versionCode = (bungeeRelease["android_version_code"] as Number).toInt(); versionName = bungeeRelease["version"] as String; ndk { abiFilters += setOf("arm64-v8a", "x86_64") } }
     buildFeatures { compose = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }

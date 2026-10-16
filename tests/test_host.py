@@ -42,6 +42,18 @@ class FakeEngine:
 
 
 class SetupTests(unittest.TestCase):
+    def test_shared_release_version_survives_standalone_helper_install(self):
+        manifest = json.loads((host.SOURCE / 'release.json').read_text())
+        self.assertEqual(host.VERSION, manifest['version'])
+        host.version(manifest['version'])
+        self.assertGreater(manifest['android_version_code'], 0)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for source, target in [(host.HERE / 'bungee-host.py', 'bungee-host.py'), (host.module_path, 'network_config.py'), (host.release_path, 'release.json')]:
+                (root / target).write_text(source.read_text())
+            script = "import importlib.util,sys; s=importlib.util.spec_from_file_location('installed',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.VERSION)"
+            result = subprocess.check_output(['python3', '-c', script, str(root / 'bungee-host.py')], text=True)
+            self.assertEqual(result.strip(), host.VERSION)
     def test_bare_hosts_canonical_prefixes_ipv6_and_no_shell_input(self):
         self.assertEqual(host.network.admin_networks('192.168.1.15,192.168.1.99/24 fd12::4'), ['192.168.1.15/32', '192.168.1.0/24', 'fd12::4/128'])
         for value in ['', [], '0.0.0.0/0', '::/0', '128.0.0.0/1', '192.168.1', '::ffff:192.168.1.1', '192.168.1.1;id', 'fe80::1%eth0', '224.0.0.0/8']:

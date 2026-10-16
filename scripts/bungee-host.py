@@ -24,7 +24,9 @@ spec = importlib.util.spec_from_file_location('network_config', module_path)
 network = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(network)
 REGISTRY = 'ghcr.io/argentumseven/bungee'
-VERSION = '0.1.0-alpha.8'
+release_path = HERE / 'release.json' if (HERE / 'release.json').exists() else SOURCE / 'release.json'
+RELEASE = json.loads(release_path.read_text())
+VERSION = RELEASE['version']
 PRIVATE_ENV = {**{name: '' for name in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy')}, 'NO_PROXY': '*', 'no_proxy': '*'}
 VOLUMES = ('server-data', 'gateway-private', 'gateway-peers', 'caddy-data', 'caddy-config')
 
@@ -413,10 +415,10 @@ def install(root, config):
     with (root / 'host.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         atomic(root / 'control/status', 'closed\n')
-        for source, target in ((Path(__file__), root / 'bungee-host.py'), (module_path, root / 'network_config.py')):
+        for source, target in ((Path(__file__), root / 'bungee-host.py'), (module_path, root / 'network_config.py'), (release_path, root / 'release.json')):
             atomic(target, source.read_text())
         images = {name: json.loads(run(['docker', 'image', 'inspect', f'bungee-{name}:{install_tag}']))[0]['Id'] for name in ('gateway', 'server', 'web')}
-        metadata = {'format': 1, 'host_api': 1, 'data_contract': 1, 'version': VERSION, 'published_at': 0, 'images': images}
+        metadata = {'format': 1, 'host_api': RELEASE['host_api'], 'data_contract': RELEASE['data_contract'], 'version': VERSION, 'published_at': 0, 'images': images}
         host = Host(root)
         generation = host.stage(config, metadata)
         atomic(root / 'current.json', {'generation': generation})

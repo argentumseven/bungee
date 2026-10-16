@@ -27,3 +27,7 @@ New OS-level controls must remain unavailable if their failure can leave a persi
 ## Alpha.9 review follow-up
 
 The independent review confirmed defects in GPS restart permissions, full-blob offline storage, pre-authentication limiter allocation, receipt settlement, offered-command terminology, authentication cooldown and proxy login accounting. Source corrections and regression checks are described in [REVIEW-2026-10.md](REVIEW-2026-10.md). Physical GrapheneOS acceptance, publisher-signature enforcement, encrypted snapshot archives, endpoint-change recovery, scalable CSV streaming and accessibility validation remain open. Indefinite server history remains the explicitly requested policy.
+
+## Alpha.10 second-review follow-up
+
+Checked, explicit command consent; recoverable invitation lifecycle/peer publication; strict device API bind; bounded server-streamed CSV; and coordinated release metadata are implemented with regression evidence in [REVIEW-2026-10-SECOND.md](REVIEW-2026-10-SECOND.md). Streaming CSV is no longer an unbounded browser-array feature. Physical GrapheneOS, update publisher authentication, encrypted snapshot archives, administrator roles/MFA, endpoint changes and accessibility/endurance remain open.

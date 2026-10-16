@@ -9,6 +9,7 @@ FROM rust:1.90-slim-bookworm AS server
 RUN apt-get update && apt-get install --yes --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY server/Cargo.toml server/Cargo.lock ./server/
+COPY release.json ./
 COPY server/src ./server/src
 RUN --mount=type=secret,id=build_ca if [ -s /run/secrets/build_ca ]; then export CARGO_HTTP_CAINFO=/run/secrets/build_ca; fi; cargo build --release --locked --manifest-path server/Cargo.toml -j 4
 

@@ -48,8 +48,10 @@ object ManagementAgent {
         if (policy.lostMode && !identity.allowCommands) errors.put("Lost mode needs local recovery consent")
         if (lost) {
             if (!state.optBoolean("lost_mode_active") || state.optLong("revision", -1) != revision) {
-                identity.recoveryMessage = policy.recoveryMessage
-                runCatching { recoveryNotification(context, policy.recoveryMessage) }.onFailure { errors.put("Recovery notification could not be displayed") }
+                runCatching { identity.ifCommandsAllowed {
+                    identity.recoveryMessage = policy.recoveryMessage
+                    recoveryNotification(context, policy.recoveryMessage)
+                } }.onFailure { errors.put("Recovery notification could not be displayed") }
             }
             if (dpm.isAdminActive(admin(context))) {
                 if (state.optLong("locked_revision", -1) != revision) {
@@ -57,7 +59,7 @@ object ManagementAgent {
                         // Persist the attempt before actuating: a crash must not repeat this revision's lock.
                         state.put("locked_revision", revision)
                         identity.saveState("management", state)
-                        LocalSafety.ifAllowed(context) { dpm.lockNow() }
+                        identity.ifCommandsAllowed { LocalSafety.ifAllowed(context) { dpm.lockNow() } }
                     }.onFailure { errors.put("Lost mode could not lock the screen; this revision will not retry") }
                 }
             } else errors.put("Optional removable device administration is needed to lock")

@@ -1,10 +1,12 @@
 package org.bungee.app
 
 import android.content.Context
+import android.content.Intent
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import com.wireguard.crypto.KeyPair
+import com.wireguard.crypto.Key
 import org.json.JSONObject
 import org.json.JSONArray
 import java.security.KeyPairGenerator
@@ -21,37 +23,44 @@ class Identity(context: Context) {
     private val appContext = context.applicationContext
     private val prefs = context.getSharedPreferences("identity", Context.MODE_PRIVATE)
     private val keys = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-    init {
+    init { synchronized(identityInitialization) {
+        val bound = prefs.getBoolean("enrolled", false) || prefs.contains("bundle")
         if (!keys.containsAlias("bungee-signing")) {
+            check(!bound) { "Existing signing key is unavailable; use local recovery" }
             KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore").apply {
                 initialize(KeyGenParameterSpec.Builder("bungee-signing", KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY)
                     .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1")).setDigests(KeyProperties.DIGEST_SHA256).build())
             }.generateKeyPair()
         }
         if (!keys.containsAlias("bungee-storage")) {
+            check(!prefs.all.keys.any { it == "wg_private" || it == "bundle" || it == "recovery_message" || it == "location_queue" || it == "gps_backlog_v2" || it == "receipt_outbox" || it.startsWith("state_") || it.startsWith("receipt_") }) { "Existing encryption key is unavailable; original records preserved" }
             KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
                 init(KeyGenParameterSpec.Builder("bungee-storage", KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
                     .setKeySize(256).setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build())
             }.generateKey()
         }
         if (!prefs.contains("wg_private")) {
+            check(!bound) { "Existing WireGuard key is unavailable; use local recovery" }
             val pair = KeyPair()
-            putSecret("wg_private", pair.privateKey.toBase64())
-            prefs.edit().putString("wg_public", pair.publicKey.toBase64()).commit()
+            check(prefs.edit().putString("wg_private", encrypted(pair.privateKey.toBase64())).putString("wg_public", pair.publicKey.toBase64()).commit()) { "Could not persist the WireGuard key pair" }
+        } else {
+            val derived = KeyPair(Key.fromBase64(wgPrivate)).publicKey.toBase64()
+            if (prefs.getString("wg_public", null) != derived)
+                check(prefs.edit().putString("wg_public", derived).commit()) { "Could not repair the public key from its existing private key" }
         }
-    }
+    } }
     val wgPublic: String get() = prefs.getString("wg_public", "")!!
     val wgPrivate: String get() = secret("wg_private")!!
     val publicKey: String get() = encode(keys.getCertificate("bungee-signing").publicKey.encoded)
     var bundle: String?
         get() = secret("bundle")
-        set(value) { if (value == null) prefs.edit().remove("bundle").commit() else putSecret("bundle", value) }
+        set(value) { if (value == null) check(prefs.edit().remove("bundle").commit()) { "Could not clear pairing invitation" } else putSecret("bundle", value) }
     var enrolled: Boolean
         get() = prefs.getBoolean("enrolled", false)
         set(value) { check(prefs.edit().putBoolean("enrolled", value).commit()) { "Could not persist enrollment state" } }
     var appLock: Boolean
-        get() = prefs.getBoolean("app_lock", false)
-        set(value) { prefs.edit().putBoolean("app_lock", value).commit() }
+        get() = appLockPreference.read { prefs.getBoolean("app_lock", false) }
+        set(value) { appLockPreference.write { prefs.edit().putBoolean("app_lock", value).commit() } }
     var allowLocate: Boolean
         get() = prefs.getBoolean("allow_locate", true)
         set(value) {
@@ -66,13 +75,26 @@ class Identity(context: Context) {
             }
         }
     var allowCommands: Boolean
-        get() = prefs.getBoolean("allow_commands", true)
-        set(value) { prefs.edit().putBoolean("allow_commands", value).commit() }
+        get() = commandPreference.read { prefs.getBoolean(COMMAND_CONSENT, false) }
+        set(value) {
+            try {
+                check(!value || !LocalSafety.isStopped(appContext)) { "Use local recovery before enabling commands" }
+                commandPreference.write { prefs.edit().putBoolean(COMMAND_CONSENT, value).commit() }
+            }
+            catch (e: Exception) {
+                // Independent, best-effort durable stop. If storage prevents that too,
+                // the UI explicitly directs the owner to Android force-stop.
+                runCatching { LocalSafety.setStopped(appContext, true) }
+                runCatching { appContext.stopService(Intent(appContext, TelemetryService::class.java)) }
+                throw e
+            }
+        }
+    fun <T> ifCommandsAllowed(action: () -> T): T = commandPreference.ifEnabled({ prefs.getBoolean(COMMAND_CONSENT, false) }, action)
     internal fun state(name: String): JSONObject = secret("state_$name")?.let(::JSONObject) ?: JSONObject()
     internal fun saveState(name: String, value: JSONObject) = putSecret("state_$name", value.toString())
     var recoveryMessage: String?
         get() = secret("recovery_message")
-        set(value) { if (value == null) prefs.edit().remove("recovery_message").commit() else putSecret("recovery_message", value) }
+        set(value) { if (value == null) check(prefs.edit().remove("recovery_message").commit()) { "Could not clear recovery message" } else putSecret("recovery_message", value) }
     private fun newJournal() = GpsJournal(GpsStorage.database(appContext), GpsCipher { keys.getKey("bungee-storage", null) as SecretKey })
     private fun journal(): GpsJournal {
         val journal = newJournal()
@@ -88,7 +110,7 @@ class Identity(context: Context) {
         return journal
     }
     fun queueLocation(point: JSONObject) = synchronized(GpsStorage.lock) {
-        if (!allowLocate || !GpsBacklog.usable(point)) return
+        if (!enrolled || !allowLocate || !GpsBacklog.usable(point)) return
         journal().append(point)
     }
     fun pendingLocations(limit: Int = 100, before: Long = Long.MAX_VALUE): JSONArray = synchronized(GpsStorage.lock) { if (!allowLocate) JSONArray() else journal().batch(limit, before) }
@@ -112,17 +134,18 @@ class Identity(context: Context) {
     fun sign(text: String): String = Signature.getInstance("SHA256withECDSA").run {
         initSign(keys.getKey("bungee-signing", null) as java.security.PrivateKey); update(text.toByteArray(Charsets.UTF_8)); encode(sign())
     }
-    fun reset() = synchronized(GpsStorage.lock) {
+    fun reset() = synchronized(identityInitialization) { synchronized(GpsStorage.lock) {
         newJournal().clear()
         check(prefs.edit().clear().commit()) { "Could not erase local identity" }
         keys.deleteEntry("bungee-signing"); keys.deleteEntry("bungee-storage")
-    }
-    private fun putSecret(name: String, text: String) {
+    } }
+    private fun encrypted(text: String): String {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, keys.getKey("bungee-storage", null) as SecretKey)
         val data = cipher.iv + cipher.doFinal(text.toByteArray(Charsets.UTF_8))
-        check(prefs.edit().putString(name, encode(data)).commit()) { "Could not persist encrypted identity" }
+        return encode(data)
     }
+    private fun putSecret(name: String, text: String) { check(prefs.edit().putString(name, encrypted(text)).commit()) { "Could not persist encrypted identity" } }
     private fun secret(name: String): String? = prefs.getString(name, null)?.let {
         val data = Base64.decode(it, Base64.NO_WRAP)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -130,6 +153,10 @@ class Identity(context: Context) {
         cipher.doFinal(data.copyOfRange(12, data.size)).toString(Charsets.UTF_8)
     }
     companion object {
+        private const val COMMAND_CONSENT = "recovery_command_consent_v2"
+        private val identityInitialization = Any()
+        private val commandPreference = CheckedPreference(failureValue = false)
+        private val appLockPreference = CheckedPreference(failureValue = true)
         fun encode(bytes: ByteArray): String = Base64.encodeToString(bytes, Base64.NO_WRAP)
         /** Read legacy recovery records without generating/replacing a key or changing identity state. */
         fun readExistingState(context: Context, name: String): JSONObject {

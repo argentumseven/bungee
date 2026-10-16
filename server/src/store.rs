@@ -71,6 +71,12 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
         tx.execute("ALTER TABLE devices ADD COLUMN last_contact INTEGER", [])?;
         tx.execute("UPDATE devices SET last_contact=last_seen", [])?;
     }
+    if !columns.iter().any(|c| c == "history_revision") {
+        tx.execute(
+            "ALTER TABLE devices ADD COLUMN history_revision INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
     if !columns.iter().any(|c| c == "last_location") {
         tx.execute("ALTER TABLE devices ADD COLUMN last_location TEXT", [])?;
         tx.execute("UPDATE devices SET last_location=json_extract(telemetry,'$.location')
