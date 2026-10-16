@@ -65,9 +65,11 @@ def bracket(ip):
 
 
 def validate(config):
-    if not isinstance(config, dict) or set(config) != {'wg_port', 'web_port', 'endpoint_ip', 'web_host', 'bind_ip', 'admin_subnets', 'auto_updates', 'channel'}:
+    if not isinstance(config, dict) or set(config) - {'geodata'} != {'wg_port', 'web_port', 'endpoint_ip', 'web_host', 'bind_ip', 'admin_subnets', 'auto_updates', 'channel'}:
         raise ValueError("Configuration has missing or unknown fields")
     result = dict(config)
+    if 'geodata' in config and (not isinstance(config['geodata'], str) or not re.fullmatch(r'[a-f0-9]{24}', config['geodata'])):
+        raise ValueError('Invalid local dataset generation')
     result['wg_port'] = port(config['wg_port'], wireguard=True)
     result['web_port'] = port(config['web_port'])
     result['endpoint_ip'] = address(config['endpoint_ip'], endpoint=True)

@@ -46,6 +46,12 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
         first_at INTEGER NOT NULL,last_at INTEGER NOT NULL, answers INTEGER NOT NULL,nxdomain INTEGER NOT NULL,
         errors INTEGER NOT NULL,a INTEGER NOT NULL,aaaa INTEGER NOT NULL,https INTEGER NOT NULL,other INTEGER NOT NULL,
         PRIMARY KEY(device_id,bucket,domain));")?;
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS network_history(
+        device_id TEXT NOT NULL REFERENCES devices(id), observed_at INTEGER NOT NULL,
+        received_at INTEGER NOT NULL, ip TEXT NOT NULL, geoip TEXT,
+        PRIMARY KEY(device_id,observed_at));",
+    )?;
     // Upgrade the initial schema without losing an offline phone's existing fix.
     let columns = tx
         .prepare("PRAGMA table_info(devices)")?
@@ -69,6 +75,12 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
     }
     if !columns.iter().any(|c| c == "wg_psk") {
         tx.execute("ALTER TABLE devices ADD COLUMN wg_psk TEXT", [])?;
+    }
+    if !columns.iter().any(|c| c == "network_floor") {
+        tx.execute(
+            "ALTER TABLE devices ADD COLUMN network_floor INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
     }
     if !columns.iter().any(|c| c == "management_report") {
         tx.execute("ALTER TABLE devices ADD COLUMN management_report TEXT", [])?;

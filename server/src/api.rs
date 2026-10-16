@@ -91,6 +91,9 @@ pub async fn logout(State(app): State<App>, headers: HeaderMap) -> ApiResult<imp
 
 pub async fn devices(State(app): State<App>, headers: HeaderMap) -> ApiResult<Json<Value>> {
     require_admin(&app, &headers)?;
+    if let Err(e) = crate::geography::collect(&app) {
+        tracing::error!(error=%e.1, "Network observation unavailable; saved device state remains accessible");
+    }
     let db = app.db.lock().unwrap();
     // Recovery data survives long outages. Freshness is described by timestamps, not deletion.
     let mut q=db.prepare("SELECT id,name,address,created,last_seen,revoked,telemetry,capabilities,public_key IS NOT NULL,last_location,wg_psk IS NOT NULL,management_report FROM devices ORDER BY created")?;
@@ -105,6 +108,7 @@ pub async fn devices(State(app): State<App>, headers: HeaderMap) -> ApiResult<Js
         "id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"address":r.get::<_,String>(2)?,
         "created":r.get::<_,i64>(3)?,"last_seen":r.get::<_,Option<i64>>(4)?,"revoked":r.get::<_,bool>(5)?,
         "telemetry":telemetry,
+        "network":crate::geography::latest(&db,&r.get::<_,String>(0)?)?,
         "capabilities":serde_json::from_str::<Vec<String>>(&r.get::<_,String>(7)?).unwrap_or_default().into_iter().filter(|kind|kind!="reboot").collect::<Vec<_>>(),
         "enrolled":r.get::<_,bool>(8)?,
         "preshared_key":r.get::<_,bool>(10)?,
@@ -452,7 +456,7 @@ pub async fn history(
         ));
     }
     let kind = query.kind.as_deref().unwrap_or("locations");
-    if !["locations", "state"].contains(&kind) {
+    if !["locations", "state", "network"].contains(&kind) {
         return Err(bad("Unknown history kind"));
     }
     let recurrence = crate::recurrence::Recurrence {
@@ -487,6 +491,11 @@ pub async fn history(
             for key in keys {
                 result.push(q.query_row(params![id,key], |r| Ok(json!({"observed_at":r.get::<_,i64>(0)?,"received_at":r.get::<_,i64>(1)?,"latitude":r.get::<_,f64>(2)?,"longitude":r.get::<_,f64>(3)?,"accuracy":r.get::<_,f64>(4)?})))?);
             }
+        } else if kind == "network" {
+            let mut q = db.prepare("SELECT observed_at,received_at,ip,geoip FROM network_history WHERE device_id=? AND observed_at=?")?;
+            for key in keys {
+                result.push(q.query_row(params![id, key], crate::geography::record)?);
+            }
         } else {
             let mut q = db.prepare("SELECT id,received_at,battery,charging,device_owner FROM state_history WHERE device_id=? AND id=?")?;
             for key in keys {
@@ -501,6 +510,19 @@ pub async fn history(
             Ok(json!({"observed_at":r.get::<_,i64>(0)?,"received_at":r.get::<_,i64>(1)?,
                 "latitude":r.get::<_,f64>(2)?,"longitude":r.get::<_,f64>(3)?,"accuracy":r.get::<_,f64>(4)?}))
         })?.collect::<Result<Vec<_>,_>>()?
+    } else if kind == "network" {
+        let mut q = db.prepare("SELECT observed_at,received_at,ip,geoip FROM network_history WHERE device_id=? AND observed_at>=? AND observed_at<=? AND observed_at<? ORDER BY observed_at DESC LIMIT ?")?;
+        q.query_map(
+            params![
+                id,
+                query.from,
+                query.to,
+                query.before.unwrap_or(i64::MAX),
+                limit as i64 + 1
+            ],
+            crate::geography::record,
+        )?
+        .collect::<Result<Vec<_>, _>>()?
     } else {
         let mut q = db.prepare("SELECT id,received_at,battery,charging,device_owner FROM state_history
             WHERE device_id=? AND received_at>=? AND received_at<=? AND id<? ORDER BY id DESC LIMIT ?")?;
@@ -512,14 +534,8 @@ pub async fn history(
     let more = rows.len() > limit;
     rows.truncate(limit);
     let next = if more {
-        rows.last().and_then(|r| {
-            r[if kind == "locations" {
-                "observed_at"
-            } else {
-                "id"
-            }]
-            .as_i64()
-        })
+        rows.last()
+            .and_then(|r| r[if kind != "state" { "observed_at" } else { "id" }].as_i64())
     } else {
         None
     };
@@ -560,6 +576,11 @@ fn erase_history(
     tx.execute("DELETE FROM location_history WHERE device_id=?", [id])?;
     if include_state {
         tx.execute("DELETE FROM state_history WHERE device_id=?", [id])?;
+        tx.execute(
+            "UPDATE devices SET network_floor=MAX(network_floor,COALESCE((SELECT MAX(observed_at) FROM network_history WHERE device_id=?),0),?) WHERE id=?",
+            params![id, now(), id],
+        )?;
+        tx.execute("DELETE FROM network_history WHERE device_id=?", [id])?;
     }
     store::audit(
         &tx,
@@ -695,6 +716,7 @@ pub async fn revoke(
     tx.execute("DELETE FROM commands WHERE device_id=?", [&id])?;
     tx.execute("DELETE FROM location_history WHERE device_id=?", [&id])?;
     tx.execute("DELETE FROM state_history WHERE device_id=?", [&id])?;
+    tx.execute("DELETE FROM network_history WHERE device_id=?", [&id])?;
     tx.execute("DELETE FROM dns_summary WHERE device_id=?", [&id])?;
     tx.execute("DELETE FROM device_policies WHERE device_id=?", [&id])?;
     store::audit(

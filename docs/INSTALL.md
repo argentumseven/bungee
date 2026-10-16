@@ -49,6 +49,10 @@ For unattended answers, use `--config /secure/bungee.json`; all fields below are
 
 These are documentation addresses. Substitute your own reachable endpoint and administrator networks. An explicit config file authorizes unattended application without the terminal confirmation.
 
+## Optional private maps and GeoIP
+
+The installed stack starts without bundled production datasets. Use `bungee-host.py datasets --maps /path/region.mbtiles --geoip /path/City.mmdb` to validate/import local OpenStreetMap raster tiles and a free local GeoIP City database through the same rollback transaction. No provider credentials or runtime lookups are needed. See [formats, free sources, privacy and dataset recovery](GEOGRAPHY.md).
+
 ## Network restrictions and local repair
 
 The gateway firewall accepts dashboard TCP 443 inside its namespace only from your administrator prefixes. Docker maps your chosen host HTTPS port to that listener. Caddy independently checks the actual remote connection address before proxying dashboard/API requests. Forwarded-IP headers do not grant access. The private health listener binds only `127.0.0.1:8090`; internal APIs and that listener are not published.
@@ -96,6 +100,6 @@ Required server/web, Android, network and updater checks gate tagged image publi
 
 Bootstrap trust is the checkout you inspect. Subsequent updates trust Docker's HTTPS registry authentication, the fixed Bungee GHCR repositories and their authorized publisher. Digests prevent references changing within a transaction. **Client-side publisher-signature/attestation enforcement is not implemented.** CI provenance metadata does not substitute for verifying it. A compromised publisher/registry account is outside this trust boundary. Host-tool changes and incompatible migrations require a reviewed manual update.
 
-Only the host daemon contacts GHCR/download services. They see ordinary download metadata, including server IP and requested artifacts; no phone database, telemetry, PSK, password or CA key is uploaded. App runtime egress stays denied. This is not anonymous updating or zero provider traffic from the entire host. Disable checks/use an independently managed offline process if download metadata is unacceptable.
+Only the host daemon contacts GHCR/download services. They see ordinary download metadata, including server IP and requested artifacts; no phone database, telemetry, PSK, password or CA key is uploaded. App runtime egress stays denied. Compose explicitly clears Docker-injected runtime proxy settings; local health probes also disable proxies. Build/download proxy settings are separate. This is not anonymous updating or zero provider traffic from the entire host. Disable checks/use an independently managed offline process if download metadata is unacceptable.
 
 The project currently has previews; stable exists only after an intentionally published stable release. Missing/unreachable/private artifacts fail without stopping the current stack. The publisher must verify package visibility, or operators authenticate Docker locally; never put registry credentials into app configuration/chat. Hosted publication, full kernel-WireGuard/systemd installation and physical GrapheneOS behavior are not proven by this cloud's tests. See [VALIDATION.md](VALIDATION.md).

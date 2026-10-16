@@ -34,6 +34,12 @@ import {
 import QRCode from "qrcode";
 import "./style.css";
 import { api } from "./api";
+import {
+  PrivateMap,
+  NetworkCard,
+  geoLabel,
+  type NetworkObservation,
+} from "./PrivateMap";
 import { DeviceCare } from "./DeviceCare";
 
 type Location = {
@@ -52,6 +58,7 @@ type Device = {
   enrolled: boolean;
   preshared_key: boolean;
   capabilities: string[];
+  network?: NetworkObservation | null;
   telemetry: null | {
     battery: number;
     charging: boolean;
@@ -453,7 +460,7 @@ function App() {
                     : page === "Device care"
                       ? "Recovery, local safety and any saved DNS summaries."
                       : page === "History"
-                        ? "Look back through GPS fixes and device check-ins. Stored only here."
+                        ? "Look back through GPS, IP observations and check-ins. Stored only here."
                         : page === "Activity"
                           ? "Enrollment, access, and remote commands. All on your server."
                           : "Understand the boundaries protecting your household."}
@@ -815,14 +822,14 @@ function App() {
                 </p>
                 <ul>
                   <li>
-                    GPS history and check-in logs stay until explicitly erased
+                    GPS, IP history and check-in logs stay until explicitly erased
                     or the device is revoked
                   </li>
                   <li>One-use enrollment expires in 10 minutes</li>
                   <li>Remote commands expire in 5 minutes</li>
                   <li>
-                    No cloud push, provider maps, network location, or public
-                    certificate authority
+                    No cloud push, external map/GeoIP lookups, network location,
+                    or public certificate authority
                   </li>
                   <li>
                     Unique 256-bit WireGuard preshared key for each new phone
@@ -1060,10 +1067,10 @@ function App() {
             {modal === "clear_location" && (
               <>
                 <p>
-                  Erase all GPS history, check-in logs, and the last-known
-                  location for {clearTarget?.name}? The phone stays paired. New
-                  fixes can appear while sharing is enabled; older queued fixes
-                  will not restore erased history.
+                  Erase all GPS history, IP observations, check-in logs, and the
+                  last-known location for {clearTarget?.name}? The phone stays
+                  paired. New fixes can appear while sharing is enabled; older
+                  queued fixes will not restore erased history.
                 </p>
                 <p>
                   To stop future location updates, turn off location sharing on
@@ -1082,9 +1089,9 @@ function App() {
               <>
                 <p>
                   Remove {device?.name} from your household. Its location
-                  history, check-in logs and pending commands will be erased,
-                  and its WireGuard access removed. To pair it again, reset
-                  pairing on the phone.
+                  history, IP observations, check-in logs and pending commands
+                  will be erased, and its WireGuard access removed. To pair it
+                  again, reset pairing on the phone.
                 </p>
                 <button
                   className="primary danger full"
@@ -1135,6 +1142,8 @@ type HistoryRecord = Partial<Location> & {
   battery?: number;
   charging?: boolean;
   device_owner?: boolean;
+  ip?: string;
+  geoip?: NetworkObservation["geoip"];
 };
 type HistoryPage = { records: HistoryRecord[]; next_before: number | null };
 const localDateTime = (time: number) => {
@@ -1215,7 +1224,9 @@ function HistoryView({ device }: { device: Device }) {
       const lines = [
         range.kind === "locations"
           ? "observed_at_utc,received_at_utc,latitude,longitude,accuracy_m"
-          : "received_at_utc,battery_percent,charging,device_owner",
+          : range.kind === "network"
+            ? "observed_at_utc,received_at_utc,ip,geoip_json"
+            : "received_at_utc,battery_percent,charging,device_owner",
       ];
       let cursor: number | null = null;
       do {
@@ -1232,12 +1243,21 @@ function HistoryView({ device }: { device: Device }) {
                   r.longitude,
                   r.accuracy,
                 ].join(",")
-              : [
-                  new Date(r.received_at * 1000).toISOString(),
-                  r.battery,
-                  r.charging,
-                  r.device_owner,
-                ].join(","),
+              : range.kind === "network"
+                ? [
+                    new Date(r.observed_at! * 1000).toISOString(),
+                    new Date(r.received_at * 1000).toISOString(),
+                    r.ip,
+                    '"' +
+                      JSON.stringify(r.geoip ?? null).replaceAll('"', '""') +
+                      '"',
+                  ].join(",")
+                : [
+                    new Date(r.received_at * 1000).toISOString(),
+                    r.battery,
+                    r.charging,
+                    r.device_owner,
+                  ].join(","),
           );
         cursor = data.next_before;
       } while (cursor !== null);
@@ -1342,6 +1362,7 @@ function HistoryView({ device }: { device: Device }) {
             onChange={(e) => setKind(e.target.value)}
           >
             <option value="locations">GPS fixes</option>
+            <option value="network">IP observations &amp; GeoIP</option>
             <option value="state">Device check-ins</option>
           </select>
         </label>
@@ -1470,8 +1491,13 @@ function HistoryView({ device }: { device: Device }) {
       {range.kind === "locations" && points.length > 0 && (
         <>
           <div className="trail-caption">
-            COORDINATE TRAIL · LOADED POINTS · NO MAP PROVIDER
+            GPS HISTORY · LOADED POINTS · LOCAL DATA ONLY
           </div>
+          <PrivateMap
+            points={points as Location[]}
+            selected={chosen as Location | null}
+            label="OpenStreetMap GPS history"
+          />
           <svg
             className="history-trail"
             viewBox="0 0 700 260"
@@ -1539,6 +1565,18 @@ function HistoryView({ device }: { device: Device }) {
           </p>
         </>
       )}
+      {range.kind === "network" && chosen && (
+        <>
+          <NetworkCard network={chosen as NetworkObservation} />
+          {chosen.geoip?.latitude != null && (
+            <PrivateMap
+              points={[]}
+              network={chosen as NetworkObservation}
+              label="Historical approximate IP location"
+            />
+          )}
+        </>
+      )}
       {records.length > 0 && (
         <div className="history-table-wrap">
           <table className="history-table">
@@ -1550,6 +1588,13 @@ function HistoryView({ device }: { device: Device }) {
                     <th>Coordinates</th>
                     <th>Accuracy</th>
                     <th>Received</th>
+                  </>
+                ) : range.kind === "network" ? (
+                  <>
+                    <th>Observed</th>
+                    <th>Connection IP</th>
+                    <th>Approximate area</th>
+                    <th>Database radius</th>
                   </>
                 ) : (
                   <>
@@ -1563,7 +1608,7 @@ function HistoryView({ device }: { device: Device }) {
             </thead>
             <tbody>
               {records.map((r) => (
-                <tr key={range.kind === "locations" ? r.observed_at : r.id}>
+                <tr key={range.kind !== "state" ? r.observed_at : r.id}>
                   {range.kind === "locations" ? (
                     <>
                       <td>
@@ -1579,6 +1624,24 @@ function HistoryView({ device }: { device: Device }) {
                       </td>
                       <td>±{Math.round(r.accuracy!)} m</td>
                       <td>{new Date(r.received_at * 1000).toLocaleString()}</td>
+                    </>
+                  ) : range.kind === "network" ? (
+                    <>
+                      <td>
+                        <button
+                          className="text-button"
+                          onClick={() => setChosen(r)}
+                        >
+                          {new Date(r.observed_at! * 1000).toLocaleString()}
+                        </button>
+                      </td>
+                      <td>{r.ip}</td>
+                      <td>{geoLabel(r.geoip)}</td>
+                      <td>
+                        {r.geoip?.accuracy_radius_km
+                          ? `${r.geoip.accuracy_radius_km} km`
+                          : "Unknown"}
+                      </td>
                     </>
                   ) : (
                     <>
@@ -1634,107 +1697,41 @@ function Stat({
 function LocationView({ device }: { device?: Device }) {
   const loc = device?.telemetry?.location;
   return (
-    <div className="map">
-      <svg
-        viewBox="0 0 700 280"
-        preserveAspectRatio="xMidYMid slice"
-        aria-hidden="true"
-      >
-        <defs>
-          <pattern
-            id="grid"
-            width="35"
-            height="35"
-            patternUnits="userSpaceOnUse"
-          >
-            <path
-              d="M 35 0 L 0 0 0 35"
-              fill="none"
-              stroke="#dbe3dc"
-              strokeWidth="0.6"
-            />
-          </pattern>
-        </defs>
-        <rect width="700" height="280" fill="#edf1e9" />
-        <path
-          d="M0 200 Q150 140 225 220T500 150T740 100"
-          fill="none"
-          stroke="#d5e1c9"
-          strokeWidth="110"
+    <>
+      {loc || device?.network?.geoip?.latitude != null ? (
+        <PrivateMap
+          points={loc ? [loc] : []}
+          selected={loc}
+          network={device?.network}
+          label="Last-known GPS and approximate IP location"
         />
-        <path
-          d="M600 -50 Q400 100 620 300"
-          stroke="#c4dbe1"
-          strokeWidth="35"
-          fill="none"
-        />
-        {[0, 1, 2, 3, 4].map((n) => (
-          <path
-            key={n}
-            d={`M-80 ${40 + n * 45} Q160 ${-60 + n * 40} 320 ${60 + n * 45} T760 ${80 + n * 44}`}
-            fill="none"
-            stroke="#ced8c7"
-            strokeWidth="1.3"
-          />
-        ))}
-        <path
-          d="M0 70 L160 110 L400 30 L700 125 M100 280 L180 120 L330 130 L500 280 M-20 180 L150 170 L350 250 L720 160"
-          stroke="#fff"
-          strokeWidth="9"
-          fill="none"
-        />
-        <path
-          d="M0 70 L160 110 L400 30 L700 125 M100 280 L180 120 L330 130 L500 280 M-20 180 L150 170 L350 250 L720 160"
-          stroke="#e5e8df"
-          strokeWidth="1"
-          fill="none"
-        />
-        <rect width="700" height="280" fill="url(#grid)" />
-      </svg>
-      <div className="map-caption">
-        COORDINATE VIEW · ILLUSTRATIVE BACKGROUND
-      </div>
-      <span className="north">
-        N<Compass size={20} />
-      </span>
-      {loc ? (
-        <div className="map-location">
-          <div className="location-chip">
-            <Smartphone size={15} />
-            {device?.name}
-            <i
-              className={`status-dot ${device && online(device) ? "" : "offline"}`}
-            />
-          </div>
-          <span className="map-pin">
-            <MapPin size={23} fill="currentColor" />
-          </span>
-          <span className="coordinates">
-            {loc.latitude.toFixed(5)}, {loc.longitude.toFixed(5)}
-          </span>
-        </div>
       ) : (
-        <div className="map-placeholder">
-          <span>
-            <MapPin size={25} />
-          </span>
-          <strong>
-            {device
-              ? "Waiting for a location"
-              : "Their next adventure starts here."}
-          </strong>
-          <small>
-            {device
-              ? "The phone needs location permission and a connection home."
-              : "Pair a phone to see its last-known coordinates."}
-          </small>
+        <div className="map">
+          <div className="map-placeholder">
+            <span>
+              <MapPin size={25} />
+            </span>
+            <strong>
+              {device
+                ? "Waiting for a location"
+                : "Their next adventure starts here."}
+            </strong>
+            <small>
+              {device
+                ? "The phone needs location permission and a connection home."
+                : "Pair a phone to see its last-known coordinates."}
+            </small>
+          </div>
         </div>
       )}
-      <div className="map-privacy">
-        <ShieldCheck size={12} />
-        No map provider sees your coordinates
-      </div>
-    </div>
+      {loc && (
+        <p className="gps-coordinate">
+          GPS: {loc.latitude.toFixed(6)}, {loc.longitude.toFixed(6)} · ±
+          {Math.round(loc.accuracy)} m
+        </p>
+      )}
+      <NetworkCard network={device?.network} />
+    </>
   );
 }
 

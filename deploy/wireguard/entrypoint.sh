@@ -126,5 +126,6 @@ while :; do
         fi
     } > /run/wg0.conf
     wg syncconf wg0 /run/wg0.conf
+    python3 /usr/local/lib/bungee/observe.py
     sleep 3 & wait $!
 done

@@ -25,6 +25,7 @@ network = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(network)
 REGISTRY = 'ghcr.io/argentumseven/bungee'
 VERSION = '0.1.0-alpha.7'
+PRIVATE_ENV = {**{name: '' for name in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy')}, 'NO_PROXY': '*', 'no_proxy': '*'}
 VOLUMES = ('server-data', 'gateway-private', 'gateway-peers', 'caddy-data', 'caddy-config')
 
 
@@ -92,23 +93,24 @@ def release(data, channel, current=None):
 
 def compose(config, images, root):
     c = network.validate(config)
+    dataset = root / 'datasets' / c.get('geodata', 'empty')
     common = {'restart': 'unless-stopped', 'cap_drop': ['ALL'], 'security_opt': ['no-new-privileges:true'], 'read_only': True}
     def service(image, **values): return {**common, 'image': image, **values}
     return {'name': 'bungee', 'services': {
         'gateway': service(images['gateway'], cap_add=['NET_ADMIN', 'CHOWN', 'DAC_OVERRIDE'], tmpfs=['/run:mode=0700'],
-            environment={'BUNGEE_WG_PORT': str(c['wg_port']), 'BUNGEE_ADMIN_SUBNETS': ' '.join(c['admin_subnets']), 'BUNGEE_UPDATE_CONTROL': '/control'},
+            environment={**PRIVATE_ENV, 'BUNGEE_WG_PORT': str(c['wg_port']), 'BUNGEE_ADMIN_SUBNETS': ' '.join(c['admin_subnets']), 'BUNGEE_UPDATE_CONTROL': '/control'},
             ports=[f"{network.bracket(c['bind_ip'])}:{c['web_port']}:443/tcp", f"{c['wg_port']}:{c['wg_port']}/udp"],
             sysctls={'net.ipv4.ip_forward': '0', 'net.ipv6.conf.all.forwarding': '0'},
             volumes=['gateway-private:/private', 'gateway-peers:/peers', {'type': 'bind', 'source': str(root / 'control'), 'target': '/control', 'read_only': True}],
             healthcheck={'test': ['CMD', 'wg', 'show', 'wg0'], 'interval': '10s', 'timeout': '3s', 'retries': 5}),
         'server': service(images['server'], network_mode='service:gateway', depends_on={'gateway': {'condition': 'service_healthy'}},
-            environment={'BUNGEE_PUBLIC_ORIGIN': network.origin(c), 'BUNGEE_ADMIN_BIND': '127.0.0.1:8080', 'BUNGEE_DEVICE_BIND': '10.77.0.1:8081', 'BUNGEE_WG_ENDPOINT': f"{network.bracket(c['endpoint_ip'])}:{c['wg_port']}"},
-            tmpfs=['/tmp:size=16m'], volumes=['server-data:/state', 'gateway-peers:/state/wireguard']),
+            environment={**PRIVATE_ENV, 'BUNGEE_PUBLIC_ORIGIN': network.origin(c), 'BUNGEE_ADMIN_BIND': '127.0.0.1:8080', 'BUNGEE_DEVICE_BIND': '10.77.0.1:8081', 'BUNGEE_WG_ENDPOINT': f"{network.bracket(c['endpoint_ip'])}:{c['wg_port']}"},
+            tmpfs=['/tmp:size=16m'], volumes=['server-data:/state', 'gateway-peers:/state/wireguard', {'type': 'bind', 'source': str(dataset), 'target': '/datasets', 'read_only': True, 'bind': {'create_host_path': False}}]),
         'web': service(images['web'], network_mode='service:gateway', depends_on={'server': {'condition': 'service_healthy'}},
             cap_add=['NET_BIND_SERVICE'], tmpfs=['/tmp:size=16m'],
-            environment={'BUNGEE_DOMAIN': c['web_host'], 'BUNGEE_ADMIN_SUBNETS': ' '.join(c['admin_subnets'])},
+            environment={**PRIVATE_ENV, 'BUNGEE_DOMAIN': c['web_host'], 'BUNGEE_ADMIN_SUBNETS': ' '.join(c['admin_subnets'])},
             volumes=['caddy-data:/data', 'caddy-config:/config'],
-            healthcheck={'test': ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:8090/healthz'], 'interval': '10s', 'timeout': '3s', 'retries': 5})
+            healthcheck={'test': ['CMD', 'wget', '-q', '-Y', 'off', '-O', '/dev/null', 'http://127.0.0.1:8090/healthz'], 'interval': '10s', 'timeout': '3s', 'retries': 5})
     }, 'volumes': {v: {} for v in VOLUMES}}
 
 
@@ -138,6 +140,9 @@ class Engine:
         finally:
             temporary.unlink(missing_ok=True)
             run(['docker', 'rm', '--volumes', container])
+    def check_geodata(self, directory, generation):
+        image = read(self.root / 'generations' / generation / 'release.json')['images']['server']
+        return run(['docker', 'run', '--rm', '--network', 'none', '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true', '--memory', '768m', '--cpus', '1', '--pids-limit', '64', '--env', 'TOKIO_WORKER_THREADS=2', '--mount', f'type=bind,src={directory},dst=/datasets,readonly', image, '--check-geodata'])
     def hold(self, closed, generation=None):
         atomic(self.root / 'control/status', 'closed\n' if closed else 'open\n')
         if closed and generation:
@@ -197,6 +202,11 @@ class Host:
         return gen
     def metadata(self, gen): return read(self.root / 'generations' / gen / 'release.json')
     def stage(self, config, metadata):
+        dataset = self.root / 'datasets' / config.get('geodata', 'empty')
+        if config.get('geodata'):
+            if not dataset.is_dir(): raise ValueError('Pinned dataset directory is missing; restore it before updating')
+        else: dataset.mkdir(parents=True, exist_ok=True, mode=0o755)
+        dataset.chmod(0o755)
         gen = secrets.token_hex(12)
         directory = self.root / 'generations' / gen
         directory.mkdir(parents=True, mode=0o700)
@@ -204,6 +214,42 @@ class Host:
         atomic(directory / 'release.json', metadata)
         atomic(directory / 'compose.json', compose(config, metadata['images'], self.root))
         return gen
+    def datasets(self, maps=None, geoip=None, clear_maps=False, clear_geoip=False):
+        self.recover()
+        old = self.current()
+        config = read(self.root / 'generations' / old / 'config.json')
+        token = secrets.token_hex(12)
+        directory = self.root / 'datasets' / token
+        directory.mkdir(parents=True, mode=0o755)
+        directory.chmod(0o755)
+        try:
+            for name, source, clear in (('map.mbtiles', maps, clear_maps), ('geoip.mmdb', geoip, clear_geoip)):
+                if clear: continue
+                source = Path(source) if source else self.root / 'datasets' / config.get('geodata', 'empty') / name
+                if not source.exists() and not (maps if name == 'map.mbtiles' else geoip): continue
+                if source.is_symlink() or not source.is_file(): raise ValueError('Datasets must be local regular files, not symlinks or URLs')
+                size = source.stat().st_size
+                if size == 0 or (name == 'geoip.mmdb' and size > 256 * 1024 * 1024): raise ValueError('Empty or oversized GeoIP dataset')
+                if shutil.disk_usage(self.root).free < size + 1024 ** 3: raise ValueError('Insufficient space for the new dataset plus 1 GiB')
+                target = directory / name
+                with source.open('rb') as src, target.open('xb') as dst:
+                    shutil.copyfileobj(src, dst, 1024 * 1024)
+                    dst.flush(); os.fsync(dst.fileno())
+                target.chmod(0o644)
+            for path in (directory, directory.parent):
+                fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+                try: os.fsync(fd)
+                finally: os.close(fd)
+            result = json.loads(self.engine.check_geodata(directory, old))
+            if any((directory / file).exists() != bool(result.get(key)) for file, key in (('map.mbtiles', 'maps'), ('geoip.mmdb', 'geoip'))):
+                raise ValueError('Dataset validation did not confirm all supplied files')
+            print('Validated offline data:', json.dumps(result))
+            # A new immutable directory is pinned into this generation. Rollback keeps the old dataset.
+            self.apply({**config, 'geodata': token}, self.metadata(old))
+        except Exception:
+            # Keep a referenced directory if recovery is pending; it is needed by the journal.
+            if not (self.root / 'transaction.json').exists() and self.current() == old: shutil.rmtree(directory)
+            raise
     def journal(self, value): atomic(self.root / 'transaction.json', value)
     def backup(self, gen, backup):
         backup.mkdir(parents=True, mode=0o700)
@@ -314,7 +360,7 @@ def guided(existing=None):
             channel = ask('Update channel: stable or preview', c.get('channel', 'stable'))
             auto = ask('Check daily for tested images in that channel? yes/no', 'yes' if c.get('auto_updates', True) else 'no')
             if auto not in ('yes', 'no'): raise ValueError('Answer yes or no')
-            return network.validate({'wg_port': wg, 'web_port': web, 'endpoint_ip': endpoint, 'bind_ip': bind, 'web_host': host, 'admin_subnets': nets, 'channel': channel, 'auto_updates': auto == 'yes'})
+            return network.validate({**({'geodata': c['geodata']} if c.get('geodata') else {}), 'wg_port': wg, 'web_port': web, 'endpoint_ip': endpoint, 'bind_ip': bind, 'web_host': host, 'admin_subnets': nets, 'channel': channel, 'auto_updates': auto == 'yes'})
         except ValueError as exc: print('Please correct:', exc)
 
 
@@ -398,13 +444,19 @@ def install(root, config):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['install', 'configure', 'update', 'recover', 'status'])
+    parser.add_argument('command', choices=['install', 'configure', 'update', 'recover', 'status', 'datasets'])
     parser.add_argument('--root', type=Path, default=Path('/opt/bungee'))
     parser.add_argument('--config', type=Path, help='Explicit JSON answers for unattended installation/configuration')
     parser.add_argument('--plan', action='store_true', help='Validate answers and print a plan; write nothing and contact no services')
     parser.add_argument('--start', action='store_true', help='With recover: explicitly start a stopped/unfinished installation')
     parser.add_argument('--manual', action='store_true', help='With update: explicitly check even if automatic checks are disabled')
+    parser.add_argument('--maps', type=Path, help='With datasets: local raster OpenStreetMap MBTiles file')
+    parser.add_argument('--geoip', type=Path, help='With datasets: local City MMDB file')
+    parser.add_argument('--clear-maps', action='store_true', help='With datasets: remove the basemap from the active generation')
+    parser.add_argument('--clear-geoip', action='store_true', help='With datasets: disable future GeoIP enrichment; saved history remains')
     args = parser.parse_args()
+    if any((args.maps, args.geoip, args.clear_maps, args.clear_geoip)) and args.command != 'datasets': parser.error('Dataset options require datasets')
+    if args.command == 'datasets' and (not any((args.maps, args.geoip, args.clear_maps, args.clear_geoip)) or (args.maps and args.clear_maps) or (args.geoip and args.clear_geoip)): parser.error('Choose datasets to import or clear, without conflicting options')
     if args.start and args.command != 'recover': parser.error('--start is only valid with recover')
     if args.manual and args.command != 'update': parser.error('--manual is only valid with update')
     if args.config and args.command not in ('install', 'configure'): parser.error('--config is only valid with install/configure')
@@ -430,6 +482,7 @@ if __name__ == '__main__':
                     if args.start and not (root / 'transaction.json').exists():
                         host.engine.up(host.current()); host.engine.healthy(host.current()); systemd(root); host.finish(host.current())
                 elif args.command == 'update': host.update(manual=args.manual)
+                elif args.command == 'datasets': host.datasets(args.maps, args.geoip, args.clear_maps, args.clear_geoip)
                 elif args.command == 'configure': host.apply(CONFIG, host.metadata(host.current()))
                 else:
                     print('Version:', host.metadata(host.current())['version'])

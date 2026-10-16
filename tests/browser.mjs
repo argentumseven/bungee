@@ -32,10 +32,12 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     join(dir, "wireguard/server-public-key"),
     randomBytes(32).toString("base64"),
   );
+  execFileSync("python3", ["tests/fixtures/geodata.py", join(dir, "datasets")]);
   const server = spawn(resolve("server/target/debug/bungee-server"), [], {
     env: {
       ...process.env,
       BUNGEE_STATE_DIR: dir,
+      BUNGEE_GEODATA_DIR: join(dir, "datasets"),
       BUNGEE_ADMIN_BIND: `127.0.0.1:${port}`,
       BUNGEE_DEVICE_BIND: `127.0.0.1:${devicePort}`,
       BUNGEE_PUBLIC_ORIGIN: origin,
@@ -70,7 +72,10 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
   context.setDefaultTimeout(10000);
   const errors = [],
     external = [];
-  page.on("pageerror", (e) => errors.push(e.message));
+  page.on("pageerror", (e) => {
+    errors.push(e.message);
+    process.stderr.write(e.stack + "\n");
+  });
   page.on("request", (r) => {
     if (!r.url().startsWith(origin) && !r.url().startsWith("data:"))
       external.push(r.url());
@@ -168,6 +173,19 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       }),
     });
     assert.equal(enrolled.status, 200);
+    await writeFile(
+      join(dir, "wireguard/endpoints.json"),
+      JSON.stringify({
+        sampled_at: Math.floor(Date.now() / 1000),
+        peers: [
+          {
+            public_key: bundle.wireguard.client_public_key,
+            ip: "81.2.69.142",
+            observed_at: Math.floor(Date.now() / 1000),
+          },
+        ],
+      }),
+    );
     const time = String(Math.floor(Date.now() / 1000)),
       nonce = randomUUID();
     const body = JSON.stringify({
@@ -293,6 +311,11 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await page.getByRole("button", { name: /Browser test phone/ }).waitFor();
   });
   await page.evaluate(() => scrollTo(0, 0));
+  await page
+    .getByRole("img", { name: "Last-known GPS and approximate IP location" })
+    .waitFor();
+  await page.locator(".leaflet-tile-loaded").first().waitFor();
+  await page.getByText("London, England, GB", { exact: true }).waitFor();
   await page.screenshot({
     path: "docs/screenshots/dashboard.png",
     fullPage: true,
@@ -380,6 +403,25 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       );
     },
   );
+  await t.test(
+    "private map shows locally served tiles and a distinct approximate IP area",
+    async () => {
+      await page.getByRole("button", { name: "Show IP estimate" }).click();
+      await page.getByText(/Database radius: 10 km/).waitFor();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.screenshot({
+        path: "docs/screenshots/mobile-dashboard.png",
+        fullPage: true,
+      });
+      assert.equal(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth,
+        ),
+        true,
+      );
+      await page.setViewportSize({ width: 1440, height: 1050 });
+    },
+  );
   await t.test("activity and settings show real state", async () => {
     await page.getByRole("button", { name: "Activity", exact: true }).click();
     await page.getByText("enrollment · created", { exact: true }).waitFor();
@@ -465,6 +507,27 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       await page.getByLabel("History records").selectOption("state");
       await page.getByRole("button", { name: "Look up history" }).click();
       await page.getByRole("cell", { name: "72%", exact: true }).waitFor();
+      await page.getByLabel("History records").selectOption("network");
+      await page.getByRole("button", { name: "Look up history" }).click();
+      await page
+        .getByRole("cell", { name: "81.2.69.142", exact: true })
+        .waitFor();
+      await page
+        .getByRole("img", { name: "Historical approximate IP location" })
+        .waitFor();
+      await page.screenshot({
+        path: "docs/screenshots/history-ip.png",
+        fullPage: true,
+      });
+      const networkDownload = page.waitForEvent("download");
+      await page.getByRole("button", {name:"Export CSV", exact:true}).click();
+      const networkFile = await networkDownload;
+      let networkCsv = "";
+      for await (const part of await networkFile.createReadStream()) networkCsv += part.toString();
+      const parsedNetworkCsv = JSON.parse(execFileSync("python3", ["-c", "import csv,io,json,sys; print(json.dumps(list(csv.DictReader(io.StringIO(sys.stdin.read())))))"], {input:networkCsv,encoding:"utf8"}));
+      assert.equal(parsedNetworkCsv[0].ip, "81.2.69.142");
+      assert.equal(JSON.parse(parsedNetworkCsv[0].geoip_json).city, "London");
+
       await page.getByRole("button", { name: "Settings", exact: true }).click();
     },
   );
@@ -500,10 +563,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await page.getByRole("button", { name: "Overview", exact: true }).click();
     await page.setViewportSize({ width: 390, height: 844 });
     await page.evaluate(() => scrollTo(0, 0));
-    await page.screenshot({
-      path: "docs/screenshots/mobile-dashboard.png",
-      fullPage: true,
-    });
+
     assert.equal(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= window.innerWidth,

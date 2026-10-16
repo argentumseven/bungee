@@ -96,9 +96,23 @@ with tempfile.TemporaryDirectory(prefix='bungee-updater-') as directory:
         fixture.apply(CONFIG, {**metadata, 'version': '0.1.1'})
         assert fixture.current() != current
         engine.healthy(fixture.current())
+        data = root / 'input-data'
+        subprocess.check_call(['python3', str(host.SOURCE / 'tests/fixtures/geodata.py'), str(data)])
+        fixture.datasets(maps=data / 'map.mbtiles', geoip=data / 'geoip.mmdb')
+        active = fixture.current()
+        dataset_config = host.read(root / 'generations' / active / 'config.json')
+        assert dataset_config.get('geodata')
+        dataset_status = json.loads(engine.compose(active, 'exec', '-T', 'server', '/usr/local/bin/bungee-server', '--check-geodata'))
+        assert dataset_status['maps']['name'] == 'Synthetic test grid (not street data)'
+        assert dataset_status['geoip']['database_type'] == 'GeoIP2-City'
+        immutable = engine.compose(active, 'exec', '-T', 'server', 'sh', '-c', 'if touch /datasets/forbidden-write 2>/dev/null; then exit 1; else echo read-only; fi')
+        assert immutable == 'read-only'
+        print('PASS: real validated raster/MMDB import commits a pinned read-only dataset generation.')
         print('PASS: real Compose/three services; maintenance blocks actual TCP; unhealthy trial restores SQLite data, WireGuard identity and CA from five cold volumes; healthy update commits. Kernel WireGuard creation is not tested.')
     except Exception:
         print(engine.compose(fixture.current(), 'logs', '--tail', '30'), flush=True)
+        for cid in engine.compose(fixture.current(), 'ps', '--all', '--quiet').split():
+            print(host.run(['docker', 'inspect', '--format', '{{json .State.Health}}', cid]), flush=True)
         raise
     finally:
         engine.stop_helpers()

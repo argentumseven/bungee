@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -60,6 +61,9 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(host.network.origin({**CONFIG, 'web_host': 'fd12::1'}), 'https://[fd12::1]:8443')
         for s in c['services'].values():
             self.assertEqual(s['cap_drop'], ['ALL']); self.assertTrue(s['read_only'])
+            self.assertEqual(s['environment']['HTTP_PROXY'], '')
+            self.assertEqual(s['environment']['http_proxy'], '')
+            self.assertEqual(s['environment']['NO_PROXY'], '*')
         self.assertNotIn('docker.sock', json.dumps(c))
         self.assertNotIn('ports', c['services']['server']); self.assertNotIn('ports', c['services']['web'])
     def test_plan_needs_no_docker_root_or_external_services_and_writes_nothing(self):
@@ -175,3 +179,37 @@ class TransactionTests(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+class DatasetTests(unittest.TestCase):
+    setUp = TransactionTests.setUp
+    def test_dataset_import_is_validated_before_downtime_and_pins_read_only_generation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory) / 'City.mmdb'; data.write_bytes(b'fixture-public-data')
+            self.engine.check_geodata = lambda path, gen: json.dumps({'maps': None, 'geoip': {'database_type': 'fixture'}})
+            previous = os.umask(0o077)
+            try: self.host.datasets(geoip=data)
+            finally: os.umask(previous)
+            config = host.read(self.root / 'generations' / self.host.current() / 'config.json')
+            dataset = self.root / 'datasets' / config['geodata']
+            self.assertEqual((dataset / 'geoip.mmdb').read_bytes(), data.read_bytes())
+            self.assertEqual(dataset.stat().st_mode & 0o777, 0o755)
+            service = host.read(self.root / 'generations' / self.host.current() / 'compose.json')['services']['server']
+            self.assertTrue(service['volumes'][-1]['read_only'])
+            self.assertEqual(service['volumes'][-1]['source'], str(dataset))
+    def test_invalid_dataset_causes_no_downtime_or_current_pointer_change(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory) / 'invalid.mmdb'; data.write_bytes(b'bad')
+            self.engine.check_geodata = lambda path, gen: '{}'
+            with self.assertRaises(ValueError): self.host.datasets(geoip=data)
+            self.assertEqual(self.host.current(), self.old)
+            self.assertNotIn('close', self.engine.events)
+            self.assertEqual([p.name for p in (self.root / 'datasets').iterdir()], ['empty'])
+    def test_failed_dataset_trial_keeps_old_dataset_binding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory) / 'City.mmdb'; data.write_bytes(b'fixture')
+            self.engine.check_geodata = lambda path, gen: json.dumps({'maps': None, 'geoip': {'database_type': 'fixture'}})
+            self.engine.fail = 'healthy-new'
+            with self.assertRaises(RuntimeError): self.host.datasets(geoip=data)
+            self.assertEqual(self.host.current(), self.old)
+            config = host.read(self.root / 'generations' / self.old / 'compose.json')
+            self.assertTrue(config['services']['server']['volumes'][-1]['source'].endswith('/empty'))

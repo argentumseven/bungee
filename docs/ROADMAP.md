@@ -4,7 +4,7 @@ The [reversibility contract](SAFETY.md) takes precedence over adding MDM feature
 
 ## Current preview
 
-Personal Android finder, encrypted app-contained home tunnel, durable GPS/check-in history, recurring lookup/CSV, bounded encrypted offline queue, optional removable administration for screen locking, sound/contact notifications, consent/app lock, strict no-persistent-policy guards and an independent local recovery entry. Server/Docker hardening and legacy DNS-summary compatibility remain. Alpha.7 adds guided host installation, required source-prefix restrictions and a Compose updater with closed admission, coherent snapshots and failed-trial recovery (INSTALL.md).
+Personal Android finder, encrypted app-contained home tunnel, durable GPS/check-in history, recurring lookup/CSV, bounded encrypted offline queue, optional removable administration for screen locking, sound/contact notifications, consent/app lock, strict no-persistent-policy guards and an independent local recovery entry. Server/Docker hardening and legacy DNS-summary compatibility remain. Alpha.7 adds guided host installation, required source-prefix restrictions and a Compose updater with closed admission, coherent snapshots and failed-trial recovery (INSTALL.md), local OpenStreetMap raster basemaps and separate IP/GeoIP history (GEOGRAPHY.md).
 
 Device-owner enrollment/operation, managed system DNS/always-on, package suspension, uninstall prevention, forced credential complexity, blocked recovery settings and reboot have been disabled. No wipe, credential reset, kiosk, bootloader or firmware action exists.
 
@@ -18,6 +18,6 @@ Device-owner enrollment/operation, managed system DNS/always-on, package suspens
 
 ## Suitable small additions
 
-Read-only app-version/security-patch/compliance reporting, clearer failed-command/permission state, local diagnostics with explicit export, accessibility/contrast improvements, translations and self-hosted maps are candidates. Any GeoIP view should use a local database, label its coarse accuracy and never replace a GPS checkpoint; no map/GeoIP provider integration currently exists. They must preserve the ability to stop/uninstall Bungee without a server or Bungee encryption key.
+Read-only app-version/security-patch/compliance reporting, clearer failed-command/permission state, local diagnostics with explicit export, accessibility/contrast improvements, translations and additional map coverage formats are candidates. The current local raster OpenStreetMap/City MMDB support labels IP estimates separately and never replaces GPS; future formats must retain those boundaries. They must preserve the ability to stop/uninstall Bungee without a server or Bungee encryption key.
 
 New OS-level controls must remain unavailable if their failure can leave a persistent restriction, close a recovery path, destroy phone data or require reset to remove management. No destructive fallback is acceptable. Do not add wipe/reset-on-failed-unlocks, forced installation restrictions, disabled ADB/USB, hidden launcher, kiosk, credential changes or owner provisioning as an incremental convenience feature.

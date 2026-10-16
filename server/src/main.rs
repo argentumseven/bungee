@@ -1,5 +1,6 @@
 mod api;
 mod dns;
+mod geography;
 mod management;
 mod recurrence;
 mod security;
@@ -27,10 +28,15 @@ pub struct App {
     state_dir: PathBuf,
     wg_endpoint: Option<String>,
     dns: Option<dns::Config>,
+    geography: Arc<geography::Geography>,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().nth(1).as_deref() == Some("--check-geodata") {
+        println!("{}", geography::Geography::load()?.status);
+        return Ok(());
+    }
     tracing_subscriber::fmt()
         .with_env_filter("bungee_server=info")
         .init();
@@ -85,6 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         state_dir: dir,
         wg_endpoint,
         dns,
+        geography: Arc::new(geography::Geography::load()?),
     };
     // Expire sessions across restarts, including snapshots of the development machine.
     app.db.lock().unwrap().execute("DELETE FROM sessions", [])?;
@@ -93,6 +100,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut timer = tokio::time::interval(std::time::Duration::from_secs(60));
         loop {
             timer.tick().await;
+            if let Err(e) = geography::collect(&housekeeping) {
+                tracing::error!(error=%e.1, "Network observation failed");
+            }
             if let Err(e) = api::housekeeping(&housekeeping) {
                 tracing::error!(error=%e.1, "Retention or peer synchronization failed");
             }
@@ -105,6 +115,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/session",
             get(api::session).post(api::login).delete(api::logout),
         )
+        .route("/api/geography", get(geography::status))
+        .route("/api/maps/{z}/{x}/{y}", get(geography::tile))
         .route("/api/devices", get(api::devices))
         .route("/api/enrollments", post(api::create_enrollment))
         .route("/api/devices/{id}", delete(api::revoke))

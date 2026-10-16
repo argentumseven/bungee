@@ -55,6 +55,8 @@ impl Recurrence {
     ) -> ApiResult<Option<Vec<i64>>> {
         let (table, clock, key) = if kind == "locations" {
             ("location_history", "observed_at", "observed_at")
+        } else if kind == "network" {
+            ("network_history", "observed_at", "observed_at")
         } else {
             ("state_history", "received_at", "id")
         };

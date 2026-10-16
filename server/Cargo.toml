@@ -25,6 +25,7 @@ p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
 uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+maxminddb = "0.32"
 
 [profile.release]
 lto = "thin"

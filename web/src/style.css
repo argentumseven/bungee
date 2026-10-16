@@ -1906,3 +1906,22 @@ select {
   margin-right: 8px;
   min-height: 40px;
 }
+
+/* Same-origin offline basemaps; GPS and IP estimates have distinct visual meanings. */
+.private-map-wrap { position: relative; background: #f1f2ec; border-radius: 12px; overflow: hidden; }
+.private-map { height: 300px; width: 100%; background: #edf0e9; z-index: 0; }
+.private-map-key, .private-map-status, .map-attribution { display: flex; flex-wrap: wrap; gap: 12px; padding: 8px 14px; font-size: 10px; color: #65597c; line-height: 1.6; }
+.private-map-key { background: #faf9fc; align-items: center; }
+.private-map-key .ip-key { color: #996117; }
+.private-map-key button { margin-left: auto; border: 1px solid #dac8ac; border-radius: 6px; padding: 4px 8px; background: #fffaf1; color: #805719; font-size: 10px; cursor: pointer; }
+.private-map-status { color: #657661; }
+.map-attribution { padding-top: 0; font-size: 9px; overflow-wrap: anywhere; }
+.map-attribution a { color: #506e57; }
+.network-card { padding: 16px 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; background: #fcfbf8; border-top: 1px solid #eee9e0; }
+.network-card > div { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.network-card .eyebrow { font-size: 8px; letter-spacing: 1px; color: #927d5c; }
+.network-card strong { font-size: 12px; overflow-wrap: anywhere; }
+.network-card small { font-size: 10px; color: #918577; line-height: 1.7; }
+.network-card p { grid-column: 1 / -1; font-size: 10px; color: #918577; margin: 0; line-height: 1.7; }
+@media (max-width: 600px) { .network-card { grid-template-columns: 1fr; } .private-map { height: 260px; } }
+.gps-coordinate { padding: 9px 18px; margin: 0; color: #74628f; font-size: 11px; background: #f8f5fe; }

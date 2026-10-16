@@ -9,15 +9,17 @@
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
+    "leaflet": "1.9.4",
     "lucide-react": "^0.468.0",
-    "qrcode": "^1.5.4"
+    "qrcode": "^1.5.4",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@types/leaflet": "1.9.21",
+    "@types/qrcode": "^1.5.5",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
-    "@types/qrcode": "^1.5.5",
     "@vitejs/plugin-react": "^4.5.0",
     "typescript": "~5.8.3",
     "vite": "^6.3.5"
