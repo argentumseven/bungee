@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
@@ -18,6 +18,8 @@ import {
   LockKeyhole,
   LogOut,
   MapPin,
+  History,
+  Download,
   MessageSquare,
   Plus,
   Radio,
@@ -46,6 +48,7 @@ type Device = {
   last_seen: number | null;
   revoked: boolean;
   enrolled: boolean;
+  preshared_key: boolean;
   capabilities: string[];
   telemetry: null | {
     battery: number;
@@ -255,11 +258,11 @@ function App() {
     if (!clearTarget) return;
     setBusy(true);
     try {
-      await api(`/devices/${clearTarget.id}/location`, { method: "DELETE" });
+      await api(`/devices/${clearTarget.id}/history`, { method: "DELETE" });
       setModal(null);
       setClearTarget(null);
       setToast(
-        "Saved location erased. New fixes can appear while sharing remains enabled.",
+        "Saved history erased. New fixes can appear while sharing remains enabled.",
       );
       await load();
     } catch (e) {
@@ -374,6 +377,7 @@ function App() {
           {[
             { name: "Overview", icon: House },
             { name: "Devices", icon: Smartphone },
+            { name: "History", icon: History },
             { name: "Activity", icon: Activity },
             { name: "Settings", icon: Settings },
           ].map(({ name, icon: Icon }) => (
@@ -442,18 +446,22 @@ function App() {
                   ? "A little peace of mind."
                   : page === "Devices"
                     ? "Everyone, accounted for."
-                    : page === "Activity"
-                      ? "A clear trail."
-                      : "Private by design."}
+                    : page === "History"
+                      ? "A trail you control."
+                      : page === "Activity"
+                        ? "A clear trail."
+                        : "Private by design."}
               </h1>
               <p>
                 {page === "Overview"
                   ? "Everything you need to keep your household devices close."
                   : page === "Devices"
                     ? "Manage the phones that belong to your household."
-                    : page === "Activity"
-                      ? "Enrollment, access, and remote commands. All on your server."
-                      : "Understand the boundaries protecting your household."}
+                    : page === "History"
+                      ? "Look back through GPS fixes and device check-ins. Stored only here."
+                      : page === "Activity"
+                        ? "Enrollment, access, and remote commands. All on your server."
+                        : "Understand the boundaries protecting your household."}
               </p>
             </div>
             {["Overview", "Devices"].includes(page) && (
@@ -724,6 +732,29 @@ function App() {
               </div>
             </>
           )}
+          {page === "History" && (
+            <>
+              <label htmlFor="history-device">Device</label>
+              <select
+                id="history-device"
+                value={device?.id || ""}
+                onChange={(e) => setSelected(e.target.value)}
+              >
+                {active.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+              {device ? (
+                <HistoryView key={device.id} device={device} />
+              ) : (
+                <section className="panel history-panel">
+                  Pair a phone to begin saving history.
+                </section>
+              )}
+            </>
+          )}
           {page === "Activity" && (
             <section className="panel audit-panel">
               <div className="panel-heading">
@@ -764,12 +795,18 @@ function App() {
                 </p>
                 <ul>
                   <li>
-                    Last-known location and device state stay until erased or
-                    the device is revoked
+                    GPS history and check-in logs stay until explicitly erased
+                    or the device is revoked
                   </li>
                   <li>One-use enrollment expires in 10 minutes</li>
                   <li>Remote commands expire in 5 minutes</li>
-                  <li>No cloud push service or external map tiles</li>
+                  <li>
+                    No cloud push, provider maps, network location, or public
+                    certificate authority
+                  </li>
+                  <li>
+                    Unique 256-bit WireGuard preshared key for each new phone
+                  </li>
                   <li>Eight-hour administrator sessions</li>
                 </ul>
                 <div className="notice">
@@ -801,7 +838,13 @@ function App() {
                         : "Personal-device mode"}{" "}
                       · {d.capabilities.join(", ") || "Awaiting consent"}
                     </small>
-                    {d.telemetry?.location && (
+                    {!d.preshared_key && (
+                      <p className="error">
+                        Re-pair required: this legacy identity has no preshared
+                        key and its tunnel is blocked.
+                      </p>
+                    )}
+                    {d.enrolled && (
                       <button
                         className="text-button"
                         onClick={() => {
@@ -809,7 +852,7 @@ function App() {
                           setModal("clear_location");
                         }}
                       >
-                        Clear saved location
+                        Erase saved history
                       </button>
                     )}
                     <br />
@@ -878,7 +921,7 @@ function App() {
                 : modal === "message"
                   ? "Leave a recovery message."
                   : modal === "clear_location"
-                    ? "Erase this saved location?"
+                    ? "Erase this saved history?"
                     : modal === "revoke"
                       ? "Revoke this device?"
                       : "Welcome to your household."}
@@ -921,8 +964,9 @@ function App() {
               <>
                 <p>
                   Scan this with Bungee on the phone, approve the VPN, then
-                  confirm enrollment. This invitation expires in 10 minutes.
-                  Treat it as a secret.
+                  confirm enrollment. This invitation expires in 10 minutes. It
+                  contains a long-lived preshared key. Use a trusted local
+                  administrator connection and keep the QR private.
                 </p>
                 {qr && (
                   <img
@@ -995,9 +1039,10 @@ function App() {
             {modal === "clear_location" && (
               <>
                 <p>
-                  Erase the last-known location for {clearTarget?.name}? The
-                  phone stays paired. New fixes can appear while sharing is
-                  enabled; older cached fixes will not restore the erased point.
+                  Erase all GPS history, check-in logs, and the last-known
+                  location for {clearTarget?.name}? The phone stays paired. New
+                  fixes can appear while sharing is enabled; older queued fixes
+                  will not restore erased history.
                 </p>
                 <p>
                   To stop future location updates, turn off location sharing on
@@ -1008,16 +1053,17 @@ function App() {
                   disabled={busy || !clearTarget}
                   onClick={clearLocation}
                 >
-                  Erase saved location
+                  Erase saved history
                 </button>
               </>
             )}
             {modal === "revoke" && (
               <>
                 <p>
-                  Remove {device?.name} from your household. Its last location
-                  and pending commands will be erased, and its WireGuard access
-                  removed. To pair it again, reset pairing on the phone.
+                  Remove {device?.name} from your household. Its location
+                  history, check-in logs and pending commands will be erased,
+                  and its WireGuard access removed. To pair it again, reset
+                  pairing on the phone.
                 </p>
                 <button
                   className="primary danger full"
@@ -1061,6 +1107,366 @@ function App() {
         </div>
       )}
     </div>
+  );
+}
+type HistoryRecord = Partial<Location> & {
+  received_at: number;
+  id?: number;
+  battery?: number;
+  charging?: boolean;
+  device_owner?: boolean;
+};
+type HistoryPage = { records: HistoryRecord[]; next_before: number | null };
+const localDateTime = (time: number) => {
+  const d = new Date(time);
+  return new Date(time - d.getTimezoneOffset() * 60000)
+    .toISOString()
+    .slice(0, 16);
+};
+function HistoryView({ device }: { device: Device }) {
+  const [from, setFrom] = useState(() => localDateTime(Date.now() - 86400000));
+  const [to, setTo] = useState(() => localDateTime(Date.now() + 60000));
+  const [kind, setKind] = useState("locations");
+  const [range, setRange] = useState(() => ({
+    from: Math.floor((Date.now() - 86400000) / 1000),
+    to: Math.floor(Date.now() / 1000) + 120,
+    kind: "locations",
+  }));
+  const [records, setRecords] = useState<HistoryRecord[]>([]);
+  const [next, setNext] = useState<number | null>(null);
+  const [chosen, setChosen] = useState<HistoryRecord | null>(null);
+  const [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  const request = useRef<AbortController | null>(null);
+  const endpoint = (before?: number | null) =>
+    `/devices/${device.id}/history?${new URLSearchParams({ from: String(range.from), to: String(range.to), kind: range.kind, limit: "200", ...(before ? { before: String(before) } : {}) })}`;
+  useEffect(() => {
+    const abort = new AbortController();
+    request.current = abort;
+    setBusy(true);
+    setError("");
+    setRecords([]);
+    setChosen(null);
+    setNext(null);
+    api<HistoryPage>(endpoint(), { signal: abort.signal })
+      .then((data) => {
+        setRecords(data.records);
+        setNext(data.next_before);
+        setChosen(data.records[0] || null);
+      })
+      .catch((e) => {
+        if (!abort.signal.aborted) setError(e.message);
+      })
+      .finally(() => {
+        if (!abort.signal.aborted) setBusy(false);
+      });
+    return () => abort.abort();
+  }, [device.id, range]);
+  async function more() {
+    const signal = request.current!.signal;
+    setBusy(true);
+    try {
+      const data = await api<HistoryPage>(endpoint(next), { signal });
+      setRecords((old) => [...old, ...data.records]);
+      setNext(data.next_before);
+    } catch (e) {
+      if (!signal.aborted) setError((e as Error).message);
+    } finally {
+      if (!signal.aborted) setBusy(false);
+    }
+  }
+  async function download() {
+    const signal = request.current!.signal;
+    setBusy(true);
+    setError("");
+    try {
+      const lines = [
+        range.kind === "locations"
+          ? "observed_at_utc,received_at_utc,latitude,longitude,accuracy_m"
+          : "received_at_utc,battery_percent,charging,device_owner",
+      ];
+      let cursor: number | null = null;
+      do {
+        const data: HistoryPage = await api<HistoryPage>(endpoint(cursor), {
+          signal,
+        });
+        for (const r of data.records)
+          lines.push(
+            range.kind === "locations"
+              ? [
+                  new Date(r.observed_at! * 1000).toISOString(),
+                  new Date(r.received_at * 1000).toISOString(),
+                  r.latitude,
+                  r.longitude,
+                  r.accuracy,
+                ].join(",")
+              : [
+                  new Date(r.received_at * 1000).toISOString(),
+                  r.battery,
+                  r.charging,
+                  r.device_owner,
+                ].join(","),
+          );
+        cursor = data.next_before;
+      } while (cursor !== null);
+      if (signal.aborted) return;
+      const url = URL.createObjectURL(
+        new Blob([lines.join("\n") + "\n"], { type: "text/csv;charset=utf-8" }),
+      );
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `bungee-${device.id}-${range.kind}.csv`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      if (!signal.aborted) setError((e as Error).message);
+    } finally {
+      if (!signal.aborted) setBusy(false);
+    }
+  }
+  const points = records
+    .filter((r) => r.latitude !== undefined)
+    .slice()
+    .reverse();
+  const bounds = points.reduce(
+    (b, p) => ({
+      minLat: Math.min(b.minLat, p.latitude!),
+      maxLat: Math.max(b.maxLat, p.latitude!),
+      minLon: Math.min(b.minLon, p.longitude!),
+      maxLon: Math.max(b.maxLon, p.longitude!),
+    }),
+    {
+      minLat: Infinity,
+      maxLat: -Infinity,
+      minLon: Infinity,
+      maxLon: -Infinity,
+    },
+  );
+  const latSpan = Math.max(0.0001, bounds.maxLat - bounds.minLat),
+    lonSpan = Math.max(0.0001, bounds.maxLon - bounds.minLon);
+  const minLat = (bounds.maxLat + bounds.minLat - latSpan) / 2,
+    minLon = (bounds.maxLon + bounds.minLon - lonSpan) / 2;
+  const xy = (p: HistoryRecord) =>
+    `${30 + ((p.longitude! - minLon) / lonSpan) * 640},${230 - ((p.latitude! - minLat) / latSpan) * 200}`;
+  return (
+    <section className="panel history-panel">
+      <div className="panel-heading">
+        <h2>
+          <History size={18} />
+          Saved history
+        </h2>
+        <span className="subtle">UNTIL YOU ERASE IT</span>
+      </div>
+      <form
+        className="history-filters"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const start = Date.parse(from) / 1000,
+            end = Date.parse(to) / 1000;
+          if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) {
+            setError("Choose a valid start and end time.");
+            return;
+          }
+          setRange({ from: Math.floor(start), to: Math.floor(end), kind });
+        }}
+      >
+        <label>
+          From (local time)
+          <input
+            aria-label="History from"
+            type="datetime-local"
+            required
+            value={from}
+            disabled={busy}
+            onChange={(e) => setFrom(e.target.value)}
+          />
+        </label>
+        <label>
+          To (local time)
+          <input
+            aria-label="History to"
+            type="datetime-local"
+            required
+            value={to}
+            disabled={busy}
+            onChange={(e) => setTo(e.target.value)}
+          />
+        </label>
+        <label>
+          Records
+          <select
+            aria-label="History records"
+            value={kind}
+            disabled={busy}
+            onChange={(e) => setKind(e.target.value)}
+          >
+            <option value="locations">GPS fixes</option>
+            <option value="state">Device check-ins</option>
+          </select>
+        </label>
+        <button className="primary" disabled={busy}>
+          Look up history
+        </button>
+        <button
+          className="secondary"
+          type="button"
+          disabled={busy || !records.length}
+          onClick={download}
+        >
+          <Download size={16} />
+          Export CSV
+        </button>
+      </form>
+      {error && (
+        <div className="error" role="alert">
+          {error}
+        </div>
+      )}
+      {busy && <p role="status">Loading saved history…</p>}
+      {!busy && !records.length && (
+        <p>
+          No saved records in this time range. Offline phones upload queued GPS
+          fixes when they reconnect.
+        </p>
+      )}
+      {range.kind === "locations" && points.length > 0 && (
+        <>
+          <div className="trail-caption">
+            COORDINATE TRAIL · LOADED POINTS · NO MAP PROVIDER
+          </div>
+          <svg
+            className="history-trail"
+            viewBox="0 0 700 260"
+            role="img"
+            aria-label="Saved GPS trail, longitude horizontally and latitude vertically"
+          >
+            <rect width="700" height="260" rx="12" fill="#f2f0f8" />
+            {[1, 2, 3, 4].map((n) => (
+              <path
+                key={n}
+                d={`M${n * 140} 20V240 M20 ${n * 50}H680`}
+                stroke="#ded7ec"
+                strokeWidth="0.6"
+              />
+            ))}
+            <text
+              x="350"
+              y="253"
+              textAnchor="middle"
+              fill="#8e7da7"
+              fontSize="8"
+            >
+              LONGITUDE →
+            </text>
+            <text x="16" y="18" fill="#8e7da7" fontSize="8">
+              LATITUDE ↑
+            </text>
+            <polyline
+              points={points.map(xy).join(" ")}
+              fill="none"
+              stroke="#8771bd"
+              strokeWidth="2"
+            />
+            {points.map((p) => {
+              const [cx, cy] = xy(p).split(",");
+              return (
+                <circle
+                  key={p.observed_at}
+                  cx={cx}
+                  cy={cy}
+                  r={chosen?.observed_at === p.observed_at ? 6 : 3}
+                  fill={
+                    chosen?.observed_at === p.observed_at
+                      ? "#47316d"
+                      : "#a18bc8"
+                  }
+                >
+                  <title>
+                    {new Date(p.observed_at! * 1000).toLocaleString()}
+                  </title>
+                </circle>
+              );
+            })}
+          </svg>
+          {chosen && (
+            <p className="history-selection">
+              Selected: {new Date(chosen.observed_at! * 1000).toLocaleString()}{" "}
+              · {chosen.latitude!.toFixed(6)}, {chosen.longitude!.toFixed(6)} ·
+              ±{Math.round(chosen.accuracy!)} m
+            </p>
+          )}
+          <p className="fine">
+            Lines connect sampled fixes; gaps do not prove a route or continuous
+            coverage. Accuracy is reported by the phone.
+          </p>
+        </>
+      )}
+      {records.length > 0 && (
+        <div className="history-table-wrap">
+          <table className="history-table">
+            <thead>
+              <tr>
+                {range.kind === "locations" ? (
+                  <>
+                    <th>Observed</th>
+                    <th>Coordinates</th>
+                    <th>Accuracy</th>
+                    <th>Received</th>
+                  </>
+                ) : (
+                  <>
+                    <th>Received</th>
+                    <th>Battery</th>
+                    <th>Charging</th>
+                    <th>Mode</th>
+                  </>
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {records.map((r) => (
+                <tr key={range.kind === "locations" ? r.observed_at : r.id}>
+                  {range.kind === "locations" ? (
+                    <>
+                      <td>
+                        <button
+                          className="text-button"
+                          onClick={() => setChosen(r)}
+                        >
+                          {new Date(r.observed_at! * 1000).toLocaleString()}
+                        </button>
+                      </td>
+                      <td>
+                        {r.latitude!.toFixed(6)}, {r.longitude!.toFixed(6)}
+                      </td>
+                      <td>±{Math.round(r.accuracy!)} m</td>
+                      <td>{new Date(r.received_at * 1000).toLocaleString()}</td>
+                    </>
+                  ) : (
+                    <>
+                      <td>{new Date(r.received_at * 1000).toLocaleString()}</td>
+                      <td>{r.battery}%</td>
+                      <td>{r.charging ? "Yes" : "No"}</td>
+                      <td>{r.device_owner ? "Managed" : "Personal"}</td>
+                    </>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {next !== null && (
+        <button className="secondary" disabled={busy} onClick={more}>
+          Load older records
+        </button>
+      )}
+      <p className="fine">
+        GPS time is when the fix was observed. Received time is when your server
+        stored it. Check-in battery values describe receipt time, not a
+        backfilled GPS observation.
+      </p>
+    </section>
   );
 }
 function Stat({

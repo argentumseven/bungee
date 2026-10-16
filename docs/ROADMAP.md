@@ -2,7 +2,7 @@
 
 ## First release foundation (implemented)
 
-Rust server, separate API surfaces, native Android client, WireGuard configuration with a fixed /32 and package allowlist, QR enrollment with proof of key possession, signed/replay-protected telemetry, capability-based command queue/receipts, revocation, a responsive dashboard, app lock, device-admin lock support, and Docker Compose.
+Rust server, separate API surfaces, native Android client, WireGuard configuration with a fixed /32 and package allowlist, QR enrollment with proof of key possession, signed/replay-protected telemetry, capability-based command queue/receipts, revocation, a responsive dashboard, app lock, device-admin lock support, and Docker Compose. Durable time-sliced GPS/check-in history, CSV export, an encrypted bounded offline GPS queue, mandatory custom UDP ports, per-peer 256-bit PSKs, local-CA hybrid TLS, and runtime outbound-deny firewall policy are also implemented.
 
 ## Next: demonstrate it on a test GrapheneOS phone
 
@@ -11,7 +11,8 @@ Rust server, separate API surfaces, native Android client, WireGuard configurati
 3. Test command authorization, permission changes, duplicate delivery, process interruption, notification privacy, alarm settings, screen locking, and biometric app-lock lifecycle on GrapheneOS.
 4. Define always-on behavior with explicit user consent: doze/battery use, process death, reboot, first unlock, boot-time restrictions, and visible status. Do not assume a foreground service or timer is immortal. The server now retains the last-known checkpoint indefinitely, but it cannot receive a position a disconnected or powered-off phone never sent.
 5. Design relay-assisted, outbound-only phone/home connections for CGNAT and easy deployment, preserving end-to-end phone-to-home encryption. Keep direct mode available. Evaluate integrated mesh transport against Android's one-VPN-per-profile constraint; add automatic endpoint/DNS refresh and network-handoff tests. An external VPN app is not a supported workaround for the current hard-coded private device API route.
-6. Offer opt-in, owner-configurable journey-history retention and a bounded encrypted offline upload queue separately from the indefinitely retained last-known checkpoint. Show location age and last contact independently. Keep one-shot command deadlines separate from durable lost-mode intent; a siren request should not unexpectedly execute days later.
+6. Field-test the bounded encrypted GPS queue across outages, doze, full storage and reconnect. Add owner-controlled scheduled retention as an optional policy while keeping indefinite server history the default. Test date-range exports under concurrent backfills, history volume growth and restore. Keep one-shot command deadlines separate from durable lost-mode intent; a siren request should not unexpectedly execute days later.
+7. Complete authenticated post-quantum identity/provisioning and update signatures using reviewed standard implementations. Current PSK tunnel protection and hybrid TLS key exchange do not make classical certificate/request signatures quantum-resistant. Add a verified local/offline enrollment method and an authenticated endpoint-update flow for changing home IPs without provider DNS.
 
 ## Security release gate
 

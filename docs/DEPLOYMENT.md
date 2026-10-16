@@ -1,63 +1,63 @@
 # Deployment and enrollment
 
-## Host requirements
+## Host and network requirements
 
-- Linux with kernel WireGuard and Docker Compose v2. Kernel interface creation needs to work from a NET_ADMIN container. `Unknown device type` means the kernel/runtime does not expose WireGuard; granting every capability is not the solution. Load/install the host’s supported WireGuard module if available or use a suitable Linux host.
-- A publicly reachable UDP endpoint (normally 51820), a hostname for the dashboard, and TCP 80/443 for Caddy certificate issuance/HTTPS. A CGNAT connection cannot receive arbitrary unsolicited UDP without an independently reachable gateway/relay.
-- Encrypted persistent storage and encrypted backups. Keep the Docker daemon private. It is effectively host administration access.
+Use Linux with kernel WireGuard, Docker Compose v2, working IPv4/IPv6 iptables/conntrack support inside a NET_ADMIN container, encrypted persistent storage, and encrypted backups. A firewall setup error fails closed. The cloud development machine builds the images but cannot create a kernel WireGuard interface and has no /dev/net/tun; real phone/tunnel verification is still required.
 
-The cloud machine used to create this project can build and run the server container, but cannot create kernel WireGuard interfaces and has no `/dev/net/tun`. No real VPN or physical Android device test was performed here.
+Choose an unused UDP port yourself. **There is no default, and 51820 is rejected by the gateway, server endpoint validation, and Android client.** A different port does not replace cryptographic protection. Match BUNGEE_WG_PORT to your host's UDP port and BUNGEE_WG_ENDPOINT to the externally reachable numeric IP:port (IPv6 uses [IP]:port). Forward that chosen UDP port on your router when using public IPv4. DNS endpoint resolution is intentionally disabled; update the endpoint and re-provision if your home address changes. An authenticated endpoint-update flow remains future work.
 
-## Default Compose topology
+Wireshark analyzes packets; WireGuard creates an encrypted tunnel. Neither gives a CGNAT home connection a reachable public listener. A reachable public IPv4 address, correctly firewalled IPv6 path, or an end-to-end-encrypted relay is still required for away-from-home use. No relay mode is implemented. A separate mesh VPN app is not a drop-in solution: Android permits one VPN per profile.
 
-`gateway` owns the network namespace and the private `10.77.0.1` interface. `server` joins that namespace. Only UDP 51820 is published by the gateway. `web` (Caddy) connects to `gateway:8080` on the private Docker bridge and publishes HTTPS. `8081` is bound to the WireGuard address and must never be published.
+## Private dashboard deployment
 
-Volumes:
+1. Copy .env.example to .env and choose BUNGEE_WG_PORT and BUNGEE_WG_ENDPOINT explicitly. Use an IP address or locally resolved dashboard name for BUNGEE_DOMAIN.
+2. Set BUNGEE_ADMIN_ADDRESS to the server's LAN address to make HTTPS available to administrator devices on that LAN. Its default is 127.0.0.1; loopback requires a local browser or an SSH tunnel with correct origin/host handling. There is no dashboard WAN-forwarding requirement. Prefer keeping administration on a trusted LAN.
+3. Ensure deploy/Caddyfile is readable by Caddy (`chmod 0644 deploy/Caddyfile`; it contains no secrets). Run `docker compose up --build -d`, then check health and logs. Never publish internal API ports 8080/8081.
+4. Caddy creates and renews certificates with its **local CA**. Retrieve only the public root: `docker compose exec -T web cat /data/caddy/pki/authorities/local/root.crt > bungee-root.crt`. Verify its SHA-256 fingerprint locally/over an authenticated channel, then explicitly trust it on administrator devices. Never export root.key or disable verification. CA trust grants certificate authority; use an administrator browser/profile under your control.
+5. Use a current browser supporting TLS 1.3 **X25519MLKEM768**. The server rejects classical-only key exchange; there is no automatic fallback. Read the generated administrator password locally with `docker compose exec server cat /state/admin-password` and sign in to the exact HTTPS origin.
+
+There is **no public ACME/certificate-provider contact**, port 80 listener, HTTP/3 listener, cloud push, remote map/geocoding service, analytics or runtime update check. Only dashboard TCP 443 on the chosen bind address and the custom WireGuard UDP port are published. Do not add a third-party TLS-terminating proxy if the provider must not see data.
+
+## Container boundary and volumes
+
+The gateway owns one network namespace shared by Rust and Caddy. Rust's administrator listener and Caddy upstream use loopback; the device API binds only 10.77.0.1:8081. Gateway firewall policy drops newly initiated external connections, including Docker provider-DNS requests, and permits responses to inbound phone/dashboard connections. Essential IPv6 control traffic remains permitted. IP forwarding stays disabled. Rust runs as UID 10001 with zero capabilities and a read-only root filesystem. Caddy has only NET_BIND_SERVICE; gateway has NET_ADMIN, CHOWN and DAC_OVERRIDE.
 
 | Volume | Access | Contains |
 | --- | --- | --- |
-| server-data | Rust only | SQLite, generated administrator password |
+| server-data | Rust only | SQLite history, per-device preshared secrets, administrator password |
 | gateway-private | Gateway only | Server WireGuard private key |
-| gateway-peers | Rust + gateway | Server public key and approved /32 peer list |
-| caddy-data/config | Caddy only | TLS material and state |
+| gateway-peers | Rust + gateway | Server public key and approved /32 peers with secret preshared keys |
+| caddy-data/config | Caddy only | Local CA private keys, certificates and configuration state |
 
-Back up the three application volumes together while the Rust server is stopped, or use SQLite’s online backup API for the database plus a coherent key/peer backup. Do not copy a live SQLite database without its transaction state. Restore into an isolated host, invalidate sessions, check peer revocation state, and test with a test phone. Backups retain data after logical deletion; define an expiry policy.
+Back up application state coherently while Rust is stopped, or use SQLite's online backup API plus a coherent key/peer backup. Do not copy a live database without its transaction state. Caddy CA material also requires an encrypted backup; replacing the CA requires updating administrator trust. Backups retain erased history until the backup expires. Test restoration in isolation and monitor disk capacity: server GPS/check-in history has no automatic eviction.
+
+## Pairing and upgrade
+
+1. The phone generates its own WireGuard key pair and non-exportable Android Keystore P-256 signing key. Copy its public WireGuard key into Add a device in the trusted dashboard.
+2. The server generates a unique OS-random **256-bit preshared key** and a separate random one-use ten-minute invitation. It approves the peer and assigns its private /32 address.
+3. The version-2 QR contains the endpoint, public keys, phone address, fixed API route, device ID, invitation and long-lived preshared secret. Transfer it directly from the trusted display to the phone. Keep it out of cloud clipboards, photos, messages and logs.
+4. The phone verifies its public-key match, mandatory PSK, exact /32 route and numeric custom-port endpoint, obtains VPN consent, and establishes WireGuard with the PSK.
+5. Inside the tunnel it redeems the invitation and proves possession of the signing key. The server verifies the tunnel source and binds that key. Subsequent requests are signed, timestamped and nonce-protected. Invitation expiry is only for first enrollment; the paired device does not expire while offline.
+
+Only Bungee's package and 10.77.0.1/32 enter the tunnel. Ordinary phone traffic remains on normal routes. Android's “block connections without VPN” option conflicts with this split-tunnel design and should remain off.
+
+**Upgrading from alpha.1/alpha.2:** existing checkpoints migrate into history; overwritten historical positions cannot be recovered. Legacy peers have no PSK and are blocked after this server upgrade. Their saved data remains visible; dashboard settings flag that re-pairing is required. Install the new app and reset its old identity, then generate a new invitation. CI debug signatures can require uninstalling the old APK first. Export any needed legacy data before revoking that old server identity: revocation intentionally erases it. Production update-signing continuity is not configured.
+
+WireGuard PSK protection and hybrid TLS key exchange do not make all signatures post-quantum. Read [the cryptographic limits](SECURITY.md#post-quantum-protection-and-limits) before making security claims.
+
+## History and privacy controls
+
+Start sharing visibly and grant precise GPS permission. The app uses GPS_PROVIDER only, with no network-location fallback or Play services. GPS availability/accuracy depends on the device, sky view, permissions and OS. OS-managed assisted GNSS or other system traffic must be configured separately in GrapheneOS; app GPS requests cannot guarantee the entire OS never contacts a service provider.
+
+The phone collects about once per minute before attempting the network and encrypts up to 10,080 unique unsent fixes locally. It retries batches after reconnect; the oldest unsent points roll off at that bound. Pausing preserves the queue; turning location sharing off clears it. The service does not resume automatically after reboot/force-stop. A powered-off phone cannot collect new fixes.
+
+History in the dashboard queries inclusive local-time ranges, plots loaded GPS points without any map service, and exports CSV with UTC observation/receipt times. Device check-ins separately expose battery, charging and management-mode history by receipt time. The API uses Unix-second from/to parameters, limit 1..1000, and an exclusive next_before cursor; kind=locations orders by observation time and kind=state orders by receipt ID. Old backfills do not replace a newer last-known point.
+
+Settings → Erase saved history clears GPS history, check-in logs and the last-known point while preserving pairing and current battery state. A cutoff blocks older queued/cached GPS data from restoring erased history; genuinely new fixes can appear while sharing continues. The legacy DELETE /api/devices/{id}/location route clears all GPS points/checkpoint but retains check-in logs. Revoke clears both histories, telemetry, pending commands and the PSK, and removes tunnel access. Do not revoke a missing phone you want to keep reporting.
 
 ## Administrator credential rotation
 
-The server reads the password file at process startup and computes an Argon2id verifier in memory. To rotate, stop the server, replace `/state/admin-password` securely with a high-entropy password of at least 16 characters (owned by UID 10001, mode 0600), then restart. All existing sessions are invalidated on restart. Alternatively mount a private secret file and configure `BUNGEE_ADMIN_PASSWORD_FILE`; never place its value in Compose YAML or source control. Keep the current secret binding when updating configuration.
-
-## Pair and revoke
-
-Install the Android app, copy its WireGuard public key, and create an invitation in the HTTPS dashboard. The phone scans/pastes the invitation, validates the key/route, obtains VPN consent, pairs through the tunnel, and then asks for location/notification permission. Approximate location is supported; GPS accuracy and availability depend on permissions and the device. Ordinary phone traffic is not routed through home.
-
-Pause sharing on the phone to stop its telemetry service and disconnect its tunnel. The last-known location and device state stay saved, including through long outages and server restarts. **Clear saved location** in dashboard settings erases the checkpoint without unpairing; new fixes can appear if sharing stays enabled. Revoke in the dashboard to invalidate server access, explicitly erase stored telemetry and commands, and remove its peer. Do not revoke a missing phone if you want it to reconnect and keep reporting. Unpair on the phone to erase its local identity and generate a new one. A new identity needs a new invitation. The current service does not restart itself after reboot/force-stop; start sharing again from the phone.
-
-## How pairing crosses the network
-
-Pairing has an out-of-band step before any device API request:
-
-1. The phone generates its own WireGuard private key and signing key. Copy only its WireGuard **public** key to **Add a device** in the authenticated dashboard.
-2. The server temporarily approves that peer and assigns its private tunnel address. The QR invitation contains the server's public key, reachable UDP endpoint, phone address/public key, a one-use code, and the fixed device API route. It contains no phone private key.
-3. The phone scans the QR, checks that the invitation matches its own key, obtains Android VPN approval, and establishes the WireGuard tunnel.
-4. Through that tunnel it sends the one-use code and a proof made with its signing key. The server binds that key to the approved peer. Subsequent telemetry/polling requests are individually signed and replay-protected.
-
-The ten-minute invitation lifetime is a limit on completing first enrollment. An enrolled phone does not expire because it has been offline. WireGuard authentication still requires the approved private key; a reachable public UDP endpoint does not make the device API public.
-
-## Port forwarding, CGNAT, and relay options
-
-**Wireshark** is a packet analyzer. **WireGuard** is the encrypted tunnel protocol. WireGuard's persistent keepalive maintains the phone's outbound NAT mapping; it does not make an unreachable home server publicly reachable by itself.
-
-| Deployment | Reachability requirement | Current support |
-| --- | --- | --- |
-| Direct to home over public IPv4 | Forward UDP 51820 to the Docker host; allow it in the host firewall. Use a stable LAN address for that host. DNS or dynamic DNS should point at the home's public IP. | Implemented direct mode; real-network testing remains required |
-| Same home LAN only | The endpoint can be a reachable LAN address. No router WAN forwarding is needed for the WireGuard connection, but the administrator dashboard still needs appropriate HTTPS configuration. | Endpoint format accepts LAN IPv4/hostnames; this does not provide away-from-home access |
-| Public IPv6 | Inbound UDP needs to be permitted by the home firewall and supported by the Docker host's IPv6 networking. IPv4 NAT forwarding is unnecessary for that IPv6 path. | Requires host/network configuration and real-network validation |
-| Home behind CGNAT or blocked inbound traffic | A publicly reachable relay/rendezvous or an ISP-provided reachable address is needed. Forwarding only your own router cannot remove the ISP's NAT. | No relay mode in the app yet |
-
-The current Compose stack also publishes TCP **80/443** for Caddy's HTTPS dashboard and certificate issuance. Do **not** forward port 8081: the device API belongs only inside WireGuard. A generic HTTPS reverse proxy for the dashboard does not carry the WireGuard UDP traffic. Dynamic DNS keeps a hostname current; it does not bypass NAT. If a changed endpoint is not picked up while the tunnel remains active in this prototype, pause/restart sharing to reconnect; automatic endpoint refresh and network handoff testing remain roadmap work.
-
-For a future no-port-forwarding mode, both the phone and home server should initiate outbound connections to a reachable relay, with end-to-end encryption between phone and home. Merely terminating WireGuard on a VPS and forwarding this version's inner HTTP would expose telemetry at that VPS; a relay design must preserve the phone-to-home encryption boundary. A mesh VPN such as Tailscale, or a compatible client using self-hosted Headscale plus a reachable relay, can handle NAT traversal and relay fallback, but it is not a drop-in mode of this APK. Android allows one active VpnService per profile; Bungee's current embedded WireGuard and a separate mesh VPN app cannot run as two simultaneous VPNs in that profile. Integration needs a single transport choice rather than an instruction to enable both.
+The server reads the password file at startup and keeps an Argon2id verifier in memory. Stop Rust, replace /state/admin-password securely with a high-entropy password of at least 16 characters (UID 10001, mode 0600), then restart. Sessions invalidate on restart. Alternatively mount a private file through BUNGEE_ADMIN_PASSWORD_FILE; keep its value out of source, Compose YAML and logs.
 
 ## Device-owner experimentation
 

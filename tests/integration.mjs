@@ -42,7 +42,7 @@ test("live server: household enrollment, device signatures, commands, and revoca
         BUNGEE_ADMIN_BIND: `127.0.0.1:${port}`,
         BUNGEE_DEVICE_BIND: `127.0.0.1:${devicePort}`,
         BUNGEE_PUBLIC_ORIGIN: origin,
-        BUNGEE_WG_ENDPOINT: "home.example.com:51820",
+        BUNGEE_WG_ENDPOINT: "203.0.113.10:47937",
         BUNGEE_WEB_DIR: resolve("web/dist"),
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -166,6 +166,28 @@ test("live server: household enrollment, device signatures, commands, and revoca
     id = bundle.device_id;
     assert.equal(bundle.wireguard.allowed_ip, "10.77.0.1/32");
     assert.equal(bundle.wireguard.client_public_key, wgPublic);
+    assert.equal(bundle.version, 2);
+    assert.equal(bundle.wireguard.endpoint, "203.0.113.10:47937");
+    assert.equal(
+      Buffer.from(bundle.wireguard.preshared_key, "base64").length,
+      32,
+    );
+    assert.ok(
+      !(await (await admin("/api/devices")).text()).includes(
+        bundle.wireguard.preshared_key,
+      ),
+    );
+    assert.ok(
+      !(await (await admin("/api/audit")).text()).includes(
+        bundle.wireguard.preshared_key,
+      ),
+    );
+    assert.match(
+      await readFile(join(dir, "wireguard/peers.conf"), "utf8"),
+      new RegExp(
+        `PresharedKey = ${bundle.wireguard.preshared_key.replace(/[+]/g, "\\+")}`,
+      ),
+    );
     assert.match(
       await readFile(join(dir, "wireguard/peers.conf"), "utf8"),
       /AllowedIPs = 10\.77\.0\.2\/32/,
@@ -217,6 +239,10 @@ test("live server: household enrollment, device signatures, commands, and revoca
       wg_public_key: randomBytes(32).toString("base64"),
     });
     const expired = await r.json();
+    assert.notEqual(
+      expired.wireguard.preshared_key,
+      bundle.wireguard.preshared_key,
+    );
     sql("UPDATE enrollments SET expires=1 WHERE device_id=?", [
       expired.device_id,
     ]);
@@ -315,6 +341,40 @@ test("live server: household enrollment, device signatures, commands, and revoca
     ...telemetry.location,
     observed_at: Math.floor(Date.now() / 1000) - 90 * 86400,
   };
+  const history = (query = "", deviceId = id) =>
+    admin(
+      `/api/devices/${deviceId}/history?from=0&to=${Math.floor(Date.now() / 1000) + 120}${query}`,
+    );
+  await t.test(
+    "history is private and validates bounded range queries",
+    async () => {
+      assert.equal(
+        (
+          await admin(
+            `/api/devices/${id}/history?from=0&to=1`,
+            "GET",
+            undefined,
+            { Cookie: "" },
+          )
+        ).status,
+        401,
+      );
+      for (const q of [
+        "from=2&to=1",
+        "from=-1&to=1",
+        "from=0&to=1&limit=1001",
+        "from=0&to=1&limit=0",
+        "from=0&to=1&kind=sql",
+        "from=0&to=1&before=-1",
+      ]) {
+        assert.equal(
+          (await admin(`/api/devices/${id}/history?${q}`)).status,
+          400,
+        );
+      }
+      assert.equal((await history("", randomUUID())).status, 404);
+    },
+  );
   await t.test(
     "a valid cached fix is accepted even after a long outage",
     async () => {
@@ -325,6 +385,9 @@ test("live server: household enrollment, device signatures, commands, and revoca
       );
       const data = await (await admin("/api/devices")).json();
       assert.deepEqual(data.devices[0].telemetry.location, cachedFix);
+      const saved = await (await history()).json();
+      assert.equal(saved.records.length, 1);
+      assert.equal(saved.records[0].observed_at, cachedFix.observed_at);
     },
   );
   await t.test(
@@ -349,6 +412,10 @@ test("live server: household enrollment, device signatures, commands, and revoca
       assert.equal(data.devices[0].last_seen, cachedFix.observed_at);
       assert.deepEqual(data.devices[0].telemetry.location, cachedFix);
       assert.equal((await device("/v1/commands", "{}", replay)).status, 409);
+      assert.equal(
+        (await (await history()).json()).records[0].observed_at,
+        cachedFix.observed_at,
+      );
     },
   );
   await t.test("accepted telemetry appears in the dashboard", async () => {
@@ -407,6 +474,89 @@ test("live server: household enrollment, device signatures, commands, and revoca
     assert.equal((await device("/v1/commands", body, h)).status, 200);
     assert.equal((await device("/v1/commands", body, h)).status, 409);
   });
+  await t.test(
+    "GPS history backfills, deduplicates and paginates by observation time",
+    async () => {
+      const base = telemetry.location.observed_at - 3600;
+      const locations = [0, 20, 10].map((offset) => ({
+        ...telemetry.location,
+        latitude: 37.8 + offset / 1000,
+        observed_at: base + offset,
+      }));
+      assert.equal(
+        (
+          await signed("/v1/telemetry", {
+            ...telemetry,
+            location: null,
+            locations,
+          })
+        ).status,
+        200,
+      );
+      assert.equal(
+        (
+          await signed("/v1/telemetry", {
+            ...telemetry,
+            location: null,
+            locations,
+          })
+        ).status,
+        200,
+      );
+      const path = `/api/devices/${id}/history?from=${base}&to=${base + 20}&limit=2`;
+      const first = await (await admin(path)).json();
+      assert.deepEqual(
+        first.records.map((p) => p.observed_at),
+        [base + 20, base + 10],
+      );
+      assert.equal(first.next_before, base + 10);
+      const second = await (
+        await admin(path + `&before=${first.next_before}`)
+      ).json();
+      assert.deepEqual(
+        second.records.map((p) => p.observed_at),
+        [base],
+      );
+      assert.equal(second.next_before, null);
+      assert.ok(first.records.every((p) => p.received_at > p.observed_at));
+      assert.deepEqual(
+        (await (await admin("/api/devices")).json()).devices[0].telemetry
+          .location,
+        telemetry.location,
+      );
+      const states = await (await history("&kind=state&limit=1")).json();
+      assert.equal(states.records[0].battery, 76);
+      assert.ok(states.next_before);
+    },
+  );
+  await t.test(
+    "an invalid queued fix rejects the whole batch and oversized batches are refused",
+    async () => {
+      const before = (await (await history()).json()).records.length;
+      assert.equal(
+        (
+          await signed("/v1/telemetry", {
+            ...telemetry,
+            locations: [
+              telemetry.location,
+              { ...telemetry.location, longitude: 181 },
+            ],
+          })
+        ).status,
+        400,
+      );
+      assert.equal(
+        (
+          await signed("/v1/telemetry", {
+            ...telemetry,
+            locations: Array(101).fill(telemetry.location),
+          })
+        ).status,
+        400,
+      );
+      assert.equal((await (await history()).json()).records.length, before);
+    },
+  );
   await t.test("invalid coordinates cannot enter storage", async () =>
     assert.equal(
       (
@@ -551,6 +701,7 @@ test("live server: household enrollment, device signatures, commands, and revoca
       assert.equal(data.devices[0].telemetry.battery, telemetry.battery);
       assert.equal(data.devices[0].enrolled, true);
       assert.equal(data.devices[0].revoked, false);
+      assert.deepEqual((await (await history()).json()).records, []);
     },
   );
   await t.test(
@@ -559,6 +710,7 @@ test("live server: household enrollment, device signatures, commands, and revoca
       assert.equal((await signed("/v1/telemetry", telemetry)).status, 200);
       const data = await (await admin("/api/devices")).json();
       assert.equal(data.devices[0].telemetry.location, null);
+      assert.deepEqual((await (await history()).json()).records, []);
     },
   );
   await t.test(
@@ -580,6 +732,59 @@ test("live server: household enrollment, device signatures, commands, and revoca
     },
   );
   await t.test(
+    "full history erasure requires authorization and preserves the pairing",
+    async () => {
+      const path = `/api/devices/${id}/history`;
+      assert.equal(
+        (await admin(path, "DELETE", undefined, { Cookie: "" })).status,
+        401,
+      );
+      assert.equal(
+        (
+          await admin(path, "DELETE", undefined, {
+            Origin: "https://evil.example",
+          })
+        ).status,
+        403,
+      );
+      assert.equal((await admin(path, "DELETE")).status, 200);
+      assert.deepEqual((await (await history()).json()).records, []);
+      assert.deepEqual(
+        (await (await history("&kind=state")).json()).records,
+        [],
+      );
+      assert.equal(
+        (await (await admin("/api/devices")).json()).devices[0].enrolled,
+        true,
+      );
+      assert.equal(
+        (
+          await signed("/v1/telemetry", {
+            ...telemetry,
+            location: null,
+            locations: [cachedFix, telemetry.location],
+          })
+        ).status,
+        200,
+      );
+      assert.deepEqual((await (await history()).json()).records, []);
+      await pause(1100);
+      assert.equal(
+        (
+          await signed("/v1/telemetry", {
+            ...telemetry,
+            location: {
+              ...telemetry.location,
+              observed_at: Math.floor(Date.now() / 1000),
+            },
+          })
+        ).status,
+        200,
+      );
+      assert.equal((await (await history()).json()).records.length, 1);
+    },
+  );
+  await t.test(
     "revocation erases telemetry and removes tunnel access",
     async () => {
       assert.equal((await admin(`/api/devices/${id}`, "DELETE")).status, 200);
@@ -591,6 +796,11 @@ test("live server: household enrollment, device signatures, commands, and revoca
       const data = await (await admin("/api/devices")).json();
       assert.equal(data.devices[0].telemetry, null);
       assert.equal(data.devices[0].revoked, true);
+      assert.deepEqual((await (await history()).json()).records, []);
+      assert.deepEqual(
+        (await (await history("&kind=state")).json()).records,
+        [],
+      );
     },
   );
   await t.test(
@@ -601,6 +811,13 @@ test("live server: household enrollment, device signatures, commands, and revoca
       assert.ok(text.includes("device.enrolled"));
       assert.ok(!text.includes(bundle.token));
       assert.ok(!text.includes("-122.42"));
+      assert.ok(!text.includes(bundle.wireguard.preshared_key));
+      assert.ok(
+        !(await (await admin("/api/devices")).text()).includes(
+          bundle.wireguard.preshared_key,
+        ),
+      );
+      assert.ok(!logs.includes(bundle.wireguard.preshared_key));
     },
   );
   await t.test("logout invalidates the administrator session", async () => {

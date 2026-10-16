@@ -171,7 +171,7 @@ class MainActivity : FragmentActivity() {
                 Text("YOU’RE IN CONTROL", color = Muted, fontSize = 9.sp, letterSpacing = 1.8.sp, modifier = Modifier.padding(top = 30.dp, bottom = 15.dp))
                 Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(17.dp)) {
                     Column(Modifier.padding(horizontal = 18.dp)) {
-                        SettingRow("Share location", "Last-known point saved until explicitly erased", locate) { locate = it; identity.allowLocate = it }
+                        SettingRow("Share GPS history", "Saved on your server until erased; precise location required", locate) { locate = it; identity.allowLocate = it }
                         HorizontalDivider(color = Color(0xFFF4F1F7))
                         SettingRow("Household commands", "Sound, recovery messages & permitted locking", commands) { commands = it; identity.allowCommands = it }
                         HorizontalDivider(color = Color(0xFFF4F1F7))
@@ -196,9 +196,9 @@ class MainActivity : FragmentActivity() {
             Text("Early release · test device recommended · no Google Play services required", color = Color(0xFFB0ABB9), fontSize = 9.sp, modifier = Modifier.padding(bottom = 22.dp))
         }
         if (showPairing) AlertDialog(onDismissRequest = { if (!busy) showPairing = false }, title = { Text("Connect to your home") }, text = {
-            Column { Text("This creates a private tunnel and shares your phone’s location and battery with the server you chose. The last-known point stays saved until explicitly erased or the device is revoked. Continue only if you consent.", fontSize = 12.sp, lineHeight = 20.sp); OutlinedTextField(value = pairingText, onValueChange = { pairingText = it }, label = { Text("Enrollment invitation") }, modifier = Modifier.fillMaxWidth().padding(top = 16.dp), minLines = 4); error?.let { Text(it, color = Color(0xFFB97777), fontSize = 11.sp) } }
+            Column { Text("This creates a private tunnel and shares your phone’s location and battery with the server you chose. Timestamped GPS history stays on that server until explicitly erased or the device is revoked. Unsent GPS fixes are encrypted on this phone, up to 10,080 points. Continue only if you consent.", fontSize = 12.sp, lineHeight = 20.sp); OutlinedTextField(value = pairingText, onValueChange = { pairingText = it }, label = { Text("Enrollment invitation") }, modifier = Modifier.fillMaxWidth().padding(top = 16.dp), minLines = 4); error?.let { Text(it, color = Color(0xFFB97777), fontSize = 11.sp) } }
         }, confirmButton = { TextButton(onClick = { pair(pairingText) }, enabled = !busy) { Text("Agree & pair") } }, dismissButton = { TextButton(onClick = { showPairing = false }, enabled = !busy) { Text("Cancel") } })
-        if (confirmReset) AlertDialog(onDismissRequest = { confirmReset = false }, title = { Text("Unpair this phone?") }, text = { Text("This erases local keys and stops sharing. Also revoke this device on the server to erase its last location and remove the peer.") }, confirmButton = { TextButton(onClick = { unlock {
+        if (confirmReset) AlertDialog(onDismissRequest = { confirmReset = false }, title = { Text("Unpair this phone?") }, text = { Text("This erases local keys and stops sharing. Also revoke this device on the server to erase its location history and remove the peer.") }, confirmButton = { TextButton(onClick = { unlock {
             stopService(Intent(this@MainActivity, TelemetryService::class.java))
             scope.launch { withContext(Dispatchers.IO) { HomeTunnel.disconnect() }; identity.reset(); identity = Identity(this@MainActivity); enrolled = false; confirmReset = false }
         } }) { Text("Unpair") } }, dismissButton = { TextButton(onClick = { confirmReset = false }) { Text("Keep paired") } })

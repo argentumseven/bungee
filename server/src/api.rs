@@ -2,7 +2,7 @@ use crate::{App, security::*, store};
 use axum::{
     Json,
     body::Bytes,
-    extract::{ConnectInfo, Path, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
 };
@@ -11,6 +11,7 @@ use p256::{
     ecdsa::{Signature, VerifyingKey, signature::Verifier},
     pkcs8::DecodePublicKey,
 };
+use rand::RngCore;
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -92,7 +93,7 @@ pub async fn devices(State(app): State<App>, headers: HeaderMap) -> ApiResult<Js
     require_admin(&app, &headers)?;
     let db = app.db.lock().unwrap();
     // Recovery data survives long outages. Freshness is described by timestamps, not deletion.
-    let mut q=db.prepare("SELECT id,name,address,created,last_seen,revoked,telemetry,capabilities,public_key IS NOT NULL,last_location FROM devices ORDER BY created")?;
+    let mut q=db.prepare("SELECT id,name,address,created,last_seen,revoked,telemetry,capabilities,public_key IS NOT NULL,last_location,wg_psk IS NOT NULL FROM devices ORDER BY created")?;
     let rows=q.query_map([],|r| {
         let location = r.get::<_,Option<String>>(9)?.and_then(|s|serde_json::from_str::<Value>(&s).ok());
         let mut telemetry = r.get::<_,Option<String>>(6)?.and_then(|s|serde_json::from_str::<Value>(&s).ok());
@@ -106,6 +107,7 @@ pub async fn devices(State(app): State<App>, headers: HeaderMap) -> ApiResult<Js
         "telemetry":telemetry,
         "capabilities":serde_json::from_str::<Value>(&r.get::<_,String>(7)?).unwrap_or(json!([])),
         "enrolled":r.get::<_,bool>(8)?,
+        "preshared_key":r.get::<_,bool>(10)?,
     }))})?.collect::<Result<Vec<_>,_>>()?;
     let mut q=db.prepare("SELECT id,device_id,kind,created,expires,status,result FROM commands ORDER BY created DESC LIMIT 50")?;
     let commands=q.query_map([],|r| Ok(json!({"id":r.get::<_,String>(0)?,"device_id":r.get::<_,String>(1)?,"kind":r.get::<_,String>(2)?,"created":r.get::<_,i64>(3)?,"expires":r.get::<_,i64>(4)?,"status":if r.get::<_,i64>(4)?<now() && ["pending","delivered"].contains(&r.get::<_,String>(5)?.as_str()) {"expired".to_owned()} else {r.get(5)?},"result":r.get::<_,Option<String>>(6)?})))?.collect::<Result<Vec<_>,_>>()?;
@@ -128,15 +130,23 @@ fn sync_peers(app: &App, db: &rusqlite::Connection) -> ApiResult<()> {
     let dir = app.state_dir.join("wireguard");
     fs::create_dir_all(&dir)?;
     private_dir(&dir)?;
-    let mut q=db.prepare("SELECT wg_key,address FROM devices WHERE revoked=0 AND (public_key IS NOT NULL OR id IN (SELECT device_id FROM enrollments WHERE expires>?))")?;
+    // Legacy peers stay recorded for recovery/history but may not bypass mandatory PSK protection.
+    let mut q=db.prepare("SELECT wg_key,address,wg_psk FROM devices WHERE revoked=0 AND wg_psk IS NOT NULL AND (public_key IS NOT NULL OR id IN (SELECT device_id FROM enrollments WHERE expires>?))")?;
     let rows = q.query_map([now()], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+        ))
     })?;
     let mut text = String::new();
     for row in rows {
-        let (key, ip) = row?;
+        let (key, ip, psk) = row?;
+        if !wg_key(&key) || !wg_key(&psk) || ip.parse::<std::net::Ipv4Addr>().is_err() {
+            return Err(bad("Invalid stored peer configuration"));
+        }
         text.push_str(&format!(
-            "[Peer]\nPublicKey = {key}\nAllowedIPs = {ip}/32\n\n"
+            "[Peer]\nPublicKey = {key}\nPresharedKey = {psk}\nAllowedIPs = {ip}/32\n\n"
         ));
     }
     let temp = dir.join("peers.next");
@@ -189,6 +199,9 @@ pub async fn create_enrollment(
     }
     let id = uuid::Uuid::new_v4().to_string();
     let code = token();
+    let mut psk = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut psk);
+    let psk = STANDARD.encode(psk);
     let db = app.db.lock().unwrap();
     let existing: bool = db.query_row(
         "SELECT EXISTS(SELECT 1 FROM devices WHERE wg_key=?)",
@@ -209,8 +222,15 @@ pub async fn create_enrollment(
         .find(|ip| !used.contains(ip))
         .ok_or(bad("Household device limit reached"))?;
     db.execute(
-        "INSERT INTO devices(id,name,wg_key,address,created) VALUES(?,?,?,?,?)",
-        params![id, input.name.trim(), input.wg_public_key, address, now()],
+        "INSERT INTO devices(id,name,wg_key,address,created,wg_psk) VALUES(?,?,?,?,?,?)",
+        params![
+            id,
+            input.name.trim(),
+            input.wg_public_key,
+            address,
+            now(),
+            psk
+        ],
     )?;
     db.execute(
         "INSERT INTO enrollments(hash,device_id,expires) VALUES(?,?,?)",
@@ -224,8 +244,8 @@ pub async fn create_enrollment(
         "Expires in 10 minutes",
     )?;
     Ok(Json(
-        json!({"version":1,"device_id":id,"name":input.name.trim(),"token":code,"expires":now()+600,
-      "wireguard":{"endpoint":endpoint,"server_public_key":key.trim(),"client_public_key":input.wg_public_key,"address":format!("{address}/32"),"allowed_ip":"10.77.0.1/32"},
+        json!({"version":2,"device_id":id,"name":input.name.trim(),"token":code,"expires":now()+600,
+      "wireguard":{"endpoint":endpoint,"server_public_key":key.trim(),"client_public_key":input.wg_public_key,"preshared_key":psk,"address":format!("{address}/32"),"allowed_ip":"10.77.0.1/32"},
       "api_url":"http://10.77.0.1:8081"}),
     ))
 }
@@ -264,7 +284,7 @@ pub async fn enroll(
     }
     let mut db = app.db.lock().unwrap();
     let tx = db.transaction()?;
-    let row: Option<(String,String,String)>=tx.query_row("SELECT d.id,d.address,d.wg_key FROM enrollments e JOIN devices d ON d.id=e.device_id WHERE e.hash=? AND e.expires>? AND d.revoked=0 AND d.public_key IS NULL",params![hash(&input.token),now()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+    let row: Option<(String,String,String)>=tx.query_row("SELECT d.id,d.address,d.wg_key FROM enrollments e JOIN devices d ON d.id=e.device_id WHERE e.hash=? AND e.expires>? AND d.revoked=0 AND d.public_key IS NULL AND d.wg_psk IS NOT NULL",params![hash(&input.token),now()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
     let (id, address, wg) = row.ok_or_else(denied)?;
     if wg != input.wg_public_key
         || (addr.ip().to_string() != address && (!addr.ip().is_loopback() || app.secure_cookie))
@@ -313,6 +333,8 @@ pub struct Telemetry {
     location: Option<Location>,
     capabilities: Vec<String>,
     device_owner: bool,
+    #[serde(default, skip_serializing)]
+    locations: Vec<Location>,
 }
 #[derive(Deserialize, Serialize)]
 pub struct Location {
@@ -332,17 +354,22 @@ pub async fn telemetry(
     if input.battery > 100 || !valid_capabilities(&input.capabilities) {
         return Err(bad("Invalid telemetry values"));
     }
-    if let Some(l) = &input.location
-        && (!(-90.0..=90.0).contains(&l.latitude)
+    if input.locations.len() > 100 {
+        return Err(bad("At most 100 queued GPS fixes per report"));
+    }
+    for l in input.location.iter().chain(&input.locations) {
+        if !(-90.0..=90.0).contains(&l.latitude)
             || !(-180.0..=180.0).contains(&l.longitude)
             || !(0.0..=100000.0).contains(&l.accuracy)
             || l.observed_at > now() + 120
-            || l.observed_at <= 0)
-    {
-        return Err(bad("Invalid location values or timestamp"));
+            || l.observed_at <= 0
+        {
+            return Err(bad("Invalid location values or timestamp"));
+        }
     }
-    let db = app.db.lock().unwrap();
-    let (mut location, floor): (Option<String>, i64) = db
+    let mut db = app.db.lock().unwrap();
+    let tx = db.transaction()?;
+    let (mut location, floor): (Option<String>, i64) = tx
         .query_row(
             "SELECT last_location,location_floor FROM devices WHERE id=? AND revoked=0",
             [&id],
@@ -350,7 +377,7 @@ pub async fn telemetry(
         )
         .optional()?
         .ok_or_else(denied)?;
-    let previous = location
+    let mut previous = location
         .as_deref()
         .map(serde_json::from_str::<Location>)
         .transpose()
@@ -360,25 +387,109 @@ pub async fn telemetry(
                 "Stored location could not be read",
             )
         })?;
-    if let Some(fix) = input.location.take()
-        && fix.observed_at > floor
-        && previous
+    let received = now();
+    let mut fixes = std::mem::take(&mut input.locations);
+    if let Some(fix) = input.location.take() {
+        fixes.push(fix);
+    }
+    for fix in fixes.into_iter().filter(|f| f.observed_at > floor) {
+        // Keep backfilled points in history without moving the last-known point backwards.
+        tx.execute("INSERT OR IGNORE INTO location_history(device_id,observed_at,received_at,latitude,longitude,accuracy) VALUES(?,?,?,?,?,?)",
+            params![id,fix.observed_at,received,fix.latitude,fix.longitude,fix.accuracy])?;
+        if previous
             .as_ref()
             .is_none_or(|old| fix.observed_at > old.observed_at)
-    {
-        location = Some(serde_json::to_string(&fix).map_err(|_| bad("Invalid location"))?);
+        {
+            location = Some(serde_json::to_string(&fix).map_err(|_| bad("Invalid location"))?);
+            previous = Some(fix);
+        }
     }
-    db.execute(
+    tx.execute("INSERT INTO state_history(device_id,received_at,battery,charging,device_owner) VALUES(?,?,?,?,?)",
+        params![id,received,input.battery,input.charging,input.device_owner])?;
+    tx.execute(
         "UPDATE devices SET telemetry=?,last_location=?,last_seen=?,capabilities=? WHERE id=? AND revoked=0",
         params![
             serde_json::to_string(&input).map_err(|_| bad("Invalid telemetry"))?,
             location,
-            now(),
+            received,
             serde_json::to_string(&input.capabilities).unwrap(),
             id
         ],
     )?;
+    tx.commit()?;
     Ok(Json(json!({"accepted":true,"server_time":now()})))
+}
+
+#[derive(Deserialize)]
+pub struct HistoryQuery {
+    from: i64,
+    to: i64,
+    before: Option<i64>,
+    limit: Option<usize>,
+    kind: Option<String>,
+}
+pub async fn history(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<HistoryQuery>,
+) -> ApiResult<Json<Value>> {
+    require_admin(&app, &headers)?;
+    let limit = query.limit.unwrap_or(200);
+    if query.from < 0
+        || query.to < query.from
+        || !(1..=1000).contains(&limit)
+        || query.before.is_some_and(|v| v <= 0)
+    {
+        return Err(bad(
+            "Use an ordered Unix-second range and a limit from 1 to 1000",
+        ));
+    }
+    let kind = query.kind.as_deref().unwrap_or("locations");
+    if !["locations", "state"].contains(&kind) {
+        return Err(bad("Unknown history kind"));
+    }
+    let db = app.db.lock().unwrap();
+    let exists: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM devices WHERE id=?)",
+        [&id],
+        |r| r.get(0),
+    )?;
+    if !exists {
+        return Err(Error(StatusCode::NOT_FOUND, "Device not found"));
+    }
+    let mut rows: Vec<Value> = if kind == "locations" {
+        let mut q = db.prepare("SELECT observed_at,received_at,latitude,longitude,accuracy FROM location_history
+            WHERE device_id=? AND observed_at>=? AND observed_at<=? AND observed_at<? ORDER BY observed_at DESC LIMIT ?")?;
+        q.query_map(params![id,query.from,query.to,query.before.unwrap_or(i64::MAX),limit as i64 + 1], |r| {
+            Ok(json!({"observed_at":r.get::<_,i64>(0)?,"received_at":r.get::<_,i64>(1)?,
+                "latitude":r.get::<_,f64>(2)?,"longitude":r.get::<_,f64>(3)?,"accuracy":r.get::<_,f64>(4)?}))
+        })?.collect::<Result<Vec<_>,_>>()?
+    } else {
+        let mut q = db.prepare("SELECT id,received_at,battery,charging,device_owner FROM state_history
+            WHERE device_id=? AND received_at>=? AND received_at<=? AND id<? ORDER BY id DESC LIMIT ?")?;
+        q.query_map(params![id,query.from,query.to,query.before.unwrap_or(i64::MAX),limit as i64 + 1], |r| {
+            Ok(json!({"id":r.get::<_,i64>(0)?,"received_at":r.get::<_,i64>(1)?,"battery":r.get::<_,u8>(2)?,
+                "charging":r.get::<_,bool>(3)?,"device_owner":r.get::<_,bool>(4)?}))
+        })?.collect::<Result<Vec<_>,_>>()?
+    };
+    let more = rows.len() > limit;
+    rows.truncate(limit);
+    let next = if more {
+        rows.last().and_then(|r| {
+            r[if kind == "locations" {
+                "observed_at"
+            } else {
+                "id"
+            }]
+            .as_i64()
+        })
+    } else {
+        None
+    };
+    Ok(Json(
+        json!({"kind":kind,"records":rows,"next_before":next,"from":query.from,"to":query.to}),
+    ))
 }
 
 pub async fn clear_location(
@@ -386,20 +497,45 @@ pub async fn clear_location(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    require_admin(&app, &headers)?;
-    let db = app.db.lock().unwrap();
-    let changed = db.execute("UPDATE devices SET
+    erase_history(&app, &headers, &id, false)
+}
+pub async fn clear_history(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    erase_history(&app, &headers, &id, true)
+}
+fn erase_history(
+    app: &App,
+    headers: &HeaderMap,
+    id: &str,
+    include_state: bool,
+) -> ApiResult<Json<Value>> {
+    require_admin(app, headers)?;
+    let mut db = app.db.lock().unwrap();
+    let tx = db.transaction()?;
+    let changed = tx.execute("UPDATE devices SET
         location_floor=MAX(location_floor,COALESCE(json_extract(last_location,'$.observed_at'),0),?),
         last_location=NULL WHERE id=? AND revoked=0 AND public_key IS NOT NULL", params![now(),id])?;
     if changed != 1 {
         return Err(Error(StatusCode::NOT_FOUND, "Enrolled device not found"));
     }
+    tx.execute("DELETE FROM location_history WHERE device_id=?", [id])?;
+    if include_state {
+        tx.execute("DELETE FROM state_history WHERE device_id=?", [id])?;
+    }
     store::audit(
-        &db,
-        "location.erased",
-        Some(&id),
-        "Saved location erased; cached older fixes will not restore it",
+        &tx,
+        if include_state {
+            "history.erased"
+        } else {
+            "location.erased"
+        },
+        Some(id),
+        "Saved GPS points erased; cached older fixes will not restore them",
     )?;
+    tx.commit()?;
     Ok(Json(json!({"cleared":true})))
 }
 
@@ -504,23 +640,28 @@ pub async fn revoke(
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     require_admin(&app, &headers)?;
-    let db = app.db.lock().unwrap();
-    let changed = db.execute(
-        "UPDATE devices SET revoked=1,telemetry=NULL,last_location=NULL,capabilities='[]' WHERE id=? AND revoked=0",
+    let mut db = app.db.lock().unwrap();
+    let tx = db.transaction()?;
+    let changed = tx.execute(
+        "UPDATE devices SET revoked=1,telemetry=NULL,last_location=NULL,wg_psk=NULL,capabilities='[]' WHERE id=? AND revoked=0",
         [&id],
     )?;
     if changed != 1 {
         return Err(Error(StatusCode::NOT_FOUND, "Device not found"));
     }
-    db.execute("DELETE FROM enrollments WHERE device_id=?", [&id])?;
-    db.execute("DELETE FROM commands WHERE device_id=?", [&id])?;
-    sync_peers(&app, &db)?;
+    tx.execute("DELETE FROM enrollments WHERE device_id=?", [&id])?;
+    tx.execute("DELETE FROM commands WHERE device_id=?", [&id])?;
+    tx.execute("DELETE FROM location_history WHERE device_id=?", [&id])?;
+    tx.execute("DELETE FROM state_history WHERE device_id=?", [&id])?;
     store::audit(
-        &db,
+        &tx,
         "device.revoked",
         Some(&id),
         "Telemetry erased; WireGuard peer removed",
     )?;
+    tx.commit()?;
+    // Authentication is already revoked if filesystem synchronization fails; housekeeping retries it.
+    sync_peers(&app, &db)?;
     Ok(Json(json!({"revoked":true})))
 }
 pub async fn audit(State(app): State<App>, headers: HeaderMap) -> ApiResult<Json<Value>> {

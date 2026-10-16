@@ -1603,3 +1603,122 @@ textarea::placeholder {
     font-size: 10px;
   }
 }
+
+select {
+  width: 100%;
+  border: 1px solid var(--line, #e6e2ed);
+  border-radius: 9px;
+  padding: 11px 12px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+}
+#history-device {
+  max-width: 340px;
+  margin: 8px 0 20px;
+}
+.history-panel {
+  padding: 24px;
+  margin-top: 8px;
+  min-width: 0;
+}
+.history-panel .panel-heading {
+  padding: 0 0 20px;
+}
+.history-filters {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+.history-filters label {
+  flex: 1 1 180px;
+  font-size: 12px;
+  margin: 0;
+}
+.history-filters input,
+.history-filters select {
+  display: block;
+  margin-top: 8px;
+  min-width: 0;
+  width: 100%;
+}
+.history-filters button {
+  min-height: 42px;
+}
+.history-trail {
+  width: 100%;
+  max-height: 300px;
+  display: block;
+  background: #f2f0f8;
+  border-radius: 12px;
+}
+.history-panel .secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid #ded8e9;
+  border-radius: 9px;
+  background: #fff;
+  padding: 11px 14px;
+  color: #695780;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.history-panel .secondary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.trail-caption {
+  font-size: 10px;
+  letter-spacing: 1.3px;
+  color: #81728e;
+  margin: 20px 0 10px;
+}
+.history-selection {
+  font-size: 12px;
+  color: #5e4680;
+  line-height: 1.7;
+}
+.history-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 20px 0;
+}
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+.history-table th,
+.history-table td {
+  padding: 13px 12px;
+  border-bottom: 1px solid #eeeaf3;
+}
+.history-table th {
+  color: #8e829b;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.history-table .text-button {
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+}
+@media (max-width: 600px) {
+  .history-panel {
+    padding: 16px;
+  }
+  .history-filters label {
+    flex-basis: 100%;
+  }
+  .history-filters button {
+    flex: 1;
+  }
+}

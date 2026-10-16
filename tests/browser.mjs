@@ -39,7 +39,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       BUNGEE_ADMIN_BIND: `127.0.0.1:${port}`,
       BUNGEE_DEVICE_BIND: `127.0.0.1:${devicePort}`,
       BUNGEE_PUBLIC_ORIGIN: origin,
-      BUNGEE_WG_ENDPOINT: "home.example.com:51820",
+      BUNGEE_WG_ENDPOINT: "203.0.113.10:47937",
       BUNGEE_WEB_DIR: resolve("web/dist"),
     },
     stdio: "ignore",
@@ -185,29 +185,76 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await page.getByText("Browser test phone", { exact: true }).waitFor();
   });
   await t.test(
+    "history supports time slices, selecting a point, state logs and private CSV export",
+    async () => {
+      await page.getByRole("button", { name: "History", exact: true }).click();
+      await page
+        .getByRole("heading", { name: "Saved history", exact: true })
+        .waitFor();
+      await page
+        .getByRole("img", {
+          name: "Saved GPS trail, longitude horizontally and latitude vertically",
+        })
+        .waitFor();
+      await page.getByText(/Selected:.*37.780000, -122.420000/).waitFor();
+      await page.screenshot({
+        path: "docs/screenshots/history.png",
+        fullPage: true,
+      });
+      await page.setViewportSize({ width: 390, height: 844 });
+      assert.equal(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth,
+        ),
+        true,
+      );
+      await page.setViewportSize({ width: 1440, height: 1050 });
+      const download = page.waitForEvent("download");
+      await page
+        .getByRole("button", { name: "Export CSV", exact: true })
+        .click();
+      const file = await download;
+      const stream = await file.createReadStream();
+      let csv = "";
+      for await (const part of stream) csv += part.toString();
+      assert.match(
+        csv,
+        /observed_at_utc,received_at_utc,latitude,longitude,accuracy_m/,
+      );
+      assert.match(csv, /37.78,-122.42,12/);
+      await page.getByLabel("History from").fill("2000-01-01T00:00");
+      await page.getByLabel("History to").fill("2000-01-02T00:00");
+      await page.getByRole("button", { name: "Look up history" }).click();
+      await page.getByText(/No saved records in this time range/).waitFor();
+      await page.getByLabel("History to").fill("2099-01-01T00:00");
+      await page.getByLabel("History records").selectOption("state");
+      await page.getByRole("button", { name: "Look up history" }).click();
+      await page.getByRole("cell", { name: "72%", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Settings", exact: true }).click();
+    },
+  );
+  await t.test(
     "saved location can be erased from settings while the phone stays paired",
     async () => {
       await page
-        .getByRole("button", { name: "Clear saved location", exact: true })
+        .getByRole("button", { name: "Erase saved history", exact: true })
         .click();
       await page
-        .getByRole("heading", { name: "Erase this saved location?" })
+        .getByRole("heading", { name: "Erase this saved history?" })
         .waitFor();
       await page
-        .getByRole("button", { name: "Erase saved location", exact: true })
+        .getByRole("dialog")
+        .getByRole("button", { name: "Erase saved history", exact: true })
         .click();
       await page
         .getByRole("status")
-        .filter({ hasText: "Saved location erased" })
+        .filter({ hasText: "Saved history erased" })
         .waitFor();
-      await page
-        .getByRole("button", { name: "Clear saved location", exact: true })
-        .waitFor({ state: "hidden" });
       assert.equal(
         await page
-          .getByRole("button", { name: "Clear saved location", exact: true })
+          .getByRole("button", { name: "Erase saved history", exact: true })
           .count(),
-        0,
+        1,
       );
       await page.getByRole("button", { name: "Overview", exact: true }).click();
       await page.getByText("Waiting for a location", { exact: true }).waitFor();

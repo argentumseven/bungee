@@ -6,6 +6,7 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import com.wireguard.crypto.KeyPair
 import org.json.JSONObject
+import org.json.JSONArray
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.Signature
@@ -29,7 +30,7 @@ class Identity(context: Context) {
         if (!keys.containsAlias("bungee-storage")) {
             KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
                 init(KeyGenParameterSpec.Builder("bungee-storage", KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build())
+                    .setKeySize(256).setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build())
             }.generateKey()
         }
         if (!prefs.contains("wg_private")) {
@@ -52,7 +53,12 @@ class Identity(context: Context) {
         set(value) { prefs.edit().putBoolean("app_lock", value).commit() }
     var allowLocate: Boolean
         get() = prefs.getBoolean("allow_locate", true)
-        set(value) { prefs.edit().putBoolean("allow_locate", value).commit() }
+        set(value) {
+            synchronized(this) {
+                prefs.edit().putBoolean("allow_locate", value).commit()
+                if (!value) prefs.edit().remove("location_queue").commit()
+            }
+        }
     var allowCommands: Boolean
         get() = prefs.getBoolean("allow_commands", true)
         set(value) { prefs.edit().putBoolean("allow_commands", value).commit() }
@@ -60,6 +66,21 @@ class Identity(context: Context) {
         get() = secret("recovery_message")
         set(value) { if (value == null) prefs.edit().remove("recovery_message").commit() else putSecret("recovery_message", value) }
     fun result(id: String): JSONObject? = secret("receipt_$id")?.let(::JSONObject)
+    @Synchronized fun queueLocation(point: JSONObject) {
+        if (!allowLocate) return
+        val queue = JSONArray(secret("location_queue") ?: "[]")
+        val bounded = GpsBacklog.append(queue, point)
+        if (bounded !== queue) putSecret("location_queue", bounded.toString())
+    }
+    @Synchronized fun pendingLocations(): JSONArray {
+        if (!allowLocate) return JSONArray()
+        val queue = JSONArray(secret("location_queue") ?: "[]")
+        return GpsBacklog.batch(queue)
+    }
+    @Synchronized fun acknowledgeLocations(sent: JSONArray) {
+        val queue = JSONArray(secret("location_queue") ?: "[]")
+        putSecret("location_queue", GpsBacklog.acknowledge(queue, sent).toString())
+    }
     fun saveResult(id: String, result: JSONObject) {
         // Commands are at-most-once on this phone, including across service/process restarts.
         putSecret("receipt_$id", result.toString())

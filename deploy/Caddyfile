@@ -1,4 +1,17 @@
+{
+    admin off
+    auto_https disable_redirects
+    skip_install_trust
+    default_sni {$BUNGEE_DOMAIN}
+    servers {
+        protocols h1 h2
+    }
+}
 {$BUNGEE_DOMAIN} {
+    tls internal {
+        protocols tls1.3
+        curves x25519mlkem768
+    }
     encode zstd gzip
-    reverse_proxy gateway:8080
+    reverse_proxy 127.0.0.1:8080
 }

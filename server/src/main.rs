@@ -57,6 +57,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_path = dir.join("bungee.sqlite3");
     let db = store::open(&db_path)?;
     security::private_file(&db_path)?;
+    let wg_endpoint = env::var("BUNGEE_WG_ENDPOINT").ok();
+    if let Some(endpoint) = &wg_endpoint {
+        let address: SocketAddr = endpoint.parse().map_err(|_| "BUNGEE_WG_ENDPOINT must be a literal IP:port (IPv6 uses [IP]:port); no provider DNS lookup")?;
+        if address.port() == 0
+            || address.port() == 51820
+            || address.ip().is_unspecified()
+            || address.ip().is_multicast()
+        {
+            return Err(
+                "Choose a reachable IP and a nonzero custom WireGuard port other than 51820".into(),
+            );
+        }
+    }
     let app = App {
         db: Arc::new(Mutex::new(db)),
         origin,
@@ -65,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|_| "Password hashing failed")?,
         limiter: Arc::new(Mutex::new(security::RateLimits::default())),
         state_dir: dir,
-        wg_endpoint: env::var("BUNGEE_WG_ENDPOINT").ok(),
+        wg_endpoint,
     };
     // Expire sessions across restarts, including snapshots of the development machine.
     app.db.lock().unwrap().execute("DELETE FROM sessions", [])?;
@@ -90,6 +103,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/enrollments", post(api::create_enrollment))
         .route("/api/devices/{id}", delete(api::revoke))
         .route("/api/devices/{id}/location", delete(api::clear_location))
+        .route(
+            "/api/devices/{id}/history",
+            get(api::history).delete(api::clear_history),
+        )
         .route("/api/devices/{id}/commands", post(api::command))
         .route("/api/audit", get(api::audit))
         .fallback_service(

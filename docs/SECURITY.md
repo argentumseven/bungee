@@ -8,9 +8,9 @@ This code is a first implementation. Its tests establish specific behavior, not 
 
 ```mermaid
 flowchart LR
-    Browser[Administrator browser] -->|HTTPS| Caddy
-    Caddy -->|internal network| Admin[Rust administrator API :8080]
-    App[Kotlin Bungee app] -->|WireGuard UDP 51820| Gateway[Isolated WireGuard gateway]
+    Browser[Administrator browser] -->|TLS 1.3 hybrid key exchange| Caddy
+    Caddy -->|loopback| Admin[Rust administrator API :8080]
+    App[Kotlin Bungee app] -->|WireGuard custom UDP + PSK| Gateway[Isolated WireGuard gateway]
     Gateway -->|10.77.0.1/32 only| Device[Rust signed device API :8081]
     Admin --> DB[(Private SQLite volume)]
     Device --> DB
@@ -19,9 +19,9 @@ flowchart LR
 
 ## Enrollment protocol
 
-1. The phone generates a WireGuard key pair. The private key is encrypted with AES-GCM using an Android Keystore key. A separate P-256 signing key stays in Android Keystore and is non-exportable through the app’s API.
-2. The user transfers the phone’s **public** WireGuard key to the authenticated dashboard. The server creates a /32 peer and a random 256-bit, ten-minute invitation. Only the invitation’s SHA-256 hash is stored.
-3. The dashboard displays a QR bundle containing the server’s WireGuard public key, endpoint, allowed /32, phone address/public key, device ID, and invitation. The phone validates the allowed route, API address, public-key match, and endpoint syntax. It cannot accept a default route or a DNS override through this format.
+1. The phone generates a WireGuard key pair. The private key is encrypted with AES-GCM using an Android Keystore key. A fresh storage key is explicitly 256-bit. A separate P-256 signing key stays in Android Keystore and is non-exportable through the app’s API.
+2. The user transfers the phone’s **public** WireGuard key to the authenticated dashboard. The server creates a /32 peer and a random 256-bit, ten-minute invitation. Only the invitation’s SHA-256 hash is stored. Independently, the server generates a unique 256-bit WireGuard preshared key from the OS CSPRNG. This long-lived secret is stored privately in SQLite and the mode-0600 peer file.
+3. The dashboard displays a QR bundle containing the server’s WireGuard public key, endpoint, allowed /32, phone address/public key, device ID, invitation, and per-device preshared key (version 2). The phone validates the allowed route, API address, public-key match, and numeric-IP endpoint and explicitly chosen port (51820 is rejected). Missing PSKs or old bundle versions are rejected. It cannot accept a default route or a DNS override through this format.
 4. The user explicitly consents, grants the VPN, and establishes the tunnel. The phone submits the invitation and its signing public key, plus an ECDSA proof over `BUNGEE-ENROLL-V1\n<token>\n<wg-public>\n<signing-public>`.
 5. The server checks the invitation, approved peer, source tunnel address, and proof, then consumes the invitation and binds the signing key. A loopback source-address exception exists only for the HTTP loopback development server; production HTTPS configurations do not allow it.
 
@@ -40,7 +40,7 @@ POST
 <lowercase SHA-256 hex of exact request bytes>
 ```
 
-The server verifies the enrolled P-256 key, a ±120-second timestamp window, and a durable per-device nonce. Used nonces remain for 300 seconds, longer than the validity window. Devices need a reasonably correct system clock. Transport authentication comes from WireGuard’s pinned peer key. Device responses are trusted only within that channel; there is no public device endpoint and redirects are disabled in the Android client.
+The server verifies the enrolled P-256 key, a ±120-second timestamp window, and a durable per-device nonce. Used nonces remain for 300 seconds, longer than the validity window. Devices need a reasonably correct system clock. Transport authentication comes from WireGuard’s pinned peer key plus the per-device preshared secret. Legacy peers without a PSK are omitted from gateway configuration; their existing history is preserved for owner review. Device responses are trusted only within that channel; there is no public device endpoint and redirects are disabled in the Android client.
 
 Commands are typed data, never executable scripts. Local consent and Android permissions are checked again at execution. The phone persists a receipt before acting and never repeats a saved command ID. A process crash may leave an action uncertain; it will not trigger a lock or alarm twice. Alarms last at most 30 seconds and respect Android audio controls. Command queue, delivery, receipt, failure, rejection, and expiration are distinct.
 
@@ -51,15 +51,31 @@ Commands are typed data, never executable scripts. Local consent and Android per
 - Exact `Origin` verification on mutations, no CORS access, same-origin CSP, framing disabled, no referrers, no caching, HTTPS HSTS.
 - Login/enrollment/device request rate limits, 32-KiB request bodies, typed parsing, input bounds, parameterized SQL, finite coordinate validation.
 - Private state directory, encrypted Android secret storage, Android screenshots/backups disabled. App lock protects the UI; background sharing intentionally continues without a biometric prompt for every packet.
-- Latest device state and last-known location persist through outages and server restarts until explicit erasure or device revocation. Location is stored separately from the latest check-in, with its original observation timestamp. Null or older fixes do not erase or replace it. This is a single checkpoint, not an unbounded travel history. Command/session/invitation cleanup has separate expiration rules.
-- Administrator-authenticated, same-origin location erasure keeps enrollment and battery state. A stored timestamp cutoff prevents an old cached fix from restoring the erased point. New observations can be stored while location sharing remains enabled. Device revocation explicitly erases both current telemetry and the saved point. Deletion is logical and does not erase old filesystem blocks or backups.
+- Latest device state and last-known location persist through outages and server restarts until explicit erasure or device revocation. Location is stored separately from the latest check-in, with its original observation timestamp. Null or older fixes do not erase or replace it. A separate indexed history stores each unique GPS observation indefinitely, including older backfilled points. Check-in battery/charging/management snapshots are stored by receipt time. History queries require administrator authentication and bounded, paginated ranges. Command/session/invitation cleanup has separate expiration rules.
+- Administrator-authenticated, same-origin location erasure keeps enrollment and battery state. A stored timestamp cutoff prevents an old cached fix from restoring the erased point. New observations can be stored while location sharing remains enabled. Device revocation explicitly erases current telemetry, all location/check-in history, commands, and the preshared key. Deletion is logical and does not erase old filesystem blocks or backups.
 - No arbitrary code execution, remote wipe, remote camera activation, or silent enrollment endpoint.
 
 ## Container boundaries
 
-Rust has no Linux capabilities, uses UID 10001, and cannot write its root filesystem. WireGuard is isolated in its own namespace/container with only NET_ADMIN, CHOWN, and DAC_OVERRIDE. Its private-key volume is not mounted into Rust. A separate peer/public-key volume is shared. The gateway reads configuration as WireGuard data, never as shell code. IP forwarding is disabled and no NAT rules are installed. Caddy exposes only the administrator API; `10.77.0.1:8081` is bound exclusively on the WireGuard interface.
+Rust has no Linux capabilities, uses UID 10001, and cannot write its root filesystem. WireGuard is isolated in its own namespace/container with only NET_ADMIN, CHOWN, and DAC_OVERRIDE. Its private-key volume is not mounted into Rust. A separate public-key/peer volume (now including preshared secrets) is shared. The gateway reads configuration as WireGuard data, never as shell code. IP forwarding is disabled and no application NAT rules are installed. Gateway startup sets IPv4/IPv6 INPUT, OUTPUT, and FORWARD policies to DROP, permits loopback, established/related replies, inbound custom WireGuard UDP, dashboard TCP 443, and device TCP 8081 on wg0. Essential IPv6 control messages are allowed. Docker DNS egress is blocked. Rust and Caddy share that namespace, so neither can initiate provider connections. Firewall installation failure prevents gateway startup. Caddy exposes only the administrator API; `10.77.0.1:8081` is bound exclusively on the WireGuard interface.
 
-The image build supports an optional `build_ca` BuildKit secret for TLS-inspecting development proxies. Verification remains enabled; the cloud CA is not shipped in the runtime image. Docker base tags are versioned but are not yet pinned to immutable digests or signed application release manifests.
+The image build supports an optional `build_ca` BuildKit secret for TLS-inspecting development proxies. Verification remains enabled; the cloud CA is not shipped in the runtime image. The tested Caddy image is pinned by digest. Other base images are versioned tags and application release signing/provenance is still unfinished.
+
+## Post-quantum protection and limits
+
+A WireGuard Curve25519 key pair is **not** post-quantum. Each new peer additionally requires an independently generated, random 32-byte preshared secret, mixed by WireGuard's standard PSK mechanism. This provides a symmetric protection layer for tunnel confidentiality when the PSK stays secret. Do not describe the classical public key itself as quantum-proof or invent a custom replacement protocol.
+
+The dashboard requires TLS 1.3 with **X25519MLKEM768** hybrid key exchange and no classical-only group fallback. The tested Caddy image supports it; a current compatible browser is required. Its local CA avoids disclosing a household hostname to a public certificate authority. Trust the root certificate through a verified local channel before pairing. The QR transfers the PSK from that trusted administrator connection/display to the phone. Never send it through email, cloud photo storage, remote QR generators, or synchronized clipboards.
+
+Certificate signatures and Android request signatures still use **classical cryptography**. Hardware-backed post-quantum Keystore signing is not implemented. The system has not been demonstrated secure against an active quantum attacker during first provisioning, a compromised endpoint, secret theft, or all future cryptanalysis. Fully post-quantum authenticated enrollment/update signing requires further protocol work and independent review. “Quantum-proof” would be an unjustified whole-product claim.
+
+## Data flow and location history
+
+No analytics, crash-upload SDK, FCM, external fonts, remote map tiles, geocoding API, public ACME issuer, automatic update client or provider account is part of runtime behavior. WireGuard endpoints are numeric addresses, preventing provider endpoint-DNS requests. Android reads **GPS_PROVIDER only**, never NETWORK_PROVIDER or Google Play location APIs. OS-managed assisted GNSS, time synchronization, DNS, network checks and clipboard/browser sync remain OS/user configuration; requesting GPS does not disable those OS facilities. ISPs still see encrypted traffic metadata. Host/OS compromise is outside the privacy claim. Do not put an external TLS-terminating proxy or cloud backup in front of private data without accepting that trust change.
+
+The phone samples before attempting the network, storing up to **10,080 unique unsent GPS observations** under Android Keystore AES-256-GCM encryption. It uploads at most 100 queued points per report, with at most eight batches per cycle, acknowledging only after a committed server response. Server-side deduplication uses (device, observation second). Duplicate timestamps keep the original point. The queue drops oldest unsent points at its explicit bound; server history has no automatic eviction. Consent withdrawal clears the local unsent queue; pausing preserves it for an explicit resume. Reboots/force-stops still require restarting sharing.
+
+GPS history and the recovery checkpoint use observation time; check-ins use server receipt time. Old points can fill history without moving the checkpoint backwards. Erasure clears relevant history and records a cutoff that blocks older queued points from restoring it. Full history erasure and revocation also clear check-in logs. Reads and exports are administrator-only, same-origin and no-store. Erasure is logical and does not remove encrypted backups or guarantee forensic block erasure. Disk exhaustion is an operator responsibility; no silent eviction is performed.
 
 ## Before production
 

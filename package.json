@@ -3,8 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/integration.mjs",
-    "test:browser": "node --test tests/browser.mjs"
+    "test": "node --test tests/integration.mjs tests/privacy.mjs",
+    "test:browser": "node --test tests/browser.mjs",
+    "test:tls": "node scripts/check-dashboard-tls.mjs",
+    "test:network": "node scripts/check-runtime-network.mjs"
   },
   "devDependencies": {
     "playwright-core": "^1.55.0"

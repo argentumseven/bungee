@@ -43,13 +43,20 @@ class TelemetryService : Service() {
         worker = scope.launch {
             val api = HomeApi(identity)
             var nextTelemetry = 0L
+            var nextSample = 0L
+            var latest: Location? = null
             while (isActive) {
                 try {
+                    // Collect before trying the network; an outage must not stop the local trail.
+                    if (System.currentTimeMillis() >= nextSample) {
+                        val cached = lastLocation()
+                        latest = if (identity.allowLocate && (cached == null || System.currentTimeMillis() - cached.time > 45000)) freshLocation() ?: cached else cached
+                        latest?.let { point -> withContext(Dispatchers.IO) { identity.queueLocation(locationJson(point)) } }
+                        nextSample = System.currentTimeMillis() + 60000
+                    }
                     withContext(Dispatchers.IO) { HomeTunnel.connect(this@TelemetryService, identity, JSONObject(identity.bundle!!)) }
                     if (System.currentTimeMillis() >= nextTelemetry) {
-                        val cached = lastLocation()
-                        val point = if (identity.allowLocate && (cached == null || System.currentTimeMillis() - cached.time > 300000)) freshLocation() ?: cached else cached
-                        upload(api, point)
+                        upload(api, latest)
                         nextTelemetry = System.currentTimeMillis() + 60000
                     }
                     val batch = withContext(Dispatchers.IO) { api.request("/v1/commands").getJSONArray("commands") }
@@ -58,7 +65,7 @@ class TelemetryService : Service() {
                 } catch (e: CancellationException) { throw e }
                 catch (_: Exception) {
                     // Never send diagnostics, keys, location, or enrollment tokens to a third-party logger.
-                    status.value = status.value.copy(running = true, connected = false, text = "Home server unreachable · retrying")
+                    status.value = status.value.copy(running = true, connected = false, text = "Home server unreachable · unsent fixes stay local")
                 }
                 delay(15000)
             }
@@ -69,8 +76,8 @@ class TelemetryService : Service() {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val pause = PendingIntent.getService(this, 1, Intent(this, TelemetryService::class.java).setAction("STOP"), PendingIntent.FLAG_IMMUTABLE)
         val hush = PendingIntent.getService(this, 2, Intent(this, TelemetryService::class.java).setAction("STOP_RING"), PendingIntent.FLAG_IMMUTABLE)
-        return NotificationCompat.Builder(this, "sharing").setSmallIcon(R.drawable.ic_bungee).setContentTitle("Bungee is connected to home")
-            .setContentText("Location & device commands through your private tunnel")
+        return NotificationCompat.Builder(this, "sharing").setSmallIcon(R.drawable.ic_bungee).setContentTitle("Bungee sharing is active")
+            .setContentText("GPS fixes queue locally until home is reachable")
             .setContentIntent(open).setOngoing(true).setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .addAction(0, "Pause sharing", pause).addAction(0, "Stop sound", hush).build()
     }
@@ -78,32 +85,41 @@ class TelemetryService : Service() {
         if (!identity.allowLocate || !hasLocation(this)) return null
         val manager = getSystemService(LocationManager::class.java)
         // An old, timestamped fix can still be valuable after a long outage; never age it out here.
-        return try { manager.getProviders(true).mapNotNull { manager.getLastKnownLocation(it) }.filter { it.time > 0 && it.time <= System.currentTimeMillis() + 120000 }.maxByOrNull { it.time } } catch (_: SecurityException) { null }
+        return try { manager.getLastKnownLocation(LocationManager.GPS_PROVIDER)?.takeIf { it.time > 0 && it.time <= System.currentTimeMillis() + 120000 } } catch (_: SecurityException) { null }
     }
     private suspend fun freshLocation(): Location? {
         if (!identity.allowLocate || !hasLocation(this)) return null
         val manager = getSystemService(LocationManager::class.java)
-        val provider = if (manager.isProviderEnabled(LocationManager.GPS_PROVIDER)) LocationManager.GPS_PROVIDER else LocationManager.NETWORK_PROVIDER
+        if (!manager.isProviderEnabled(LocationManager.GPS_PROVIDER)) return null
         return withTimeoutOrNull(25000) {
             suspendCancellableCoroutine { continuation ->
                 val cancel = CancellationSignal()
                 continuation.invokeOnCancellation { cancel.cancel() }
-                try { manager.getCurrentLocation(provider, cancel, mainExecutor) { loc -> if (continuation.isActive) continuation.resume(loc) } }
+                try { manager.getCurrentLocation(LocationManager.GPS_PROVIDER, cancel, mainExecutor) { loc -> if (continuation.isActive) continuation.resume(loc) } }
                 catch (_: SecurityException) { if (continuation.isActive) continuation.resume(null) }
                 catch (_: Exception) { if (continuation.isActive) continuation.resume(null) }
             }
         }
     }
+    private fun locationJson(location: Location): JSONObject = JSONObject().put("latitude", location.latitude).put("longitude", location.longitude).put("accuracy", location.accuracy.toDouble()).put("observed_at", location.time / 1000)
     private suspend fun upload(api: HomeApi, location: Location?) {
         val battery = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, 0) ?: 0
         val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
         val charging = battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0
-        val point = location?.let { JSONObject().put("latitude", it.latitude).put("longitude", it.longitude).put("accuracy", it.accuracy.toDouble()).put("observed_at", it.time / 1000) }
+        val point = location?.let(::locationJson)
+        point?.let { withContext(Dispatchers.IO) { identity.queueLocation(it) } }
         val data = JSONObject().put("battery", (level * 100 / scale.coerceAtLeast(1)).coerceIn(0, 100)).put("charging", charging)
             .put("location", if (identity.allowLocate) point ?: JSONObject.NULL else JSONObject.NULL)
             .put("capabilities", JSONArray(capabilities(this, identity))).put("device_owner", getSystemService(DevicePolicyManager::class.java).isDeviceOwnerApp(packageName))
-        withContext(Dispatchers.IO) { api.request("/v1/telemetry", data) }
+        // Bounded batches; acknowledge only after the server commits. Retries deduplicate by observation time.
+        for (batch in 0 until 8) {
+            val pending = withContext(Dispatchers.IO) { identity.pendingLocations() }
+            data.put("locations", pending)
+            withContext(Dispatchers.IO) { api.request("/v1/telemetry", data) }
+            withContext(Dispatchers.IO) { identity.acknowledgeLocations(pending) }
+            if (pending.length() < 100) break
+        }
         status.value = status.value.copy(lastSent = System.currentTimeMillis())
     }
     private suspend fun execute(api: HomeApi, command: JSONObject) {
