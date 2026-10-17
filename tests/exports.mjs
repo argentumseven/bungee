@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { request } from "node:http";
 import { readFile } from "node:fs/promises";
+import { phone } from "./support/phone.mjs";
 import { fixture,pause } from "./support/server.mjs";
 
 test("streamed history export: large data, filters, cancellation and authorization", async t=>{
@@ -39,6 +40,18 @@ test("streamed history export: large data, filters, cancellation and authorizati
     }
     assert.equal((await f.admin(path+"&every=0")).status,400);
     assert.equal((await f.admin(path,"GET",undefined,{Cookie:""})).status,401);
+  });
+  await t.test("interval scans have finite spans/buckets and do not monopolize telemetry writes",async()=>{
+    assert.equal((await f.admin(path.replace("to=600000","to=9999999999")+"&every=60")).status,400);
+    assert.equal((await f.admin(`/api/devices/${id}/history?from=0&to=600000&every=60`)).status,400); // 10001 buckets.
+    const p=await phone(f);
+    const scans=[f.admin(path.replace("history.csv","history").replace("to=600000","to=599999")+"&every=60"),f.admin(path.replace("history.csv","history").replace("to=600000","to=599999")+"&every=60")];
+    await pause(10);
+    const started=performance.now();
+    const uploaded=await p.request("/v1/telemetry",{battery:21,charging:false,device_owner:false,capabilities:[],location:null,gps_epoch:p.epoch});
+    const latency=performance.now()-started;assert.equal(uploaded.status,200);await uploaded.json();assert.ok(latency<2000,`Telemetry took ${latency} ms during two 500000-row scans`);
+    const results=await Promise.all(scans);for(const r of results){assert.equal(r.status,200);await r.json();}
+    console.log(`HOST ONLY: telemetry ${latency.toFixed(1)} ms during two recurring 500000-row reads; not a universal latency guarantee`);
   });
   const hold=()=>new Promise((resolve,reject)=>{
     const req=request(f.origin+path,{headers:{Cookie:f.cookie}},res=>{res.pause();resolve({req,res});});

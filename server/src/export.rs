@@ -50,7 +50,7 @@ impl Drop for CsvBody {
     }
 }
 
-fn live_revision(app: &App, headers: &HeaderMap, id: &str) -> ApiResult<i64> {
+pub(crate) fn live_revision(app: &App, headers: &HeaderMap, id: &str) -> ApiResult<i64> {
     require_admin(app, headers)?;
     app.db
         .lock()

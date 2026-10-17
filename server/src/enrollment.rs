@@ -17,114 +17,6 @@ pub struct Enrollment {
     wg_public_key: String,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::{Arc, Mutex};
-    fn fail_create(_: &App, _: &rusqlite::Connection) -> ApiResult<PeerUpdate> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "Injected temporary-file creation failure",
-        )
-        .into())
-    }
-    fn fail_after_write(app: &App, db: &rusqlite::Connection) -> ApiResult<PeerUpdate> {
-        let _staged = prepare_peers(app, db)?;
-        Err(std::io::Error::other("Injected failure after temporary-file fsync").into())
-    }
-    fn fail_commit(app: &App, db: &rusqlite::Connection) -> ApiResult<PeerUpdate> {
-        db.execute_batch("PRAGMA defer_foreign_keys=ON; INSERT INTO enrollments(hash,device_id,expires) VALUES('injected-orphan','missing-device',1)")?;
-        prepare_peers(app, db)
-    }
-    #[test]
-    fn staging_failures_roll_back_state_and_remove_temporary_secrets() {
-        let directory =
-            std::env::temp_dir().join(format!("bungee-enrollment-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(directory.join("wireguard")).unwrap();
-        fs::write(
-            directory.join("wireguard/server-public-key"),
-            STANDARD.encode([7u8; 32]),
-        )
-        .unwrap();
-        fs::write(
-            directory.join("wireguard/peers.conf"),
-            b"original peer state",
-        )
-        .unwrap();
-        let app = App {
-            db: Arc::new(Mutex::new(
-                store::open(&directory.join("bungee.sqlite3")).unwrap(),
-            )),
-            origin: "http://127.0.0.1:8080".into(),
-            secure_cookie: false,
-            admin_hash: String::new(),
-            trust_admin_proxy: false,
-            limiter: Arc::new(Mutex::new(RateLimits::default())),
-            state_dir: directory.clone(),
-            wg_endpoint: Some("203.0.113.10:47937".into()),
-            dns: None,
-            geography: Arc::new(crate::geography::Geography::load().unwrap()),
-        };
-        for prepare in [
-            fail_create as fn(&App, &rusqlite::Connection) -> ApiResult<PeerUpdate>,
-            fail_after_write,
-            fail_commit,
-        ] {
-            let input = Enrollment {
-                name: "Storage failure test".into(),
-                wg_public_key: STANDARD.encode([8u8; 32]),
-            };
-            assert!(issue(&app, input, prepare).is_err());
-            let db = app.db.lock().unwrap();
-            assert_eq!(
-                db.query_row("SELECT count(*) FROM devices", [], |r| r.get::<_, i64>(0))
-                    .unwrap(),
-                0
-            );
-            assert_eq!(
-                db.query_row("SELECT count(*) FROM enrollments", [], |r| r
-                    .get::<_, i64>(0))
-                    .unwrap(),
-                0
-            );
-            assert_eq!(
-                db.query_row("SELECT count(*) FROM audit", [], |r| r.get::<_, i64>(0))
-                    .unwrap(),
-                0
-            );
-            assert_eq!(
-                fs::read(directory.join("wireguard/peers.conf")).unwrap(),
-                b"original peer state"
-            );
-            assert_eq!(
-                fs::read_dir(directory.join("wireguard")).unwrap().count(),
-                2
-            );
-        }
-        // A process crash bypasses Drop. Later synchronization removes only
-        // recognized staging names before creating a new private temporary file.
-        let abandoned = directory.join(format!("wireguard/.peers-{}.next", uuid::Uuid::new_v4()));
-        fs::write(&abandoned, b"abandoned private peer state").unwrap();
-        fs::write(
-            directory.join("wireguard/peers.next"),
-            b"legacy abandoned state",
-        )
-        .unwrap();
-        {
-            let db = app.db.lock().unwrap();
-            let staged = prepare_peers(&app, &db).unwrap();
-            assert!(!abandoned.exists());
-            assert!(!directory.join("wireguard/peers.next").exists());
-            drop(staged);
-            assert_eq!(
-                fs::read_dir(directory.join("wireguard")).unwrap().count(),
-                2
-            );
-        }
-        drop(app);
-        fs::remove_dir_all(directory).unwrap();
-    }
-}
 fn wg_key(key: &str) -> bool {
     STANDARD
         .decode(key)
@@ -349,4 +241,113 @@ fn issue(
       "wireguard":{"endpoint":endpoint,"server_public_key":key.trim(),"client_public_key":input.wg_public_key,"preshared_key":psk,"address":format!("{address}/32"),"allowed_ip":"10.77.0.1/32"},
       "api_url":"http://10.77.0.1:8081"}),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    fn fail_create(_: &App, _: &rusqlite::Connection) -> ApiResult<PeerUpdate> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "Injected temporary-file creation failure",
+        )
+        .into())
+    }
+    fn fail_after_write(app: &App, db: &rusqlite::Connection) -> ApiResult<PeerUpdate> {
+        let _staged = prepare_peers(app, db)?;
+        Err(std::io::Error::other("Injected failure after temporary-file fsync").into())
+    }
+    fn fail_commit(app: &App, db: &rusqlite::Connection) -> ApiResult<PeerUpdate> {
+        db.execute_batch("PRAGMA defer_foreign_keys=ON; INSERT INTO enrollments(hash,device_id,expires) VALUES('injected-orphan','missing-device',1)")?;
+        prepare_peers(app, db)
+    }
+    #[test]
+    fn staging_failures_roll_back_state_and_remove_temporary_secrets() {
+        let directory =
+            std::env::temp_dir().join(format!("bungee-enrollment-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(directory.join("wireguard")).unwrap();
+        fs::write(
+            directory.join("wireguard/server-public-key"),
+            STANDARD.encode([7u8; 32]),
+        )
+        .unwrap();
+        fs::write(
+            directory.join("wireguard/peers.conf"),
+            b"original peer state",
+        )
+        .unwrap();
+        let app = App {
+            db: Arc::new(Mutex::new(
+                store::open(&directory.join("bungee.sqlite3")).unwrap(),
+            )),
+            origin: "http://127.0.0.1:8080".into(),
+            secure_cookie: false,
+            admin_hash: String::new(),
+            trust_admin_proxy: false,
+            limiter: Arc::new(Mutex::new(RateLimits::default())),
+            state_dir: directory.clone(),
+            wg_endpoint: Some("203.0.113.10:47937".into()),
+            dns: None,
+            geography: Arc::new(crate::geography::Geography::load().unwrap()),
+        };
+        for prepare in [
+            fail_create as fn(&App, &rusqlite::Connection) -> ApiResult<PeerUpdate>,
+            fail_after_write,
+            fail_commit,
+        ] {
+            let input = Enrollment {
+                name: "Storage failure test".into(),
+                wg_public_key: STANDARD.encode([8u8; 32]),
+            };
+            assert!(issue(&app, input, prepare).is_err());
+            let db = app.db.lock().unwrap();
+            assert_eq!(
+                db.query_row("SELECT count(*) FROM devices", [], |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                db.query_row("SELECT count(*) FROM enrollments", [], |r| r
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                db.query_row("SELECT count(*) FROM audit", [], |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                fs::read(directory.join("wireguard/peers.conf")).unwrap(),
+                b"original peer state"
+            );
+            assert_eq!(
+                fs::read_dir(directory.join("wireguard")).unwrap().count(),
+                2
+            );
+        }
+        // A process crash bypasses Drop. Later synchronization removes only
+        // recognized staging names before creating a new private temporary file.
+        let abandoned = directory.join(format!("wireguard/.peers-{}.next", uuid::Uuid::new_v4()));
+        fs::write(&abandoned, b"abandoned private peer state").unwrap();
+        fs::write(
+            directory.join("wireguard/peers.next"),
+            b"legacy abandoned state",
+        )
+        .unwrap();
+        {
+            let db = app.db.lock().unwrap();
+            let staged = prepare_peers(&app, &db).unwrap();
+            assert!(!abandoned.exists());
+            assert!(!directory.join("wireguard/peers.next").exists());
+            drop(staged);
+            assert_eq!(
+                fs::read_dir(directory.join("wireguard")).unwrap().count(),
+                2
+            );
+        }
+        drop(app);
+        fs::remove_dir_all(directory).unwrap();
+    }
 }

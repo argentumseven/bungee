@@ -289,7 +289,9 @@ test("live server: household enrollment, device signatures, commands, and revoca
     const text = JSON.stringify(body);
     return device(path, text, auth(path, text));
   };
+  const initialGpsEpoch = (await (await signed("/v1/sync", {report:{}})).json()).gps_epoch;
   const telemetry = {
+    gps_epoch: initialGpsEpoch,
     battery: 76,
     charging: true,
     location: {
@@ -980,7 +982,7 @@ test("live server: household enrollment, device signatures, commands, and revoca
         observed_at: Math.floor(Date.now() / 1000),
       };
       assert.equal(
-        (await signed("/v1/telemetry", { ...telemetry, location: newer }))
+        (await signed("/v1/telemetry", { ...telemetry, gps_epoch: (await (await signed("/v1/commands", {})).json()).gps_epoch, location: newer }))
           .status,
         200,
       );
@@ -1030,6 +1032,7 @@ test("live server: household enrollment, device signatures, commands, and revoca
         (
           await signed("/v1/telemetry", {
             ...telemetry,
+            gps_epoch: (await (await signed("/v1/commands", {})).json()).gps_epoch,
             location: {
               ...telemetry.location,
               observed_at: Math.floor(Date.now() / 1000),
@@ -1070,11 +1073,10 @@ test("live server: household enrollment, device signatures, commands, and revoca
       const data = await (await admin("/api/devices")).json();
       assert.equal(data.devices[0].telemetry, null);
       assert.equal(data.devices[0].revoked, true);
-      assert.deepEqual((await (await history()).json()).records, []);
-      assert.deepEqual(
-        (await (await history("&kind=state")).json()).records,
-        [],
-      );
+      assert.equal((await history()).status,404);
+      assert.equal((await history("&kind=state")).status,404);
+      const remaining=execFileSync("python3",["-c","import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('SELECT (SELECT count(*) FROM location_history WHERE device_id=?)+(SELECT count(*) FROM state_history WHERE device_id=?)',(sys.argv[2],sys.argv[2])).fetchone()[0])",join(dir,"bungee.sqlite3"),id],{encoding:"utf8"}).trim();
+      assert.equal(remaining,"0");
     },
   );
   await t.test(

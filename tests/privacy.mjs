@@ -171,3 +171,15 @@ test("gateway validates the chosen port and installs outbound-deny rules for the
     /PresharedKey = /,
   );
 });
+
+
+test("admin backend refuses non-loopback plaintext binds even with an HTTPS public origin", async t=>{
+  const dir=await mkdtemp(join(tmpdir(),"bungee-admin-bind-"));
+  t.after(()=>rm(dir,{recursive:true,force:true}));
+  for(const bind of ["0.0.0.0:8080","[::]:8080","203.0.113.10:8080","192.168.1.5:8080","localhost:8080","127.0.0.1:0"]) {
+    const child=spawn(resolve("server/target/debug/bungee-server"),[],{env:{...process.env,BUNGEE_STATE_DIR:dir,BUNGEE_ADMIN_BIND:bind,BUNGEE_PUBLIC_ORIGIN:"https://home.example"},stdio:["ignore","ignore","pipe"]});
+    let error="";child.stderr.on("data",b=>error+=b);
+    const code=await new Promise(r=>child.once("exit",r));
+    assert.notEqual(code,0,bind);assert.match(error,/BUNGEE_ADMIN_BIND/);
+  }
+});

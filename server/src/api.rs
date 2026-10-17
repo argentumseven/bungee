@@ -188,12 +188,14 @@ pub async fn enroll(
     );
     key.verify(proof.as_bytes(), &signature)
         .map_err(|_| denied())?;
+    let gps_epoch = token();
     tx.execute(
-        "UPDATE devices SET public_key=?,capabilities=?,last_seen=? WHERE id=?",
+        "UPDATE devices SET public_key=?,capabilities=?,last_seen=?,gps_epoch=? WHERE id=?",
         params![
             input.public_key,
             serde_json::to_string(&input.capabilities).unwrap(),
             now(),
+            gps_epoch,
             id
         ],
     )?;
@@ -206,12 +208,16 @@ pub async fn enroll(
     )?;
     tx.commit()?;
     Ok(Json(
-        json!({"device_id":id,"telemetry_interval_seconds":60}),
+        json!({"device_id":id,"gps_epoch":gps_epoch,"telemetry_interval_seconds":60}),
     ))
 }
 
 #[derive(Deserialize, Serialize)]
 pub struct Telemetry {
+    #[serde(default, skip_serializing)]
+    gps_epoch: Option<String>,
+    #[serde(default, skip_serializing)]
+    locate_command: Option<String>,
     battery: u8,
     charging: bool,
     location: Option<Location>,
@@ -233,8 +239,12 @@ pub async fn telemetry(
     body: Bytes,
 ) -> ApiResult<Json<Value>> {
     let id = verify_device(&app, &headers, "/v1/telemetry", &body)?;
-    let mut input: Telemetry =
-        serde_json::from_slice(&body).map_err(|_| bad("Invalid telemetry"))?;
+    let input: Telemetry = serde_json::from_slice(&body).map_err(|_| bad("Invalid telemetry"))?;
+    commit_telemetry(&app, &id, input)
+}
+// Authentication is deliberately outside this operation. Privacy generation and
+// command expiry are read again at the actual transaction, never cached by auth.
+fn commit_telemetry(app: &App, id: &str, mut input: Telemetry) -> ApiResult<Json<Value>> {
     if input.battery > 100 || !valid_capabilities(&input.capabilities) {
         return Err(bad("Invalid telemetry values"));
     }
@@ -253,14 +263,34 @@ pub async fn telemetry(
     }
     let mut db = app.db.lock().unwrap();
     let tx = db.transaction()?;
-    let (mut location, floor): (Option<String>, i64) = tx
+    let (mut location, epoch): (Option<String>, String) = tx
         .query_row(
-            "SELECT last_location,location_floor FROM devices WHERE id=? AND revoked=0",
+            "SELECT last_location,gps_epoch FROM devices WHERE id=? AND revoked=0",
             [&id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?
         .ok_or_else(denied)?;
+    let has_gps = input.location.is_some() || !input.locations.is_empty();
+    if has_gps && input.gps_epoch.is_none() {
+        return Err(Error(
+            StatusCode::CONFLICT,
+            "GPS generation required; update the phone app",
+        ));
+    }
+    let gps_accepted = input.gps_epoch.as_deref() == Some(epoch.as_str());
+    if let Some(command) = &input.locate_command {
+        let authorized: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM commands WHERE id=? AND device_id=? AND kind='locate' AND status='delivered' AND expires>?)",
+            params![command,id,now()], |r| r.get(0))?;
+        if !authorized || input.location.is_none() || !input.locations.is_empty() {
+            return Err(Error(
+                StatusCode::CONFLICT,
+                "Locate expired, was not offered, or contains no single requested fix",
+            ));
+        }
+    }
+    let mut accepted_observations = Vec::new();
     let mut previous = location
         .as_deref()
         .map(serde_json::from_str::<Location>)
@@ -276,10 +306,15 @@ pub async fn telemetry(
     if let Some(fix) = input.location.take() {
         fixes.push(fix);
     }
-    for fix in fixes.into_iter().filter(|f| f.observed_at > floor) {
+    for fix in fixes.into_iter().filter(|_| gps_accepted) {
         // Keep backfilled points in history without moving the last-known point backwards.
         tx.execute("INSERT OR IGNORE INTO location_history(device_id,observed_at,received_at,latitude,longitude,accuracy) VALUES(?,?,?,?,?,?)",
             params![id,fix.observed_at,received,fix.latitude,fix.longitude,fix.accuracy])?;
+        let matches: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM location_history WHERE device_id=? AND observed_at=? AND latitude=? AND longitude=? AND accuracy=?)",
+            params![id,fix.observed_at,fix.latitude,fix.longitude,fix.accuracy], |r| r.get(0))?;
+        if matches {
+            accepted_observations.push(fix.observed_at);
+        }
         if previous
             .as_ref()
             .is_none_or(|old| fix.observed_at > old.observed_at)
@@ -300,8 +335,21 @@ pub async fn telemetry(
             id
         ],
     )?;
+    // Locate expiry is a server commit-admission deadline, rechecked before commit.
+    if let Some(command) = &input.locate_command {
+        let live: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM commands WHERE id=? AND device_id=? AND expires>?)",
+            params![command, id, now()],
+            |r| r.get(0),
+        )?;
+        if !live {
+            return Err(Error(StatusCode::CONFLICT, "Locate expired before commit"));
+        }
+    }
     tx.commit()?;
-    Ok(Json(json!({"accepted":true,"server_time":now()})))
+    Ok(Json(
+        json!({"accepted":true,"gps_accepted":gps_accepted,"gps_epoch":epoch,"accepted_observations":accepted_observations,"server_time":now()}),
+    ))
 }
 
 pub async fn clear_location(
@@ -327,9 +375,9 @@ fn erase_history(
     require_admin(app, headers)?;
     let mut db = app.db.lock().unwrap();
     let tx = db.transaction()?;
-    let changed = tx.execute("UPDATE devices SET history_revision=history_revision+1,
+    let changed = tx.execute("UPDATE devices SET history_revision=history_revision+1,gps_epoch=?,
         location_floor=MAX(location_floor,COALESCE(json_extract(last_location,'$.observed_at'),0),?),
-        last_location=NULL WHERE id=? AND revoked=0 AND public_key IS NOT NULL", params![now(),id])?;
+        last_location=NULL WHERE id=? AND revoked=0 AND public_key IS NOT NULL", params![token(),now(),id])?;
     if changed != 1 {
         return Err(Error(StatusCode::NOT_FOUND, "Enrolled device not found"));
     }
@@ -430,7 +478,14 @@ pub async fn poll(
     db.execute("UPDATE commands SET status='delivered' WHERE device_id=? AND status='pending' AND expires>?",params![id,now()])?;
     // Messages and command results are deleted after 24h; retain only bounded metadata in audit.
     db.execute("DELETE FROM commands WHERE created<?", [now() - 86400])?;
-    Ok(Json(json!({"commands":list,"server_time":now()})))
+    let epoch: String = db.query_row(
+        "SELECT gps_epoch FROM devices WHERE id=? AND revoked=0",
+        [&id],
+        |r| r.get(0),
+    )?;
+    Ok(Json(
+        json!({"commands":list,"gps_epoch":epoch,"server_time":now()}),
+    ))
 }
 #[derive(Deserialize)]
 pub struct Ack {
@@ -544,4 +599,100 @@ pub async fn audit(State(app): State<App>, headers: HeaderMap) -> ApiResult<Json
         db.prepare("SELECT at,action,device_id,detail FROM audit ORDER BY id DESC LIMIT 100")?;
     let rows=q.query_map([],|r|Ok(json!({"at":r.get::<_,i64>(0)?,"action":r.get::<_,String>(1)?,"device_id":r.get::<_,Option<String>>(2)?,"detail":r.get::<_,String>(3)?})))?.collect::<Result<Vec<_>,_>>()?;
     Ok(Json(json!({"events":rows})))
+}
+
+#[cfg(test)]
+mod privacy_tests {
+    use super::*;
+    use p256::{
+        ecdsa::{SigningKey, signature::Signer},
+        pkcs8::EncodePublicKey,
+    };
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn authenticated_before_erase_cannot_commit_old_generation_after_erase() {
+        let directory =
+            std::env::temp_dir().join(format!("bungee-auth-erase-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let db = store::open(&directory.join("bungee.sqlite3")).unwrap();
+        let key = SigningKey::random(&mut rand::rngs::OsRng);
+        let public = STANDARD.encode(key.verifying_key().to_public_key_der().unwrap().as_bytes());
+        let epoch = token();
+        db.execute("INSERT INTO devices(id,name,wg_key,address,created,public_key,gps_epoch) VALUES('phone','Phone','fixture','10.77.0.2',1,?,?)",params![public,epoch]).unwrap();
+        let cookie = token();
+        db.execute(
+            "INSERT INTO sessions VALUES(?,?)",
+            params![hash(&cookie), now() + 600],
+        )
+        .unwrap();
+        let app = App {
+            db: Arc::new(Mutex::new(db)),
+            origin: String::new(),
+            secure_cookie: false,
+            admin_hash: String::new(),
+            trust_admin_proxy: false,
+            limiter: Arc::new(Mutex::new(RateLimits::default())),
+            state_dir: directory.clone(),
+            wg_endpoint: None,
+            dns: None,
+            geography: Arc::new(crate::geography::Geography::load().unwrap()),
+        };
+        let body = json!({"battery":42,"charging":false,"capabilities":[],"device_owner":false,"gps_epoch":epoch,
+            "location":{"latitude":1.0,"longitude":2.0,"accuracy":3.0,"observed_at":now()+60}}).to_string();
+        let stamp = now().to_string();
+        let nonce = token();
+        let signature: p256::ecdsa::Signature = key.sign(
+            format!(
+                "BUNGEE-V1\nPOST\n/v1/telemetry\n{stamp}\n{nonce}\n{}",
+                hash(&body)
+            )
+            .as_bytes(),
+        );
+        let mut headers = HeaderMap::new();
+        for (name, value) in [
+            ("x-bungee-device", "phone".into()),
+            ("x-bungee-time", stamp),
+            ("x-bungee-nonce", nonce),
+            (
+                "x-bungee-signature",
+                STANDARD.encode(signature.to_der().as_bytes()),
+            ),
+        ] {
+            headers.insert(name, value.parse().unwrap());
+        }
+        let id = verify_device(&app, &headers, "/v1/telemetry", body.as_bytes()).unwrap();
+        let input: Telemetry = serde_json::from_str(&body).unwrap();
+        let mut admin = HeaderMap::new();
+        admin.insert(
+            "cookie",
+            format!("bungee_session={cookie}").parse().unwrap(),
+        );
+        assert!(
+            erase_history(&app, &admin, &id, false).unwrap().0["cleared"]
+                .as_bool()
+                .unwrap()
+        );
+        let result = commit_telemetry(&app, &id, input).unwrap().0;
+        assert_eq!(result["gps_accepted"], false);
+        let db = app.db.lock().unwrap();
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM location_history", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert!(
+            db.query_row(
+                "SELECT last_location FROM devices WHERE id='phone'",
+                [],
+                |r| r.get::<_, Option<String>>(0)
+            )
+            .unwrap()
+            .is_none()
+        );
+        drop(db);
+        drop(app);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }

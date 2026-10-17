@@ -31,3 +31,10 @@ The independent review confirmed defects in GPS restart permissions, full-blob o
 ## Alpha.10 second-review follow-up
 
 Checked, explicit command consent; recoverable invitation lifecycle/peer publication; strict device API bind; bounded server-streamed CSV; and coordinated release metadata are implemented with regression evidence in [REVIEW-2026-10-SECOND.md](REVIEW-2026-10-SECOND.md). Streaming CSV is no longer an unbounded browser-array feature. Physical GrapheneOS, update publisher authentication, encrypted snapshot archives, administrator roles/MFA, endpoint changes and accessibility/endurance remain open.
+
+
+## Alpha.11 adversarial follow-up
+
+Implemented: transactional GPS erasure generations, cancellation of stale capture/upload reservations, continuous remote-locate consent checks, exact-point acknowledgment and commit-admission expiry, loopback-only admin HTTP, bounded separate JSON readers, interval span/bucket limits and accurate durable-stop labels. [Detailed evidence and limits](REVIEW-2026-10-ADVERSARIAL.md).
+
+Still gated on publisher-authenticated updates, authenticated encrypted archive recovery and measured physical GrapheneOS/storage/network acceptance. No certification or complete distributed-revocation guarantee is claimed.

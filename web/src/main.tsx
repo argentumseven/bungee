@@ -1292,6 +1292,10 @@ function HistoryView({ device }: { device: Device }) {
             setError("Choose a valid start and end time.");
             return;
           }
+          if (recurrence === "interval" && (end - start > 366 * 86400 || Math.floor((end - start) / (minutes * 60)) + 1 > 10000)) {
+            setError("Interval history allows up to 366 days and 10,000 time buckets. Choose a shorter range or wider interval.");
+            return;
+          }
           setRange({
             from: Math.floor(start),
             to: Math.floor(end),
@@ -1448,7 +1452,7 @@ function HistoryView({ device }: { device: Device }) {
       )}
       <p className="fine">
         {range.recurrence === "interval"
-          ? `Showing the newest saved record in each ${range.minutes}-minute interval, anchored at the start of this range. Empty intervals remain gaps.`
+          ? `Showing the newest saved record in each ${range.minutes}-minute interval, anchored at the start of this range. Empty intervals remain gaps. Limit: 366 days and 10,000 buckets per lookup.`
           : range.recurrence === "daily"
             ? `Showing the closest saved record within ±${range.tolerance} minutes of ${range.daily} in ${range.timezone}, up to 366 days. Missing spring-forward times are skipped; repeated fall-back times use the first occurrence.`
             : "Showing every saved record in this range."}{" "}

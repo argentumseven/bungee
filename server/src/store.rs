@@ -71,6 +71,17 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
         tx.execute("ALTER TABLE devices ADD COLUMN last_contact INTEGER", [])?;
         tx.execute("UPDATE devices SET last_contact=last_seen", [])?;
     }
+    if !columns.iter().any(|c| c == "gps_epoch") {
+        tx.execute(
+            "ALTER TABLE devices ADD COLUMN gps_epoch TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
+    // Opaque generations never depend on handset clocks. Preserve them across restarts.
+    tx.execute(
+        "UPDATE devices SET gps_epoch=lower(hex(randomblob(32))) WHERE gps_epoch=''",
+        [],
+    )?;
     if !columns.iter().any(|c| c == "history_revision") {
         tx.execute(
             "ALTER TABLE devices ADD COLUMN history_revision INTEGER NOT NULL DEFAULT 0",
@@ -158,6 +169,20 @@ mod tests {
             "location":{"latitude":37.78,"longitude":-122.42,"accuracy":12,"observed_at":1000}});
         db.execute("INSERT INTO devices(id,name,wg_key,address,created,last_seen,telemetry) VALUES('test','Test phone','public-test-key','10.77.0.2',1,1000,?)", [old.to_string()]).unwrap();
         initialize(&db).unwrap();
+        let epoch: String = db
+            .query_row("SELECT gps_epoch FROM devices WHERE id='test'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(epoch.len(), 64);
+        initialize(&db).unwrap();
+        assert_eq!(
+            db.query_row("SELECT gps_epoch FROM devices WHERE id='test'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .unwrap(),
+            epoch
+        );
         let (state, location, floor): (String, String, i64) = db
             .query_row(
                 "SELECT telemetry,last_location,location_floor FROM devices WHERE id='test'",

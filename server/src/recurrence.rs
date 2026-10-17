@@ -21,6 +21,13 @@ impl Recurrence {
                 "Choose an interval from 60 to 86400 seconds, or a daily time",
             ));
         }
+        if let Some(every) = self.every
+            && (to - from > 366 * 86400 || (to - from) / every + 1 > 10000)
+        {
+            return Err(bad(
+                "Interval lookup allows at most 366 days and 10000 time buckets; choose a smaller range or wider interval",
+            ));
+        }
         if let Some(daily) = &self.daily
             && (to > 253402300799
                 || to - from > 366 * 86400
@@ -125,6 +132,21 @@ impl Recurrence {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn interval_work_is_bounded_before_opening_a_scan() {
+        let minute = Recurrence {
+            every: Some(60),
+            ..Default::default()
+        };
+        assert!(minute.validate(0, 599999).is_ok());
+        assert!(minute.validate(0, 600000).is_err());
+        let day = Recurrence {
+            every: Some(86400),
+            ..Default::default()
+        };
+        assert!(day.validate(0, 366 * 86400).is_ok());
+        assert!(day.validate(0, 366 * 86400 + 1).is_err());
+    }
     #[test]
     fn recurrence_preserves_buckets_across_pages_and_handles_dst() {
         let db = Connection::open_in_memory().unwrap();

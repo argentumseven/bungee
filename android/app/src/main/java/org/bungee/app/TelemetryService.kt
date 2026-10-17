@@ -7,6 +7,9 @@ import android.content.*
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.location.Location
+import android.location.LocationListener
+import java.util.concurrent.atomic.AtomicBoolean
+import org.bungee.transport.Transport
 import android.location.LocationManager
 import android.net.ConnectivityManager
 import android.net.Network
@@ -22,7 +25,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.coroutines.resume
 
-data class SharingStatus(val running: Boolean = false, val connected: Boolean = false, val text: String = "Sharing is paused", val lastSent: Long? = null, val queuedFixes: Int = 0, val droppedFixes: Long = 0, val nextRetryAt: Long? = null, val gpsAccess: String = "paused")
+data class SharingStatus(val running: Boolean = false, val connected: Boolean = false, val text: String = "Sharing is stopped", val lastSent: Long? = null, val queuedFixes: Int = 0, val droppedFixes: Long = 0, val nextRetryAt: Long? = null, val gpsAccess: String = "paused")
 
 class TelemetryService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -31,7 +34,7 @@ class TelemetryService : Service() {
     private var tone: ToneGenerator? = null
     private var ringJob: Job? = null
     private var sampler: Job? = null
-    @Volatile private var latest: Location? = null
+    private data class Observation(val point: JSONObject, val epoch: String, val stamp: DisclosureFence.Stamp)
     @Volatile private var network: Network? = null
     private var watchingNetwork = false
     private var locationForeground = false
@@ -93,9 +96,7 @@ class TelemetryService : Service() {
                 val nextSample = elapsed() + 60_000
                 try {
                     updateLocationStatus()
-                    val cached = lastLocation()
-                    latest = if (canSample() && (cached == null || System.currentTimeMillis() - cached.time > 45000)) freshLocation() ?: cached else cached
-                    latest?.let { point -> withContext(Dispatchers.IO) { identity.queueLocation(locationJson(point)) } }
+                    freshObservation()?.let { fix -> withContext(Dispatchers.IO) { identity.queueLocation(fix.point, fix.stamp, fix.epoch) } }
                     updateQueueStatus()
                 } catch (e: CancellationException) { throw e }
                 catch (_: Exception) { status.value = status.value.copy(text = "GPS queue unavailable · check local storage") }
@@ -134,10 +135,13 @@ class TelemetryService : Service() {
                 try {
                     withContext(Dispatchers.IO) { HomeTunnel.connect(this@TelemetryService, identity, JSONObject(identity.bundle!!), tunnelOwner) }
                     // Commands and saved receipts take precedence over bulk GPS catch-up on a short link.
-                    val batch = withContext(Dispatchers.IO) { api.request("/v1/commands").getJSONArray("commands") }
+                    val polled = withContext(Dispatchers.IO) { api.request("/v1/commands") }
+                    withContext(Dispatchers.IO) { identity.reconcileGpsEpoch(polled.getString("gps_epoch")) }
+                    val batch = polled.getJSONArray("commands")
                     val deadline = elapsed() + 20_000
                     if (elapsed() < deadline) withContext(Dispatchers.IO) {
                         val desired = api.request("/v1/sync", JSONObject().put("report", ManagementAgent.report(this@TelemetryService, identity)))
+                        identity.reconcileGpsEpoch(desired.getString("gps_epoch"))
                         ManagementAgent.apply(this@TelemetryService, identity, desired.getLong("revision"), desired.getJSONObject("policy"))
                     }
                     flushReceipts(api, deadline)
@@ -146,7 +150,7 @@ class TelemetryService : Service() {
                         execute(api, batch.getJSONObject(n), deadline)
                     }
                     if (elapsed() < deadline && (elapsed() >= nextTelemetry || status.value.queuedFixes > 0)) {
-                        upload(api, latest, retry.batchSize)
+                        upload(api, limit = retry.batchSize)
                         nextTelemetry = elapsed() + if (identity.state("management").optBoolean("lost_mode_active")) 30_000 else 60_000
                     }
                     retry.succeeded(elapsed(), elapsed() - started)
@@ -172,47 +176,86 @@ class TelemetryService : Service() {
         return NotificationCompat.Builder(this, "sharing").setSmallIcon(R.drawable.ic_bungee).setContentTitle("Bungee sharing is active")
             .setContentText(if (locationForeground) "GPS fixes queue locally until home is reachable" else "Connection active · open Bungee to resume GPS")
             .setContentIntent(open).setOngoing(true).setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-            .addAction(0, "Pause sharing", pause).addAction(0, "Stop sound", hush).build()
+            .addAction(0, "Stop sharing", pause).addAction(0, "Stop sound", hush).build()
     }
-    private fun lastLocation(): Location? {
-        if (!canSample()) return null
-        val manager = getSystemService(LocationManager::class.java)
-        // An old, timestamped fix can still be valuable after a long outage; never age it out here.
-        return try { manager.getLastKnownLocation(LocationManager.GPS_PROVIDER)?.takeIf { it.time > 0 && it.time <= System.currentTimeMillis() + 120000 } } catch (_: SecurityException) { null }
-    }
-    private suspend fun freshLocation(): Location? {
-        if (!canSample()) return null
+    private fun disclosureAllowed(epoch: String, command: Boolean) = canSample() && identity.gpsEpoch == epoch &&
+        !LocalSafety.isStopped(this) && (!command || identity.allowCommands)
+    private suspend fun freshObservation(command: Boolean = false): Observation? {
+        val epoch = identity.gpsEpoch ?: return null
+        val stamp = PrivacySends.fence.stamp()
+        if (!disclosureAllowed(epoch, command)) return null
         val manager = getSystemService(LocationManager::class.java)
         if (!manager.isProviderEnabled(LocationManager.GPS_PROVIDER)) return null
-        return withTimeoutOrNull(25000) {
-            suspendCancellableCoroutine { continuation ->
-                val cancel = CancellationSignal()
-                continuation.invokeOnCancellation { cancel.cancel() }
-                try { manager.getCurrentLocation(LocationManager.GPS_PROVIDER, cancel, mainExecutor) { loc -> if (continuation.isActive) continuation.resume(loc) } }
-                catch (_: SecurityException) { if (continuation.isActive) continuation.resume(null) }
-                catch (_: Exception) { if (continuation.isActive) continuation.resume(null) }
-            }
-        }
+        val started = SystemClock.elapsedRealtimeNanos()
+        var ticket: DisclosureFence.Ticket? = null
+        try {
+            val fix: Location = withTimeoutOrNull(25000) {
+                suspendCancellableCoroutine { continuation ->
+                    val done = AtomicBoolean(false)
+                    lateinit var listener: LocationListener
+                    fun finish(location: Location?) {
+                        if (done.compareAndSet(false, true)) {
+                            runCatching { manager.removeUpdates(listener) }
+                            if (continuation.isActive) continuation.resume(location)
+                        }
+                    }
+                    listener = LocationListener { location ->
+                        // Never re-label an OS-cached pre-generation fix as new data.
+                        if (location.elapsedRealtimeNanos >= started) finish(location)
+                    }
+                    continuation.invokeOnCancellation { done.set(true); runCatching { manager.removeUpdates(listener) } }
+                    try {
+                        ticket = PrivacySends.fence.reserve(stamp, { disclosureAllowed(epoch, command) }, { finish(null) })
+                        PrivacySends.fence.checked(stamp, { disclosureAllowed(epoch, command) && !done.get() }) {
+                            try { manager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 0L, 0f, listener, Looper.getMainLooper()) }
+                            catch (_: SecurityException) { finish(null) }
+                        }
+                    } catch (_: Exception) { finish(null) }
+                }
+            } ?: return null
+            return PrivacySends.fence.checked(stamp, { disclosureAllowed(epoch, command) }) { Observation(locationJson(fix), epoch, stamp) }
+        } finally { ticket?.let { PrivacySends.fence.release(it) } }
     }
     private fun locationJson(location: Location): JSONObject = JSONObject().put("latitude", location.latitude).put("longitude", location.longitude).put("accuracy", location.accuracy.toDouble()).put("observed_at", location.time / 1000)
-    private suspend fun upload(api: HomeApi, location: Location?, limit: Int = 25) {
+    private suspend fun upload(api: HomeApi, observation: Observation? = null, limit: Int = 25, commandId: String? = null, deadline: Long = Long.MAX_VALUE, expires: Long? = null) {
+        val stamp = observation?.stamp ?: PrivacySends.fence.stamp()
+        val epoch = observation?.epoch ?: identity.gpsEpoch
         val battery = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, 0) ?: 0
         val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
         val charging = battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0
         val cutoff = api.clock.gpsCutoff(elapsed())
-        val point = if (!identity.allowLocate) null else location?.let(::locationJson)?.takeIf { GpsBacklog.usable(it, cutoff) }
-            ?: withContext(Dispatchers.IO) { identity.newestQueuedLocation(cutoff) }
-        point?.let { withContext(Dispatchers.IO) { identity.queueLocation(it) } }
+        val sharing = identity.allowLocate && epoch != null
+        val pending = if (sharing && commandId == null) withContext(Dispatchers.IO) { identity.pendingLocations(limit, cutoff) } else JSONArray()
+        val point = observation?.point?.takeIf { GpsBacklog.usable(it, cutoff) }
+        if (commandId != null) check(point != null) { "Requested GPS fix is unavailable" }
         val data = JSONObject().put("battery", (level * 100 / scale.coerceAtLeast(1)).coerceIn(0, 100)).put("charging", charging)
-            .put("location", if (identity.allowLocate) point ?: JSONObject.NULL else JSONObject.NULL)
-            .put("capabilities", JSONArray(capabilities(this, identity))).put("device_owner", getSystemService(DevicePolicyManager::class.java).isDeviceOwnerApp(packageName))
-        // One bounded batch per cycle; uncertain acknowledgements preserve the encrypted queue.
-        val pending = withContext(Dispatchers.IO) { identity.pendingLocations(limit, cutoff) }
-        data.put("locations", pending)
-        val response = withContext(Dispatchers.IO) { api.request("/v1/telemetry", data) }
+            .put("location", point ?: JSONObject.NULL).put("locations", pending).put("gps_epoch", epoch ?: JSONObject.NULL)
+            .put("capabilities", JSONArray(capabilities(this, identity))).put("device_owner", false)
+        commandId?.let { data.put("locate_command", it) }
+        val allowed = {
+            !LocalSafety.isStopped(this) && (!sharing || identity.allowLocate && identity.gpsEpoch == epoch) &&
+                (commandId == null || epoch != null && disclosureAllowed(epoch, true)) && elapsed() < deadline &&
+                (expires == null || api.clock.upperNow(elapsed()) < expires)
+        }
+        val response = withContext(Dispatchers.IO) {
+            DisclosureRequest(PrivacySends.fence, { Transport.reserveRequest() }, { Transport.cancelRequest(it) }).exchange(stamp, allowed, {
+                minOf(10000L, deadline - elapsed(), expires?.let { (it - api.clock.upperNow(elapsed())) * 1000 } ?: 10000L)
+            }) { reservation, remaining -> api.request("/v1/telemetry", data, reservation = reservation, timeoutMillis = remaining, deadlineElapsed = deadline) }
+        }
         check(response.optBoolean("accepted")) { "Telemetry was not committed" }
-        withContext(Dispatchers.IO) { identity.acknowledgeLocations(pending) }
+        if (response.getString("gps_epoch") != epoch) {
+            withContext(Dispatchers.IO) { identity.reconcileGpsEpoch(response.getString("gps_epoch")) }
+            if (commandId != null) error("Home erased earlier GPS; requested fix was not accepted")
+            status.value = status.value.copy(lastSent = System.currentTimeMillis())
+            return
+        }
+        PrivacySends.fence.checked(stamp, { !LocalSafety.isStopped(this) && (!sharing || identity.allowLocate) && (commandId == null || identity.allowCommands) }) {
+            if (commandId != null) {
+                check(response.optBoolean("gps_accepted") && response.getJSONArray("accepted_observations").let { accepted -> (0 until accepted.length()).any { accepted.getLong(it) == point!!.getLong("observed_at") } }) { "Home did not accept the requested GPS fix" }
+            }
+        }
+        if (sharing) withContext(Dispatchers.IO) { identity.acknowledgeLocations(pending, stamp, epoch!!) }
         status.value = status.value.copy(lastSent = System.currentTimeMillis())
     }
     private suspend fun flushReceipts(api: HomeApi, deadline: Long) {
@@ -245,7 +288,12 @@ class TelemetryService : Service() {
                 receipt.put("status", "rejected").put("result", "Permission or local consent was revoked")
             } else {
                 val result = when (kind) {
-                    "locate" -> { val available = minOf(deadline - elapsed(), (expires - api.clock.upperNow(elapsed())) * 1000).coerceAtLeast(0); val fix = withTimeoutOrNull(available) { freshLocation() } ?: error("No timely location fix available"); upload(api, fix); "Fresh location uploaded" }
+                    "locate" -> {
+                        val available = minOf(deadline - elapsed(), (expires - api.clock.upperNow(elapsed())) * 1000).coerceAtLeast(0)
+                        val fix = withTimeoutOrNull(available) { freshObservation(command = true) } ?: error("No timely, authorized location fix available")
+                        upload(api, fix, commandId = id, deadline = deadline, expires = expires)
+                        "Fresh GPS accepted by home; expiry checked at commit"
+                    }
                     "ring" -> { identity.ifCommandsAllowed { LocalSafety.ifAllowed(this) { startRinging() } }; "Sound started for up to 30 seconds" }
                     "stop_ringing" -> { identity.ifCommandsAllowed { stopRinging() }; "Sound stopped" }
                     "message" -> identity.ifCommandsAllowed {

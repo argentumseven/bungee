@@ -22,13 +22,14 @@ class HomeApi(private val identity: Identity, val clock: HomeClock = HomeClock()
             // This succeeds only if the server already bound THIS signing key to this device ID.
             val existing = request("/v1/sync", JSONObject().put("report", JSONObject()))
             require(existing.has("revision") && existing.has("policy")) { "Registration could not be confirmed" }
-            JSONObject().put("device_id", bundle.getString("device_id"))
+            JSONObject().put("device_id", bundle.getString("device_id")).put("gps_epoch", existing.getString("gps_epoch"))
         }
         require(result.getString("device_id") == bundle.getString("device_id"))
+        identity.reconcileGpsEpoch(result.getString("gps_epoch"))
         identity.enrolled = true
         identity.bundle = bundle.apply { remove("token") }.toString()
     }
-    fun request(path: String, body: JSONObject = JSONObject(), signed: Boolean = true): JSONObject {
+    fun request(path: String, body: JSONObject = JSONObject(), signed: Boolean = true, reservation: Long? = null, timeoutMillis: Long = 10000, deadlineElapsed: Long = Long.MAX_VALUE): JSONObject {
         check(HomeTunnel.state == com.wireguard.android.backend.Tunnel.State.UP) { "The private tunnel is disconnected" }
         require(path in listOf("/v1/enroll", "/v1/telemetry", "/v1/commands", "/v1/ack", "/v1/sync"))
         val bytes = body.toString().toByteArray(Charsets.UTF_8)
@@ -45,7 +46,10 @@ class HomeApi(private val identity: Identity, val clock: HomeClock = HomeClock()
         }
         check(HomeTunnel.appContained) { "The app-contained connection is unavailable" }
         val started = android.os.SystemClock.elapsedRealtime()
-        val response = JSONObject(Transport.exchange(path, body.toString(), headers.toString()))
+        val remaining = minOf(timeoutMillis, deadlineElapsed - android.os.SystemClock.elapsedRealtime())
+        check(remaining > 0) { "Request deadline passed before transport" }
+        val response = JSONObject(if (reservation == null) Transport.exchange(path, bytes.toString(Charsets.UTF_8), headers.toString())
+            else Transport.exchangeRequest(reservation, path, bytes.toString(Charsets.UTF_8), headers.toString(), remaining))
         val status = response.getInt("status")
         val result = JSONObject(response.getString("body"))
         if (status !in 200..299) throw HomeApiException(status)

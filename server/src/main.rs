@@ -52,13 +52,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let secure_cookie = origin.starts_with("https://");
     let device_bind =
         security::device_bind(&env::var("BUNGEE_DEVICE_BIND").unwrap_or("127.0.0.1:8081".into()))?;
-    let admin_bind: SocketAddr = env::var("BUNGEE_ADMIN_BIND")
-        .unwrap_or("127.0.0.1:8080".into())
-        .parse()?;
-    if !secure_cookie
-        && (!admin_bind.ip().is_loopback() || !origin.starts_with("http://127.0.0.1:"))
-    {
-        return Err("Non-loopback dashboards require an HTTPS BUNGEE_PUBLIC_ORIGIN".into());
+    let admin_bind =
+        security::admin_bind(&env::var("BUNGEE_ADMIN_BIND").unwrap_or("127.0.0.1:8080".into()))?;
+    if !secure_cookie && !origin.starts_with("http://127.0.0.1:") {
+        return Err("Use an HTTPS BUNGEE_PUBLIC_ORIGIN behind the local TLS gateway".into());
     }
     let password_file = env::var_os("BUNGEE_ADMIN_PASSWORD_FILE")
         .map(PathBuf::from)

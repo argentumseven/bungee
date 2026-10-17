@@ -60,6 +60,17 @@ pub fn now() -> i64 {
         .unwrap()
         .as_secs() as i64
 }
+pub fn admin_bind(value: &str) -> Result<std::net::SocketAddr, &'static str> {
+    let bind: std::net::SocketAddr = value
+        .parse()
+        .map_err(|_| "BUNGEE_ADMIN_BIND must be a numeric loopback address")?;
+    if bind.port() == 0 || !bind.ip().is_loopback() {
+        return Err(
+            "BUNGEE_ADMIN_BIND must use a nonzero loopback port; this listener is HTTP and requires the local TLS gateway for remote access",
+        );
+    }
+    Ok(bind)
+}
 pub fn device_bind(value: &str) -> Result<std::net::SocketAddr, &'static str> {
     let bind: std::net::SocketAddr = value
         .parse()
@@ -306,6 +317,22 @@ pub fn private_write(path: &Path, data: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn admin_http_listener_is_always_loopback() {
+        for address in ["127.0.0.1:8080", "[::1]:8080"] {
+            assert!(admin_bind(address).is_ok());
+        }
+        for address in [
+            "0.0.0.0:8080",
+            "[::]:8080",
+            "192.168.1.5:8080",
+            "203.0.113.1:8080",
+            "localhost:8080",
+            "127.0.0.1:0",
+        ] {
+            assert!(admin_bind(address).is_err());
+        }
+    }
     #[test]
     fn full_source_bucket_preserves_existing_peers_and_other_classes() {
         let mut limits = RateLimits::default();

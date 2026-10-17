@@ -4,7 +4,23 @@ use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
 };
-use rusqlite::params;
+use rusqlite::{Connection, OpenFlags, params};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
+};
+use tokio::sync::Semaphore;
+static READERS: Semaphore = Semaphore::const_new(2);
+const READ_TIME: Duration = Duration::from_secs(5);
+struct CancelRead(Arc<AtomicBool>);
+impl Drop for CancelRead {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -51,13 +67,72 @@ pub async fn history(
     Path(id): Path<String>,
     Query(query): Query<HistoryQuery>,
 ) -> ApiResult<Json<Value>> {
-    require_admin(&app, &headers)?;
+    query.selection()?;
+    let revision = crate::export::live_revision(&app, &headers, &id)?;
+    let permit = READERS.try_acquire().map_err(|_| {
+        Error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Two history queries are running; retry shortly",
+        )
+    })?;
+    let cancel = CancelRead(Arc::new(AtomicBool::new(false)));
+    let stop = cancel.0.clone();
+    let deadline = Instant::now() + READ_TIME;
+    let task = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let result = read_history(
+            &app,
+            &headers,
+            &id,
+            &query,
+            revision,
+            stop.clone(),
+            deadline,
+        );
+        if stop.load(Ordering::Relaxed) || Instant::now() >= deadline {
+            return Err(Error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "History query time limit reached; choose a smaller range",
+            ));
+        }
+        result
+    });
+    tokio::time::timeout(READ_TIME, task)
+        .await
+        .map_err(|_| {
+            Error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "History query time limit reached; choose a smaller range",
+            )
+        })?
+        .map_err(|_| Error(StatusCode::INTERNAL_SERVER_ERROR, "History worker failed"))?
+}
+fn read_history(
+    app: &App,
+    headers: &HeaderMap,
+    id: &str,
+    query: &HistoryQuery,
+    revision: i64,
+    stop: Arc<AtomicBool>,
+    deadline: Instant,
+) -> ApiResult<Json<Value>> {
     let limit = query.limit.unwrap_or(200);
     let (kind, recurrence) = query.selection()?;
-    let db = app.db.lock().unwrap();
+    let db = Connection::open_with_flags(
+        app.state_dir.join("bungee.sqlite3"),
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    db.busy_timeout(Duration::from_millis(250))?;
+    db.execute_batch(
+        "PRAGMA query_only=ON; PRAGMA cache_size=-2048; PRAGMA temp_store=FILE; BEGIN DEFERRED;",
+    )?;
+    db.progress_handler(
+        2000,
+        Some(move || stop.load(Ordering::Relaxed) || Instant::now() >= deadline),
+    );
     let exists: bool = db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM devices WHERE id=?)",
-        [&id],
+        "SELECT EXISTS(SELECT 1 FROM devices WHERE id=? AND revoked=0)",
+        [id],
         |r| r.get(0),
     )?;
     if !exists {
@@ -65,7 +140,7 @@ pub async fn history(
     }
     let selected = recurrence.keys(
         &db,
-        &id,
+        id,
         kind,
         query.from,
         query.to,
@@ -127,6 +202,12 @@ pub async fn history(
     } else {
         None
     };
+    if crate::export::live_revision(app, headers, id)? != revision {
+        return Err(Error(
+            StatusCode::CONFLICT,
+            "History changed; retry the query",
+        ));
+    }
     Ok(Json(
         json!({"kind":kind,"records":rows,"next_before":next,"from":query.from,"to":query.to}),
     ))

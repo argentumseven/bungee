@@ -115,3 +115,10 @@ Bundled Compose enables `BUNGEE_TRUST_LOOPBACK_PROXY=true` only with the Rust ad
 `release.json` is copied beside the installed helper and supplies its coordinated release version/contract metadata. Keep it with `bungee-host.py` and `network_config.py` when installing/updating local tooling; do not remove the companion manifest. The server/API and APK derive their displayed release version from the same source; CI rejects mismatched release tags.
 
 The server permits only numeric loopback device-API binds or `10.77.0.1:8081`. Do not publish that private HTTP API. Reissue expired/lost never-enrolled invitations from dashboard Settings with the same phone public key; new token/PSK replace the old ones. If peer publication returns an error, repair server storage and retry that same key; no phone reset is required for an unpaired invitation. Paired/revoked signing identities are not rebound. Use one Rust server writer per state/peer volume. See [the latest review](REVIEW-2026-10-SECOND.md) for transaction, backup and physical-validation limits.
+
+
+## Alpha.11 privacy protocol upgrade
+
+Update the server before the APK, using the same app signer. Old GPS uploads without a generation receive 409 and keep their local queue until upgrade. The first alpha.11 reconciliation deliberately discards the old untagged phone backlog; subsequent home erasure discards an entire unreconciled old generation. Existing home history and pairing are preserved. See [the adversarial follow-up](REVIEW-2026-10-ADVERSARIAL.md) for exact cancellation/deadline and backup/restore boundaries.
+
+The Rust administrator backend is plain HTTP and accepts **only loopback binds**, even with an HTTPS public origin. Remote HTTPS access goes through the source-restricted local Caddy gateway; an HTTPS origin string never supplies TLS on the Rust socket.

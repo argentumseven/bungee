@@ -244,8 +244,13 @@ pub async fn sync(
     if changed != 1 {
         return Err(denied());
     }
+    let epoch: String = db.query_row(
+        "SELECT gps_epoch FROM devices WHERE id=? AND revoked=0",
+        [&id],
+        |r| r.get(0),
+    )?;
     Ok(Json(
-        json!({"revision":revision,"policy":policy.reversible(),"dns_available":false,"persistent_controls_enabled":false}),
+        json!({"revision":revision,"policy":policy.reversible(),"gps_epoch":epoch,"server_time":now(),"dns_available":false,"persistent_controls_enabled":false}),
     ))
 }
 pub fn dns_peer(db: &rusqlite::Connection, address: &str) -> ApiResult<Option<String>> {

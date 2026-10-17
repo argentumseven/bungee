@@ -1,5 +1,7 @@
 # Second independent review — alpha.10
 
+**Historical record:** alpha.11 corrects later erasure/consent/deadline findings. Read [the adversarial follow-up](REVIEW-2026-10-ADVERSARIAL.md) for the current protocol and validation limits.
+
 The owner supplied another source review of alpha.9. Its new consent, invitation, listener, export and version findings are confirmed. This record describes source corrections and checks; physical GrapheneOS recovery is still unproven. The [first review record](REVIEW-2026-10.md) remains a historical account of alpha.9.
 
 ## Findings and corrections

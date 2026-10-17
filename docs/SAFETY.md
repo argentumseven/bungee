@@ -73,3 +73,8 @@ Automatic GPS recovery after first unlock requires precise and background locati
 ## Command consent and failed persistence (alpha.10)
 
 Household commands, including remote fresh-location requests, are off until separately explained/approved with local phone unlock. Old implicit command-consent preferences do not authorize the new build. Permission checks and a shared guard precede command/lost-mode actuation. Consent or app-lock writes must succeed before the UI reports success. A failed command write vetoes the current process and attempts independent local-stop persistence/service shutdown. If storage rejects that too, the UI directs the user to Android force-stop; restart persistence is not claimed. App-lock write failures keep the current session locked and expose an error. See [the second review](REVIEW-2026-10-SECOND.md) for physical fault tests still required.
+
+
+## Consent cancellation and stop labels (alpha.11)
+
+Stop sharing persists the independent local stop. The stopped screen says **Open local recovery to resume**: authenticate there, allow a manual restart, then explicitly start sharing. No server response can clear this stop. GPS/command withdrawal and local stop invalidate earlier capture/send stamps and cancel active reservations; bytes already sent may still reach home. A local-safety write failure keeps a process veto and surfaces Android force-stop guidance. Persistent storage failure still prevents guarantees after process death. GPS erasure uses a transactional server generation rather than a handset timestamp cutoff. See [the adversarial review record](REVIEW-2026-10-ADVERSARIAL.md) for the precise limits and required physical tests.

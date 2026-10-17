@@ -46,6 +46,7 @@ class MainActivity : FragmentActivity() {
     private var error by mutableStateOf<String?>(null)
     private var busy by mutableStateOf(false)
     private var enrolled by mutableStateOf(false)
+    private var locallyStopped by mutableStateOf(false)
     private var pendingBundle: String? = null
     private val pairingOwner = Any()
     private var pairingText by mutableStateOf("")
@@ -75,7 +76,7 @@ class MainActivity : FragmentActivity() {
         } }
     }
     override fun onStop() { super.onStop(); if (::identity.isInitialized && identity.appLock) locked = true }
-    override fun onResume() { super.onResume(); backgroundLocation = TelemetryService.hasBackgroundLocation(this) }
+    override fun onResume() { super.onResume(); backgroundLocation = TelemetryService.hasBackgroundLocation(this); locallyStopped = LocalSafety.isStopped(this) }
     override fun onDestroy() { scope.cancel(); super.onDestroy() }
     private fun unlock(requireCredential: Boolean = false, onSuccess: () -> Unit = { locked = false }) {
         if (!getSystemService(KeyguardManager::class.java).isDeviceSecure) { error = "Set a screen lock in Android settings first."; return }
@@ -178,7 +179,7 @@ class MainActivity : FragmentActivity() {
                     Column(Modifier.padding(22.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(Modifier.size(45.dp).background(Color(0xFFECF5EF), RoundedCornerShape(13.dp)), contentAlignment = Alignment.Center) { Icon(if (status.connected) Icons.Outlined.Wifi else Icons.Outlined.Pause, null, tint = Color(0xFF6E9E80)) }
-                            Column(Modifier.padding(start = 13.dp)) { Text(if (status.connected) "Home is within reach." else if (status.running) "Finding the way home…" else "Take a little pause.", fontSize = 14.sp, fontWeight = FontWeight.SemiBold); Text(status.text, fontSize = 10.sp, color = Muted, modifier = Modifier.padding(top = 5.dp)) }
+                            Column(Modifier.padding(start = 13.dp)) { Text(if (status.connected) "Home is within reach." else if (status.running) "Finding the way home…" else "Sharing is stopped.", fontSize = 14.sp, fontWeight = FontWeight.SemiBold); Text(status.text, fontSize = 10.sp, color = Muted, modifier = Modifier.padding(top = 5.dp)) }
                         }
                         HorizontalDivider(Modifier.padding(vertical = 20.dp), color = Color(0xFFF0EDF5))
                         Row { Icon(Icons.Outlined.VpnLock, null, tint = Purple, modifier = Modifier.size(17.dp)); Text("  Household traffic uses app-contained WireGuard.", fontSize = 11.sp, color = Muted) }
@@ -195,19 +196,21 @@ class MainActivity : FragmentActivity() {
                         status.nextRetryAt?.let { Text("Next retry around ${java.text.DateFormat.getTimeInstance().format(java.util.Date(it))}", color = Muted, fontSize = 10.sp) }
                         status.lastSent?.let { Text("Last check-in · ${java.text.DateFormat.getTimeInstance().format(java.util.Date(it))}", color = Color(0xFF9BA99F), fontSize = 10.sp, modifier = Modifier.padding(top = 16.dp)) }
                         Button(onClick = {
-                            if (status.running) { runCatching { LocalSafety.setStopped(this@MainActivity, true) }.onFailure { error = "Stop could not be saved. Force-stop Bungee in Android Settings." }; resume = false; stopService(Intent(this@MainActivity, TelemetryService::class.java)) }
+                            if (status.running) { runCatching { LocalSafety.setStopped(this@MainActivity, true) }.onFailure { error = "Stop could not be saved. Force-stop Bungee in Android Settings." }; locallyStopped = LocalSafety.isStopped(this@MainActivity); resume = false; stopService(Intent(this@MainActivity, TelemetryService::class.java)) }
+                            else if (LocalSafety.isStopped(this@MainActivity)) startActivity(Intent(this@MainActivity, LocalRecoveryActivity::class.java))
                             else startSharing()
-                        }, modifier = Modifier.fillMaxWidth().padding(top = 20.dp), shape = RoundedCornerShape(11.dp)) { Text(if (status.running) "Pause sharing" else "Start sharing", Modifier.padding(6.dp)) }
+                        }, modifier = Modifier.fillMaxWidth().padding(top = 20.dp), shape = RoundedCornerShape(11.dp)) { Text(SharingControl.label(status.running, locallyStopped || LocalSafety.isStopped(this@MainActivity)), Modifier.padding(6.dp)) }
+                        Text("Stop is saved across restarts. To resume, open local recovery, allow a manual restart, then start sharing here.", color = Muted, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
                     }
                 }
                 Text("YOU’RE IN CONTROL", color = Muted, fontSize = 9.sp, letterSpacing = 1.8.sp, modifier = Modifier.padding(top = 30.dp, bottom = 15.dp))
                 Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(17.dp)) {
                     Column(Modifier.padding(horizontal = 18.dp)) {
-                        SettingRow("Share GPS history", "Saved on your server until erased; precise location required", locate) { value ->
+                        SettingRow("Share GPS history", "Turning off cancels pending sends; already sent data stays at home until erased", locate) { value ->
                             scope.launch {
                                 runCatching { withContext(Dispatchers.IO) { identity.allowLocate = value } }
                                     .onSuccess { locate = value }
-                                    .onFailure { locate = identity.allowLocate; error = "Location preference or queue cleanup failed. Pause sharing and use local recovery or Android Settings." }
+                                    .onFailure { locate = identity.allowLocate; error = "Location preference or queue cleanup failed. Stop sharing and use local recovery or Android Settings." }
                             }
                         }
                         HorizontalDivider(color = Color(0xFFF4F1F7))

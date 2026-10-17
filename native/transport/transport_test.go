@@ -54,8 +54,14 @@ func TestWireGuardRoundTripAndRequestBoundaries(t *testing.T) {
 		t.Fatal(e)
 	}
 	stalled := make(chan struct{})
+	waiting := make(chan struct{}, 4)
 	release := make(chan struct{})
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/ack" {
+			waiting <- struct{}{}
+			<-r.Context().Done()
+			return
+		}
 		if r.URL.Path == "/v1/sync" {
 			close(stalled)
 			<-release
@@ -93,6 +99,68 @@ func TestWireGuardRoundTripAndRequestBoundaries(t *testing.T) {
 	if _, e = Exchange("/v1/sync", strings.Repeat("x", 32769), `{}`); e == nil {
 		t.Fatal("oversized request accepted")
 	}
+	t.Run("cancellation before send is a permanent veto", func(t *testing.T) {
+		id, err := ReserveRequest()
+		if err != nil {
+			t.Fatal(err)
+		}
+		CancelRequest(id)
+		if _, err = ExchangeRequest(id, "/v1/ack", `{}`, `{}`, 1000); err == nil {
+			t.Fatal("canceled reservation sent")
+		}
+		select {
+		case <-waiting:
+			t.Fatal("request reached peer after cancellation")
+		default:
+		}
+	})
+	t.Run("inflight cancellation preserves the peer", func(t *testing.T) {
+		id, err := ReserveRequest()
+		if err != nil {
+			t.Fatal(err)
+		}
+		finished := make(chan error, 1)
+		go func() { _, err := ExchangeRequest(id, "/v1/ack", `{}`, `{}`, 10000); finished <- err }()
+		select {
+		case <-waiting:
+		case <-time.After(3 * time.Second):
+			t.Fatal("request did not start")
+		}
+		CancelRequest(id)
+		select {
+		case err := <-finished:
+			if err == nil {
+				t.Fatal("canceled request succeeded")
+			}
+		case <-time.After(time.Second):
+			t.Fatal("cancellation waited for timeout")
+		}
+		if _, err = Exchange("/v1/telemetry", `{}`, `{"X-Bungee-Nonce":"test-nonce"}`); err != nil {
+			t.Fatal("cancellation destroyed peer", err)
+		}
+	})
+	t.Run("remaining operation deadline bounds transport", func(t *testing.T) {
+		id, err := ReserveRequest()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer CancelRequest(id)
+		start := time.Now()
+		if _, err = ExchangeRequest(id, "/v1/ack", `{}`, `{}`, 100); err == nil {
+			t.Fatal("expired request succeeded")
+		}
+		if time.Since(start) > time.Second {
+			t.Fatal("ignored shorter deadline")
+		}
+		select {
+		case <-waiting:
+		case <-time.After(time.Second):
+			t.Fatal("deadline fixture did not reach peer")
+		}
+		if _, err = ExchangeRequest(id, "/v1/telemetry", `{}`, `{}`, 100); err == nil {
+			t.Fatal("reservation reused")
+		}
+	})
 	config.PresharedKey = base64.StdEncoding.EncodeToString(randomKey())
 	data, _ = json.Marshal(config)
 	if e = Configure(string(data)); e != nil {

@@ -173,6 +173,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       }),
     });
     assert.equal(enrolled.status, 200);
+    const enrolledState = await enrolled.json();
     await writeFile(
       join(dir, "wireguard/endpoints.json"),
       JSON.stringify({
@@ -189,6 +190,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     const time = String(Math.floor(Date.now() / 1000)),
       nonce = randomUUID();
     const body = JSON.stringify({
+      gps_epoch: enrolledState.gps_epoch,
       battery: 72,
       charging: false,
       device_owner: false,

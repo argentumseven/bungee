@@ -33,7 +33,7 @@ class Identity(context: Context) {
             }.generateKeyPair()
         }
         if (!keys.containsAlias("bungee-storage")) {
-            check(!prefs.all.keys.any { it == "wg_private" || it == "bundle" || it == "recovery_message" || it == "location_queue" || it == "gps_backlog_v2" || it == "receipt_outbox" || it.startsWith("state_") || it.startsWith("receipt_") }) { "Existing encryption key is unavailable; original records preserved" }
+            check(!prefs.all.keys.any { it == "gps_epoch_v1" || it == "wg_private" || it == "bundle" || it == "recovery_message" || it == "location_queue" || it == "gps_backlog_v2" || it == "receipt_outbox" || it.startsWith("state_") || it.startsWith("receipt_") }) { "Existing encryption key is unavailable; original records preserved" }
             KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
                 init(KeyGenParameterSpec.Builder("bungee-storage", KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
                     .setKeySize(256).setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build())
@@ -62,24 +62,36 @@ class Identity(context: Context) {
         get() = appLockPreference.read { prefs.getBoolean("app_lock", false) }
         set(value) { appLockPreference.write { prefs.edit().putBoolean("app_lock", value).commit() } }
     var allowLocate: Boolean
-        get() = prefs.getBoolean("allow_locate", true)
-        set(value) {
+        get() = locationPreference.read { prefs.getBoolean("allow_locate", true) }
+        set(value) = PrivacySends.fence.change {
             synchronized(GpsStorage.lock) {
-                // Persist withdrawal before cleanup. A cleanup failure cannot authorize uploads.
-                // Clear again before re-enabling if a previous cleanup was interrupted.
                 if (value && !allowLocate) newJournal().clear()
-                val edit = prefs.edit().putBoolean("allow_locate", value)
-                if (!value) edit.remove("location_queue").remove("gps_backlog_v2")
-                check(edit.commit()) { "Could not save location consent and queue state" }
+                locationPreference.write {
+                    val edit = prefs.edit().putBoolean("allow_locate", value)
+                    if (!value) edit.remove("location_queue").remove("gps_backlog_v2")
+                    edit.commit()
+                }
                 if (!value) newJournal().clear()
             }
         }
+    val gpsEpoch: String? get() = secret("gps_epoch_v1")
+    fun reconcileGpsEpoch(epoch: String) {
+        require(epoch.matches(Regex("[A-Za-z0-9_-]{43}|[a-f0-9]{64}"))) { "Home GPS generation is unavailable; update the server" }
+        if (gpsEpoch == epoch) return
+        PrivacySends.fence.change { synchronized(GpsStorage.lock) {
+            newJournal().clear()
+            check(prefs.edit().remove("location_queue").remove("gps_backlog_v2").commit())
+            putSecret("gps_epoch_v1", epoch)
+        } }
+    }
     var allowCommands: Boolean
         get() = commandPreference.read { prefs.getBoolean(COMMAND_CONSENT, false) }
         set(value) {
             try {
-                check(!value || !LocalSafety.isStopped(appContext)) { "Use local recovery before enabling commands" }
-                commandPreference.write { prefs.edit().putBoolean(COMMAND_CONSENT, value).commit() }
+                PrivacySends.fence.change {
+                    check(!value || !LocalSafety.isStopped(appContext)) { "Use local recovery before enabling commands" }
+                    commandPreference.write { prefs.edit().putBoolean(COMMAND_CONSENT, value).commit() }
+                }
             }
             catch (e: Exception) {
                 // Independent, best-effort durable stop. If storage prevents that too,
@@ -109,9 +121,8 @@ class Identity(context: Context) {
             check(prefs.edit().remove("location_queue").remove("gps_backlog_v2").commit()) { "Old GPS queue cleanup failed" }
         return journal
     }
-    fun queueLocation(point: JSONObject) = synchronized(GpsStorage.lock) {
-        if (!enrolled || !allowLocate || !GpsBacklog.usable(point)) return
-        journal().append(point)
+    fun queueLocation(point: JSONObject, stamp: DisclosureFence.Stamp, epoch: String) = PrivacySends.fence.checked(stamp, { enrolled && allowLocate && gpsEpoch == epoch && !LocalSafety.isStopped(appContext) }) {
+        synchronized(GpsStorage.lock) { if (GpsBacklog.usable(point)) journal().append(point) }
     }
     fun pendingLocations(limit: Int = 100, before: Long = Long.MAX_VALUE): JSONArray = synchronized(GpsStorage.lock) { if (!allowLocate) JSONArray() else journal().batch(limit, before) }
     fun newestQueuedLocation(before: Long): JSONObject? = synchronized(GpsStorage.lock) {
@@ -122,7 +133,9 @@ class Identity(context: Context) {
         journal().report()
             .put("pending_receipts", ReceiptOutbox.pending(receipts(), System.currentTimeMillis()/1000, 100).length())
     }
-    fun acknowledgeLocations(sent: JSONArray) = synchronized(GpsStorage.lock) { journal().acknowledge(sent) }
+    fun acknowledgeLocations(sent: JSONArray, stamp: DisclosureFence.Stamp, epoch: String) = PrivacySends.fence.checked(stamp, { allowLocate && gpsEpoch == epoch && !LocalSafety.isStopped(appContext) }) {
+        synchronized(GpsStorage.lock) { journal().acknowledge(sent) }
+    }
     private fun receipts() = JSONArray(secret("receipt_outbox") ?: "[]")
     @Synchronized fun result(id: String): JSONObject? = ReceiptOutbox.find(receipts(), id)?.getJSONObject("receipt") ?: secret("receipt_$id")?.let(::JSONObject)
     @Synchronized fun saveResult(id: String, result: JSONObject, expires: Long) {
@@ -134,11 +147,11 @@ class Identity(context: Context) {
     fun sign(text: String): String = Signature.getInstance("SHA256withECDSA").run {
         initSign(keys.getKey("bungee-signing", null) as java.security.PrivateKey); update(text.toByteArray(Charsets.UTF_8)); encode(sign())
     }
-    fun reset() = synchronized(identityInitialization) { synchronized(GpsStorage.lock) {
+    fun reset() = PrivacySends.fence.change { synchronized(identityInitialization) { synchronized(GpsStorage.lock) {
         newJournal().clear()
         check(prefs.edit().clear().commit()) { "Could not erase local identity" }
         keys.deleteEntry("bungee-signing"); keys.deleteEntry("bungee-storage")
-    } }
+    } } }
     private fun encrypted(text: String): String {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, keys.getKey("bungee-storage", null) as SecretKey)
@@ -155,6 +168,7 @@ class Identity(context: Context) {
     companion object {
         private const val COMMAND_CONSENT = "recovery_command_consent_v2"
         private val identityInitialization = Any()
+        private val locationPreference = CheckedPreference(failureValue = false)
         private val commandPreference = CheckedPreference(failureValue = false)
         private val appLockPreference = CheckedPreference(failureValue = true)
         fun encode(bytes: ByteArray): String = Base64.encodeToString(bytes, Base64.NO_WRAP)

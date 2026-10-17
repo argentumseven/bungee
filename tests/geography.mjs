@@ -107,7 +107,7 @@ test("offline maps and GeoIP preserve source, authentication, history and erasur
   const history = async (extra) =>
     await (
       await api(
-        `/devices/geo/history?kind=network&from=0&to=${time + 1000}${extra || ""}`,
+        `/devices/geo/history?kind=network&from=${extra?.includes("every=") ? time-1000 : 0}&to=${time + 1000}${extra || ""}`,
       )
     ).json();
   await t.test(
@@ -183,7 +183,8 @@ test("offline maps and GeoIP preserve source, authentication, history and erasur
       assert.equal((await history()).records.length, 1);
       assert.equal((await api("/devices/geo", "DELETE")).status, 200);
       await api("/devices");
-      assert.deepEqual((await history()).records, []);
+      assert.equal((await api(`/devices/geo/history?kind=network&from=0&to=${time+1000}`)).status,404);
+      assert.equal(execFileSync("python3",["-c","import sqlite3,sys;print(sqlite3.connect(sys.argv[1]).execute(\"SELECT count(*) FROM network_history WHERE device_id='geo'\").fetchone()[0])",join(dir,"bungee.sqlite3")],{encoding:"utf8"}).trim(),"0");
     },
   );
   await t.test(

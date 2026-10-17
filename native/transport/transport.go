@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.zx2c4.com/wireguard/conn"
@@ -122,9 +123,68 @@ func Configure(configJSON string) error {
 	return nil
 }
 
+// A reservation binds an eventual send to this peer and can be canceled BEFORE
+// ExchangeRequest is entered. Missing/canceled IDs never create a new request.
+type requestScope struct {
+	peer   *engine
+	ctx    context.Context
+	cancel context.CancelFunc
+	used   bool
+}
+
+var requests = struct {
+	sync.Mutex
+	next   atomic.Int64
+	scopes map[int64]*requestScope
+}{scopes: make(map[int64]*requestScope)}
+
+func ReserveRequest() (int64, error) {
+	active.RLock()
+	peer := active.peer
+	active.RUnlock()
+	if peer == nil || peer.ctx.Err() != nil {
+		return 0, errors.New("private connection is stopped")
+	}
+	requests.Lock()
+	defer requests.Unlock()
+	for id, scope := range requests.scopes {
+		if scope.ctx.Err() != nil {
+			scope.cancel()
+			delete(requests.scopes, id)
+		}
+	}
+	if len(requests.scopes) >= 16 {
+		return 0, errors.New("too many pending home requests")
+	}
+	ctx, cancel := context.WithCancel(peer.ctx)
+	id := requests.next.Add(1)
+	requests.scopes[id] = &requestScope{peer: peer, ctx: ctx, cancel: cancel}
+	return id, nil
+}
+func CancelRequest(id int64) {
+	requests.Lock()
+	scope := requests.scopes[id]
+	delete(requests.scopes, id)
+	requests.Unlock()
+	if scope != nil {
+		scope.cancel()
+	}
+}
+
+// Exchange retains the control-request API. Sensitive sends use a reservation
+// shared with the local consent fence and an explicit remaining time budget.
+func Exchange(path, body, headersJSON string) (string, error) {
+	id, err := ReserveRequest()
+	if err != nil {
+		return "", err
+	}
+	defer CancelRequest(id)
+	return ExchangeRequest(id, path, body, headersJSON, 10000)
+}
+
 // Exchange only permits the fixed POST API, with bounded JSON and signed headers.
 // The JSON result contains an HTTP status and body, never a redirect or provider URL.
-func Exchange(path, body, headersJSON string) (string, error) {
+func ExchangeRequest(id int64, path, body, headersJSON string, timeoutMillis int64) (string, error) {
 	allowed := map[string]bool{"/v1/enroll": true, "/v1/telemetry": true, "/v1/commands": true, "/v1/ack": true, "/v1/sync": true}
 	if !allowed[path] || len(body) > 32768 || !json.Valid([]byte(body)) || len(headersJSON) > 4096 {
 		return "", errors.New("invalid home request")
@@ -138,13 +198,24 @@ func Exchange(path, body, headersJSON string) (string, error) {
 			return "", errors.New("invalid signed header")
 		}
 	}
-	active.RLock()
-	peer := active.peer
-	active.RUnlock()
-	if peer == nil {
-		return "", errors.New("private connection is stopped")
+	if timeoutMillis < 1 || timeoutMillis > 10000 {
+		return "", errors.New("invalid request deadline")
 	}
-	request, e := http.NewRequestWithContext(peer.ctx, http.MethodPost, "http://"+apiAddress.String()+path, bytes.NewBufferString(body))
+	requests.Lock()
+	scope := requests.scopes[id]
+	if scope == nil || scope.used {
+		requests.Unlock()
+		return "", errors.New("request canceled or already used")
+	}
+	scope.used = true
+	requests.Unlock()
+	ctx, cancel := context.WithTimeout(scope.ctx, time.Duration(timeoutMillis)*time.Millisecond)
+	defer cancel()
+	if ctx.Err() != nil {
+		return "", errors.New("request canceled")
+	}
+	peer := scope.peer
+	request, e := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+apiAddress.String()+path, bytes.NewBufferString(body))
 	if e != nil {
 		return "", errors.New("invalid request")
 	}
@@ -158,7 +229,7 @@ func Exchange(path, body, headersJSON string) (string, error) {
 	}
 	defer response.Body.Close()
 	data, e := io.ReadAll(io.LimitReader(response.Body, 65537))
-	if e != nil || len(data) > 65536 {
+	if e != nil || len(data) > 65536 || ctx.Err() != nil {
 		return "", errors.New("invalid home response")
 	}
 	result, _ := json.Marshal(struct {
