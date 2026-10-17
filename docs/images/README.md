@@ -7,4 +7,4 @@
 
 The document links to the exact commit that contains these pictures. That keeps its image targets valid in a private repository and before a PR is merged, without assuming the pictures already exist on `main`. When replacing a picture, commit the PNG first, then update the image link to that commit. The image checker verifies pinned content when that commit is present locally.
 
-The GitHub Security tab displays the default branch. It picks up these document changes when the PR is merged. The PR's `docs/SECURITY.md` provides the current preview.
+The GitHub Security tab displays the default branch. The drawn PNGs and their full image paths are also published there, with a notice that the deployment implementation is awaiting PR #1. This branch documents the implemented deployment; merging it replaces the release-specific notice and older controls.

@@ -14,6 +14,8 @@ The picture shows the direct-Rust deployment. HTTPS terminates in Rust; the gate
 
 [![Bungee network security: administrator HTTPS goes directly to Rust; the app uses WireGuard to reach the separate device API; optional DNS has its own listener; other phone traffic keeps its normal route.](https://github.com/argentumseven/bungee/blob/d49a19e19d50e039eb82fc4587270a5e3de59003/docs/images/security-architecture.png?raw=true)](https://github.com/argentumseven/bungee/blob/d49a19e19d50e039eb82fc4587270a5e3de59003/docs/images/security-architecture.png)
 
+[Open the full-size network picture](https://github.com/argentumseven/bungee/blob/d49a19e19d50e039eb82fc4587270a5e3de59003/docs/images/security-architecture.png).
+
 The gateway firewall filters packets; it does not terminate HTTPS. The administrator TLS connection ends in Rust. The device HTTP API is protected by WireGuard and request signatures. DNS uses a separate Rust listener, not an HTTP API route. General IP forwarding stays disabled. A private home resolver needs a separate routed host-to-home tunnel; setting a private IP alone does not make it reachable. New personal enrollment does not install system DNS or enable legacy managed-DNS policies.
 
 ## Storage, keys and backups
@@ -21,6 +23,8 @@ The gateway firewall filters packets; it does not terminate HTTPS. The administr
 Host storage sits outside the containers' shared network namespace. The unlock key and backup identity are separate host-only files; neither is mounted into a runtime container.
 
 [![Bungee storage security: host-key unlock of LUKS2, cold age-encrypted backups, authentication before restoration, and separate host-only backup identity.](https://github.com/argentumseven/bungee/blob/d49a19e19d50e039eb82fc4587270a5e3de59003/docs/images/storage-lifecycle.png?raw=true)](https://github.com/argentumseven/bungee/blob/d49a19e19d50e039eb82fc4587270a5e3de59003/docs/images/storage-lifecycle.png)
+
+[Open the full-size storage picture](https://github.com/argentumseven/bungee/blob/d49a19e19d50e039eb82fc4587270a5e3de59003/docs/images/storage-lifecycle.png).
 
 The cold snapshot also includes the CA and leaf keys. The filesystem and archive encryption use different keys. A host-stored unlock key enables unattended startup; it does not protect against a running host/root compromise or a full-host copy that also contains the key.
 
