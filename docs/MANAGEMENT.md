@@ -10,6 +10,10 @@ The separate **Bungee recovery** launcher works offline without pairing keys. Au
 
 Managed system DNS/always-on, selected-app suspension, uninstall prevention, forced lock requirements, settings restrictions and remote reboot are unavailable. Their API policy fields are rejected by server and phone. There is no root, wipe, credential reset, kiosk mode, USB/ADB block, bootloader modification or silent OS enrollment.
 
+## Airplane-mode authority
+
+Official app/MDM permissions do not provide the requested scheduled airplane-mode-off/report/airplane-mode-on cycle on the checked GrapheneOS implementations. Eligible management authority can prohibit airplane mode and force it off; removing that restriction does not restore it on. The direct two-way API requires protected system networking authority. The selected scope excludes a shell/ADB bridge, so no C2 radio toggle is added. Ordinary lower-permission operation remains available. See the [verified API boundary and primary sources](AIRPLANE_MODE.md).
+
 ## Connection and DNS
 
 The app-contained official WireGuard/gVisor transport carries only Bungee's home API and leaves Android's VPN slot free. Bungee changes no system routes/DNS. Other VPNs can route or filter its outer socket. Ordinary networking remains under the user's Android/VPN configuration.

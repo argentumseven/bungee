@@ -55,6 +55,8 @@ The source implements the features listed below. The validation record distingui
 
 **Coverage limits:** Bungee uses app-contained WireGuard for its own API and leaves Android's VPN slot free. It does not redirect other apps' DNS or enforce restrictions. No claim of universal DNS coverage is made. Post-quantum PSK/hybrid key exchange does not make classical certificate/device/APK signatures quantum-proof. Physical GrapheneOS validation is still required.
 
+The requested scheduled airplane-mode-off/report/airplane-mode-on cycle is unavailable with official app/MDM permissions alone. An eligible MDM restriction can force airplane mode off, but clearing it does not restore it on. No shell/ADB bridge is included. See the [airplane-mode API analysis and primary sources](docs/AIRPLANE_MODE.md).
+
 There are no live phones, sample coordinates or hard-coded credentials in the normal dashboard. Screenshots show dark mode using isolated synthetic fixtures. The dashboard appearance selector is available before sign-in and in the top bar; the Android choice is under **Appearance**. Raster basemaps keep the colors of the locally imported dataset. See [management and DNS setup](docs/MANAGEMENT.md).
 
 ## Start development
