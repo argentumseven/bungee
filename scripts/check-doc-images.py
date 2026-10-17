@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check local documentation images, including absolute Security-tab URLs."""
+"""Check embedded documentation images without assuming another Git ref exists."""
 from pathlib import Path
 import re
 import subprocess
@@ -14,10 +14,10 @@ for name in files:
     for target in targets:
         url=urlparse(target)
         if url.scheme:
-            prefix='/argentumseven/bungee/blob/main/'
-            if url.netloc!='github.com' or not url.path.startswith(prefix):continue
-            image=root/unquote(url.path.removeprefix(prefix))
+            if url.netloc == 'github.com' and url.path.startswith('/argentumseven/bungee/'):
+                raise SystemExit(f'Cross-revision image in {name}: use a relative image or an inline diagram instead of {target}')
+            continue
         else:image=path.parent/unquote(url.path)
         if not image.is_file():raise SystemExit(f'Broken image: {name}: {target}')
         count+=1
-print(f'PASS: {count} documentation image references resolve, including the Security-tab diagram.')
+print(f'PASS: {count} embedded local images resolve; no repository images are pinned to another branch.')
