@@ -8,15 +8,29 @@ Protect a consenting household’s device telemetry against internet observers, 
 
 The [validation record](VALIDATION.md) identifies tested behavior and outstanding verification. The trust boundaries below apply to the supported personal-device configuration.
 
-[![Bungee security architecture: administrator browser through Caddy to the Rust administrator API; Android app through WireGuard to the Rust device API; both APIs use private SQLite storage. Other phone apps keep their existing network route.](images/security-architecture.png)](images/security-architecture.png)
+## Updated deployment pictures
 
-Open the image for full-size labels. The paths are:
+**Implementation status:** these pictures describe the direct-Rust HTTPS and encrypted-storage changes in [PR #1](https://github.com/argentumseven/bungee/pull/1), which is awaiting merge. Release 1.1.4 still uses Caddy and requires the operator to provide encrypted storage. The security controls documented after the pictures describe that released version.
 
-- **Administrator browser → Caddy HTTPS reverse proxy → Rust administrator API.** The operator chooses the public web port and allowed administrator prefixes. Caddy requires TLS 1.3 with X25519MLKEM768 and reaches the administrator listener only at `127.0.0.1:8080`.
-- **Bungee Android app → isolated WireGuard gateway → Rust device API.** The operator chooses the UDP port. Each phone has a separate 256-bit preshared secret and signs device requests to `10.77.0.1:8081`. Only `10.77.0.1/32` exists as a destination inside Bungee's private network stack.
-- **Other phone apps → their existing network route.** Bungee installs no Android VPN, system route or system DNS setting. Another VPN can still carry or filter Bungee's outer UDP traffic.
+### Network paths
 
-The two API listeners belong to one Rust process and share private SQLite storage. Caddy and WireGuard run in separate containers; the three containers share the gateway's network namespace. The illustration omits the optional legacy DNS path, disabled for new enrollment. The detailed container and storage controls below also apply.
+[![Bungee network paths: direct Rust HTTPS, a separate WireGuard device API, optional DNS, and the existing route for other phone traffic.](https://github.com/argentumseven/bungee/blob/d49a19e19d50e039eb82fc4587270a5e3de59003/docs/images/security-architecture.png?raw=true)](https://github.com/argentumseven/bungee/blob/d49a19e19d50e039eb82fc4587270a5e3de59003/docs/images/security-architecture.png)
+
+[Open the full-size network picture](https://github.com/argentumseven/bungee/blob/d49a19e19d50e039eb82fc4587270a5e3de59003/docs/images/security-architecture.png).
+
+Administrator HTTPS terminates directly in Rust, with source-prefix restrictions at the gateway and Rust listener. The WireGuard device API remains separate. Optional DNS uses one explicitly configured resolver over UDP and TCP; general phone-traffic forwarding remains disabled. New enrollment cannot enable managed DNS. A private home resolver requires a separate authenticated host-to-home route.
+
+### Storage, keys and backups
+
+[![Bungee storage: automatic host-key unlock of LUKS2 live data, cold age-encrypted backups, and authentication before restore.](https://github.com/argentumseven/bungee/blob/d49a19e19d50e039eb82fc4587270a5e3de59003/docs/images/storage-lifecycle.png?raw=true)](https://github.com/argentumseven/bungee/blob/d49a19e19d50e039eb82fc4587270a5e3de59003/docs/images/storage-lifecycle.png)
+
+[Open the full-size storage picture](https://github.com/argentumseven/bungee/blob/d49a19e19d50e039eb82fc4587270a5e3de59003/docs/images/storage-lifecycle.png).
+
+The encrypted mount covers SQLite and its transaction files, WireGuard keys, peer secrets and certificate keys. A root-only host key enables unattended boot. Cold backups use a separate age identity; all archives are authenticated before restoration changes live state. Host compromise or theft of an entire VPS image containing its unlock key remains outside the protection of this arrangement.
+
+## Released 1.1.4 security controls
+
+The sections below document the currently released implementation. The diagrams above preview PR #1 and do not imply that its changes are already included in 1.1.4.
 
 ## Enrollment protocol
 
