@@ -77,6 +77,23 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
             [],
         )?;
     }
+    if !columns.iter().any(|c| c == "photo_epoch") {
+        tx.execute(
+            "ALTER TABLE devices ADD COLUMN photo_epoch TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
+    tx.execute(
+        "UPDATE devices SET photo_epoch=lower(hex(randomblob(32))) WHERE photo_epoch=''",
+        [],
+    )?;
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS recovery_photos(
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT, device_id TEXT NOT NULL REFERENCES devices(id),
+        photo_id TEXT NOT NULL, captured_at INTEGER NOT NULL, received_at INTEGER NOT NULL,
+        failed_attempts INTEGER NOT NULL, reason TEXT NOT NULL, jpeg BLOB NOT NULL,
+        UNIQUE(device_id,photo_id));
+        CREATE INDEX IF NOT EXISTS recovery_photos_device_sequence ON recovery_photos(device_id,sequence);
+        CREATE INDEX IF NOT EXISTS recovery_photos_device_received ON recovery_photos(device_id,received_at);")?;
     // Opaque generations never depend on handset clocks. Preserve them across restarts.
     tx.execute(
         "UPDATE devices SET gps_epoch=lower(hex(randomblob(32))) WHERE gps_epoch=''",

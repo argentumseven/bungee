@@ -33,7 +33,7 @@ A separate **Bungee recovery** launcher entry opens `LocalRecoveryActivity`. It 
 **Stop Bungee and release old policies**:
 
 1. First attempts to persist a non-secret local-stop flag in a separate preference file.
-2. Stops the sharing service and cancels Bungee notifications.
+2. Independently disarms/stops the camera, attempts pending-photo cleanup, stops sharing and cancels Bungee notifications.
 3. Independently attempts removal of known old Bungee restrictions; one failure cannot skip subsequent independent cleanup.
 4. On a personal installation, requests removal of ordinary device administration.
 5. Displays every reported cleanup failure. If saving the stop flag fails, it does not claim the stop will survive restart; the user is directed to Android force-stop/deactivation.
@@ -59,6 +59,10 @@ The API and Kotlin tests enforce forbidden-policy rejection and cleanup continua
 Physical GrapheneOS checks remain required: personal installation and removal; ordinary admin activation/deactivation; local recovery online/offline and after boot; stale server policies; app lock; notifications; denied permissions; force-stop; storage pressure; unreadable app keys/state; killed process; update with the same signing key; server loss; and another VPN. Verify that Settings, unlocking, calls, keyboard, launcher and normal connectivity remain usable. Never claim these checks passed based on compilation or a mocked policy report.
 
 Any future control that can outlive the app or remove a local recovery path must remain unavailable until its reversal, failure handling, update behavior and OS escape route are established. Short leases or a rollback timer alone are insufficient: an OS-persisted restriction can survive a broken app that never runs its timer.
+
+## Optional locally armed camera
+
+The optional `camera` foreground service is started only from the visible app after explicit local consent and phone authentication, with camera/notification permission and removable ordinary administration. It creates no OS-persisted policy and has no boot, server or sticky restart path. Eligible failed-credential callbacks only notify an already armed in-process service. Camera access, captures, queue and uploads remain bounded and revocable; disarm is available in the app/notification, independent local recovery and Android Settings. Sharing stop or household-command withdrawal also disarms it. Queue cleanup errors do not prevent independent service stop or other recovery steps. An abrupt process loss cannot guarantee physical queue cleanup, but does remove armed authority; the next explicit arm replaces old queue state. Camera mode is not permission to change airplane mode. See [the exact limits and unperformed physical acceptance](RECOVERY_CONTROLS.md).
 
 ## Server updates
 

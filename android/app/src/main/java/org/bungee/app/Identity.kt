@@ -87,11 +87,13 @@ class Identity(context: Context) {
     var allowCommands: Boolean
         get() = commandPreference.read { prefs.getBoolean(COMMAND_CONSENT, false) }
         set(value) {
+            val cameraFailure = if (!value) runCatching { ArmedCameraService.disarm(appContext) }.exceptionOrNull() else null
             try {
                 PrivacySends.fence.change {
                     check(!value || !LocalSafety.isStopped(appContext)) { "Use local recovery before enabling commands" }
                     commandPreference.write { prefs.edit().putBoolean(COMMAND_CONSENT, value).commit() }
                 }
+                cameraFailure?.let { throw it }
             }
             catch (e: Exception) {
                 // Independent, best-effort durable stop. If storage prevents that too,
@@ -104,6 +106,43 @@ class Identity(context: Context) {
     fun <T> ifCommandsAllowed(action: () -> T): T = commandPreference.ifEnabled({ prefs.getBoolean(COMMAND_CONSENT, false) }, action)
     internal fun state(name: String): JSONObject = secret("state_$name")?.let(::JSONObject) ?: JSONObject()
     internal fun saveState(name: String, value: JSONObject) = putSecret("state_$name", value.toString())
+    val photoEpoch: String? get() = secret("state_photo_epoch")?.let(::JSONObject)?.getString("epoch")
+    fun reconcilePhotoEpoch(epoch: String) {
+        require(epoch.matches(Regex("[A-Za-z0-9_-]{43}|[a-f0-9]{64}")))
+        if (photoEpoch == epoch) return
+        PrivacySends.fence.change { synchronized(PhotoOutbox.lock) {
+            ArmedCameraService.discardPending(appContext)
+            saveState("photo_epoch", JSONObject().put("epoch", epoch))
+            ArmedCameraService.currentSession()?.let {
+                saveState("armed_photos", PhotoOutbox.empty(it))
+                ArmedCameraService.refreshQueue(this, it)
+            }
+        } }
+    }
+    fun beginPhotoSession(session: String) = synchronized(PhotoOutbox.lock) { saveState("armed_photos", PhotoOutbox.empty(session)) }
+    fun queuePhoto(photo: JSONObject, session: String, epoch: String, stamp: DisclosureFence.Stamp, allowed: () -> Boolean) = PrivacySends.fence.checked(stamp, allowed) {
+        synchronized(PhotoOutbox.lock) {
+            check(photoEpoch == epoch)
+            val stored = state("armed_photos")
+            val queue = if (stored.optString("session").isEmpty()) PhotoOutbox.empty(session) else stored
+            check(queue.getString("session") == session)
+            saveState("armed_photos", PhotoOutbox.append(queue, photo))
+        }
+    }
+    fun pendingPhoto(session: String): JSONObject? = synchronized(PhotoOutbox.lock) {
+        val state = state("armed_photos")
+        if (state.optString("session") != session) null else state.optJSONArray("records")?.optJSONObject(0)
+    }
+    fun photoQueueReport(session: String): Pair<Int, Long> = synchronized(PhotoOutbox.lock) {
+        val state = state("armed_photos")
+        if (state.optString("session") != session) 0 to 0L else (state.optJSONArray("records")?.length() ?: 0) to state.optLong("dropped")
+    }
+    fun acknowledgePhoto(id: String, session: String, stamp: DisclosureFence.Stamp, allowed: () -> Boolean) = PrivacySends.fence.checked(stamp, allowed) {
+        synchronized(PhotoOutbox.lock) {
+            val state = state("armed_photos"); check(state.getString("session") == session)
+            saveState("armed_photos", PhotoOutbox.acknowledge(state, id))
+        }
+    }
     var recoveryMessage: String?
         get() = secret("recovery_message")
         set(value) { if (value == null) check(prefs.edit().remove("recovery_message").commit()) { "Could not clear recovery message" } else putSecret("recovery_message", value) }

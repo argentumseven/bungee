@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { api } from "./api";
 import { RecoveryMessagePreview } from "./RecoveryMessagePreview";
+import { RecoveryPhotos } from "./RecoveryPhotos";
 
 type Policy = {
   managed_dns: boolean;
@@ -41,6 +42,7 @@ type Report = {
   unlock_monitoring: boolean;
   failed_unlocks: number;
   last_failed_at: number | null;
+  camera?: { armed: boolean; pending: number; dropped: number; status: string; reported_at: number } | null;
   delivery?: null | {
     reported_at: number;
     queued_fixes: number;
@@ -292,9 +294,9 @@ export function DeviceCare({
                           : "Requested state reported"}
                     </strong>
                   </div>
-                  <h3 className="delivery-heading">
-                    Delivery &amp; offline queue
-                  </h3>
+                  <h3 className="delivery-heading">Locally armed camera</h3>
+                  <p className="fine">{report.camera ? `${report.camera.armed ? "Armed at last report" : "Disarmed at last report"} · ${time(report.camera.reported_at)}. ${report.camera.status}. Pending ${report.camera.pending}/3; discarded at capacity ${report.camera.dropped}.` : "Not reported by this app. Update the phone and arm locally if wanted."} An offline phone’s current state is unknown. The server cannot arm it.</p>
+                  <h3 className="delivery-heading">Delivery &amp; offline queue</h3>
                   {report.delivery ? (
                     <>
                       <p className="fine">
@@ -418,6 +420,7 @@ export function DeviceCare({
               </div>
             </section>
           </div>
+          <RecoveryPhotos key={device.id} deviceId={device.id} />
           <section className="panel care-card dns-panel">
             <div className="panel-heading">
               <h2>

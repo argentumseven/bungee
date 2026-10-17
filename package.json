@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/integration.mjs tests/privacy.mjs tests/managed-dns.mjs tests/geography.mjs tests/admin-proxy.mjs tests/enrollment.mjs tests/exports.mjs tests/adversarial.mjs",
+    "test": "node --test tests/integration.mjs tests/privacy.mjs tests/managed-dns.mjs tests/geography.mjs tests/admin-proxy.mjs tests/enrollment.mjs tests/exports.mjs tests/adversarial.mjs tests/photos.mjs",
     "test:browser": "node --test tests/browser.mjs",
     "test:tls": "node scripts/check-dashboard-tls.mjs",
     "test:network": "node scripts/check-runtime-network.mjs"

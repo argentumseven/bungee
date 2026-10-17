@@ -79,6 +79,7 @@ class LocalRecoveryActivity : FragmentActivity() {
                 val failures = withContext(Dispatchers.IO) {
                     val legacyIssues = mutableListOf<String>()
                     val failures = RecoveryCoordinator.run({ LocalSafety.setStopped(this@LocalRecoveryActivity, true) }, listOf(
+                        "The camera service or pending photos could not be cleared. Force-stop Bungee in Android Settings." to { ArmedCameraService.disarm(this@LocalRecoveryActivity) },
                         "The sharing service could not be stopped. Use Android Settings to force-stop Bungee." to { stopService(Intent(this@LocalRecoveryActivity, TelemetryService::class.java)); Unit },
                         "Recovery notifications could not be cleared." to { getSystemService(NotificationManager::class.java).cancelAll() },
                         "Some old managed policies could not be released. Review the legacy recovery guide." to {

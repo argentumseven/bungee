@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
 import { spawn, execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import {
@@ -537,6 +537,34 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       );
     },
   );
+  await t.test("locally armed camera reports and authenticated photo gallery remain bounded and erasable", async () => {
+    const epoch = (await phoneRequest("/v1/commands", {})).photo_epoch;
+    const fixtureImage = await readFile("tests/fixtures/recovery-test.jpg");
+    const captured = await phoneRequest("/v1/telemetry", {battery:72,charging:false,device_owner:false,capabilities:["locate","ring","message","lock"],photo_epoch:epoch,
+      recovery_photo:{id:randomUUID(),captured_at:Math.floor(Date.now()/1000),failed_attempts:0,reason:"local_test",jpeg:fixtureImage.toString("base64")}});
+    assert.ok(captured.accepted_photo);
+    const saved = await page.evaluate(async id => (await fetch(`/api/devices/${id}/policy`)).json(), phone.bundle.device_id);
+    await phoneRequest("/v1/sync",{report:{revision:saved.revision,recovery_consent:true,lost_mode_active:true,camera:{armed:true,pending:0,dropped:0,status:"Armed · synthetic fixture report",reported_at:Math.floor(Date.now()/1000)}}});
+    await page.getByRole("button",{name:"Device care",exact:true}).click();
+    await page.getByText(/Armed at last report/).waitFor();
+    const gallery = page.locator("section.recovery-photos");
+    assert.equal(await gallery.locator("img").count(),0);
+    await gallery.getByRole("button",{name:"View saved photos",exact:true}).click();
+    const image = gallery.getByRole("img",{name:"Labelled local camera test"});
+    await image.waitFor();
+    await page.waitForFunction(() => { const image=document.querySelector(".recovery-photos img");return image?.complete && image.naturalWidth===320; });
+    await gallery.screenshot({path:"docs/screenshots/recovery-photos.png",animations:"disabled"});
+    await page.setViewportSize({width:390,height:844});
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),true);
+    await gallery.screenshot({path:"docs/screenshots/mobile-recovery-photos.png",animations:"disabled"});
+    await gallery.getByRole("button",{name:"Erase all recovery photos",exact:true}).click();
+    assert.equal(await image.count(),1,"confirmation must precede deletion");
+    await gallery.getByRole("button",{name:"Confirm photo erasure",exact:true}).click();
+    await gallery.getByText("No saved photos in this view.",{exact:true}).waitFor();
+    assert.equal(await gallery.locator("img").count(),0);
+    await page.setViewportSize({width:1440,height:1050});
+    await page.getByRole("button",{name:"Overview",exact:true}).click();
+  });
   await t.test(
     "offered commands are not labeled as confirmed delivery",
     async () => {
@@ -640,7 +668,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       await page.getByLabel("History to").fill("2099-01-01T00:00");
       await page.getByLabel("History records").selectOption("state");
       await page.getByRole("button", { name: "Look up history" }).click();
-      await page.getByRole("cell", { name: "72%", exact: true }).waitFor();
+    await page.getByRole("cell", { name: "72%", exact: true }).first().waitFor();
       await page.getByLabel("History records").selectOption("network");
       await page.getByRole("button", { name: "Look up history" }).click();
       await page

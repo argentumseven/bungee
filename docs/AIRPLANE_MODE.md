@@ -2,7 +2,7 @@
 
 The requested cycle is: observe airplane mode, temporarily turn it off, report to the home server and receive permitted commands, then restore airplane mode. **Official app and MDM permissions do not provide that complete cycle on the checked Android/GrapheneOS implementations.** This is an OS authority boundary, separate from whether Bungee enables device-owner enrollment.
 
-The selected scope is official app/MDM permissions only. Bungee adds no shell/ADB bridge, Shizuku integration, root requirement, privileged installation or scheduled airplane-mode toggle. Ordinary pairing, sharing and consented recovery commands keep their existing permission requirements.
+The selected scope is official app/MDM permissions only. Bungee adds no shell/ADB bridge, Shizuku integration, root requirement, privileged installation or scheduled airplane-mode toggle. Ordinary pairing, sharing and consented recovery commands keep their existing permission requirements. A locally armed foreground service can continue an eligible camera operation under its camera permission, but foreground execution does not grant the protected networking permissions needed to change airplane mode. The armed camera feature does not change this boundary.
 
 ## Available authority
 

@@ -107,6 +107,7 @@ class TelemetryService : Service() {
             val api = HomeApi(identity)
             val retry = DdilRetry()
             var nextTelemetry = 0L
+            var nextPhotoAttempt = 0L
             while (isActive) {
                 if (LocalSafety.isStopped(this@TelemetryService)) { stopSelf(); break }
                 if (networkChanged.tryReceive().isSuccess) {
@@ -137,6 +138,7 @@ class TelemetryService : Service() {
                     // Commands and saved receipts take precedence over bulk GPS catch-up on a short link.
                     val polled = withContext(Dispatchers.IO) { api.request("/v1/commands") }
                     withContext(Dispatchers.IO) { identity.reconcileGpsEpoch(polled.getString("gps_epoch")) }
+                    polled.optString("photo_epoch").takeIf { it.isNotEmpty() }?.let { epoch -> withContext(Dispatchers.IO) { identity.reconcilePhotoEpoch(epoch) } }
                     val batch = polled.getJSONArray("commands")
                     val deadline = elapsed() + 20_000
                     if (elapsed() < deadline) withContext(Dispatchers.IO) {
@@ -148,6 +150,14 @@ class TelemetryService : Service() {
                     for (n in 0 until batch.length()) {
                         if (elapsed() >= deadline) break
                         execute(api, batch.getJSONObject(n), deadline)
+                    }
+                    if (elapsed() < deadline && elapsed() >= nextPhotoAttempt) {
+                        try { uploadPhoto(api, deadline) }
+                        catch (e: Exception) {
+                            if (e is CancellationException) throw e
+                            nextPhotoAttempt = elapsed() + 300_000
+                            if (ArmedCameraService.currentSession() != null) ArmedCameraService.status.value = ArmedCameraService.status.value.copy(detail = "Armed · photo upload delayed; retrying separately from GPS")
+                        }
                     }
                     if (elapsed() < deadline && (elapsed() >= nextTelemetry || status.value.queuedFixes > 0)) {
                         upload(api, limit = retry.batchSize)
@@ -217,6 +227,32 @@ class TelemetryService : Service() {
         } finally { ticket?.let { PrivacySends.fence.release(it) } }
     }
     private fun locationJson(location: Location): JSONObject = JSONObject().put("latitude", location.latitude).put("longitude", location.longitude).put("accuracy", location.accuracy.toDouble()).put("observed_at", location.time / 1000)
+    private suspend fun uploadPhoto(api: HomeApi, deadline: Long) {
+        val session = ArmedCameraService.currentSession() ?: return
+        val stamp = PrivacySends.fence.stamp()
+        val epoch = identity.photoEpoch ?: return
+        val photo = withContext(Dispatchers.IO) { identity.pendingPhoto(session) } ?: return
+        val battery = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, 0) ?: 0
+        val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+        val data = JSONObject().put("battery", (level * 100 / scale.coerceAtLeast(1)).coerceIn(0, 100))
+            .put("charging", battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0).put("device_owner", false)
+            .put("capabilities", JSONArray(capabilities(this, identity))).put("photo_epoch", epoch).put("recovery_photo", photo)
+        val allowed = { ArmedCameraService.currentSession() == session && identity.enrolled && identity.allowCommands && identity.photoEpoch == epoch && !LocalSafety.isStopped(this) && elapsed() < deadline }
+        val result = withContext(Dispatchers.IO) {
+            DisclosureRequest(PrivacySends.fence, { Transport.reserveRequest() }, { Transport.cancelRequest(it) })
+                .exchange(stamp, allowed, { deadline - elapsed() }) { reservation, remaining ->
+                    api.request("/v1/telemetry", data, reservation = reservation, timeoutMillis = remaining, deadlineElapsed = deadline)
+                }
+        }
+        if (result.getString("photo_epoch") != epoch) {
+            withContext(Dispatchers.IO) { identity.reconcilePhotoEpoch(result.getString("photo_epoch")) }
+            return
+        }
+        check(result.optString("accepted_photo") == photo.getString("id")) { "Home did not accept the recovery photo" }
+        withContext(Dispatchers.IO) { identity.acknowledgePhoto(photo.getString("id"), session, stamp, allowed) }
+        ArmedCameraService.refreshQueue(identity, session)
+    }
     private suspend fun upload(api: HomeApi, observation: Observation? = null, limit: Int = 25, commandId: String? = null, deadline: Long = Long.MAX_VALUE, expires: Long? = null) {
         val stamp = observation?.stamp ?: PrivacySends.fence.stamp()
         val epoch = observation?.epoch ?: identity.gpsEpoch
@@ -359,6 +395,7 @@ class TelemetryService : Service() {
         runCatching { player?.release() }
     }
     override fun onDestroy() {
+        runCatching { ArmedCameraService.disarm(this) }
         if (watchingNetwork) runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(callback) }
         stopRinging(); scope.cancel()
         networkChanged.close()

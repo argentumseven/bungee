@@ -189,13 +189,15 @@ pub async fn enroll(
     key.verify(proof.as_bytes(), &signature)
         .map_err(|_| denied())?;
     let gps_epoch = token();
+    let photo_epoch = token();
     tx.execute(
-        "UPDATE devices SET public_key=?,capabilities=?,last_seen=?,gps_epoch=? WHERE id=?",
+        "UPDATE devices SET public_key=?,capabilities=?,last_seen=?,gps_epoch=?,photo_epoch=? WHERE id=?",
         params![
             input.public_key,
             serde_json::to_string(&input.capabilities).unwrap(),
             now(),
             gps_epoch,
+            photo_epoch,
             id
         ],
     )?;
@@ -208,12 +210,16 @@ pub async fn enroll(
     )?;
     tx.commit()?;
     Ok(Json(
-        json!({"device_id":id,"gps_epoch":gps_epoch,"telemetry_interval_seconds":60}),
+        json!({"device_id":id,"gps_epoch":gps_epoch,"photo_epoch":photo_epoch,"telemetry_interval_seconds":60}),
     ))
 }
 
 #[derive(Deserialize, Serialize)]
 pub struct Telemetry {
+    #[serde(default, skip_serializing)]
+    photo_epoch: Option<String>,
+    #[serde(default, skip_serializing)]
+    recovery_photo: Option<crate::photos::Photo>,
     #[serde(default, skip_serializing)]
     gps_epoch: Option<String>,
     #[serde(default, skip_serializing)]
@@ -245,6 +251,11 @@ pub async fn telemetry(
 // Authentication is deliberately outside this operation. Privacy generation and
 // command expiry are read again at the actual transaction, never cached by auth.
 fn commit_telemetry(app: &App, id: &str, mut input: Telemetry) -> ApiResult<Json<Value>> {
+    let photo_bytes = input
+        .recovery_photo
+        .as_ref()
+        .map(|p| p.validate())
+        .transpose()?;
     if input.battery > 100 || !valid_capabilities(&input.capabilities) {
         return Err(bad("Invalid telemetry values"));
     }
@@ -279,6 +290,16 @@ fn commit_telemetry(app: &App, id: &str, mut input: Telemetry) -> ApiResult<Json
         ));
     }
     let gps_accepted = input.gps_epoch.as_deref() == Some(epoch.as_str());
+    let accepted_photo = match (&input.recovery_photo, &photo_bytes) {
+        (Some(photo), Some(bytes)) => {
+            crate::photos::commit(&tx, id, input.photo_epoch.as_deref(), photo, bytes)?
+        }
+        _ => None,
+    };
+    let photo_epoch: String =
+        tx.query_row("SELECT photo_epoch FROM devices WHERE id=?", [id], |r| {
+            r.get(0)
+        })?;
     if let Some(command) = &input.locate_command {
         let authorized: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM commands WHERE id=? AND device_id=? AND kind='locate' AND status='delivered' AND expires>?)",
@@ -348,7 +369,7 @@ fn commit_telemetry(app: &App, id: &str, mut input: Telemetry) -> ApiResult<Json
     }
     tx.commit()?;
     Ok(Json(
-        json!({"accepted":true,"gps_accepted":gps_accepted,"gps_epoch":epoch,"accepted_observations":accepted_observations,"server_time":now()}),
+        json!({"accepted":true,"gps_accepted":gps_accepted,"gps_epoch":epoch,"photo_epoch":photo_epoch,"accepted_photo":accepted_photo,"accepted_observations":accepted_observations,"server_time":now()}),
     ))
 }
 
@@ -383,6 +404,7 @@ fn erase_history(
     }
     tx.execute("DELETE FROM location_history WHERE device_id=?", [id])?;
     if include_state {
+        crate::photos::erase_in(&tx, id)?;
         tx.execute("DELETE FROM state_history WHERE device_id=?", [id])?;
         tx.execute(
             "UPDATE devices SET network_floor=MAX(network_floor,COALESCE((SELECT MAX(observed_at) FROM network_history WHERE device_id=?),0),?) WHERE id=?",
@@ -484,7 +506,7 @@ pub async fn poll(
         |r| r.get(0),
     )?;
     Ok(Json(
-        json!({"commands":list,"gps_epoch":epoch,"server_time":now()}),
+        json!({"commands":list,"gps_epoch":epoch,"photo_epoch":db.query_row("SELECT photo_epoch FROM devices WHERE id=?",[&id],|r|r.get::<_,String>(0))?,"server_time":now()}),
     ))
 }
 #[derive(Deserialize)]
@@ -579,6 +601,7 @@ pub async fn revoke(
     tx.execute("DELETE FROM location_history WHERE device_id=?", [&id])?;
     tx.execute("DELETE FROM state_history WHERE device_id=?", [&id])?;
     tx.execute("DELETE FROM network_history WHERE device_id=?", [&id])?;
+    tx.execute("DELETE FROM recovery_photos WHERE device_id=?", [&id])?;
     tx.execute("DELETE FROM dns_summary WHERE device_id=?", [&id])?;
     tx.execute("DELETE FROM device_policies WHERE device_id=?", [&id])?;
     store::audit(

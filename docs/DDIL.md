@@ -50,7 +50,7 @@ A delayed, freshly signed receipt may reconcile a command retained by the server
 - An authenticated contact updates `last_contact` independently of `last_seen` (latest accepted telemetry). A short command-only connection can establish presence while the battery reading remains older; the dashboard's battery tooltip identifies the saved telemetry age.
 - A configured tunnel is not proof of delivery. Records become acknowledged only on an accepted home-server response.
 
-Update the **server first, then the APK** to alpha.11. New phones report fields that older servers reject; the queue is retained if that mismatch occurs. Stable local APK signing is still required for reliable in-place updates. Physical DDIL/jamming trials and GrapheneOS background/sleep checks have not been run. See [VALIDATION.md](VALIDATION.md) for automated evidence and [SAFETY.md](SAFETY.md) for the recovery boundary.
+Update the **server first, then the APK**. New phones report fields that older servers reject; the queue is retained if that mismatch occurs. Stable local APK signing is still required for reliable in-place updates. Physical DDIL/jamming trials and GrapheneOS background/sleep checks have not been run. See [VALIDATION.md](VALIDATION.md) for automated evidence and [SAFETY.md](SAFETY.md) for the recovery boundary.
 
 ## Explicit command consent and invitation recovery (alpha.10)
 
@@ -62,3 +62,10 @@ A never-enrolled invitation may be reissued after expiry, a lost response or gat
 ## Erasure generations and capture cancellation (alpha.11)
 
 Home erasure rotates a random GPS generation in its write transaction. A reconnecting phone discards the full older-generation queue before adopting it, including points collected after erasure but before reconciliation. First upgrade also clears an untagged legacy queue. New sensor updates carry a local preparation stamp; a GPS/command withdrawal, local stop or generation change cancels old captures/reserved sends. Already-sent bytes can still be received by home; local withdrawal is not a remote erasure acknowledgment. Remote locate uses an exact-point acceptance response, a remaining transport budget and a server commit-admission expiry check. Read [the precise contract and tests](REVIEW-2026-10-ADVERSARIAL.md).
+
+
+## Locally armed recovery-photo queue (1.1.0)
+
+Only a locally armed camera service can prepare or send photos. Up to three ≤12-KiB EXIF-stripped JPEGs are encrypted on the phone; capacity drops the oldest and reports the count. One photo is sent separately from GPS through the existing signed telemetry path. A photo failure gets a separate five-minute retry delay and does not hold up ordinary GPS telemetry or commands. The server separately caps new photo records at six/device/hour; exact retry acknowledgment does not spend another slot.
+
+Disarm/local stop/command withdrawal cancel capture and transport reservations. Disarm clears pending state; abrupt process loss leaves no armed authority and cannot upload remnants, which are replaced on the next explicit arm. No service re-arms at boot or because the server reconnects. A separate opaque photo generation rotates on photo erasure/full history erasure; stale queued/in-flight generations cannot restore erased images. The gallery shows capture and receipt times separately. Physical locked-camera, Doze, radio-loss and process-loss acceptance is still unperformed; see [RECOVERY_CONTROLS.md](RECOVERY_CONTROLS.md).

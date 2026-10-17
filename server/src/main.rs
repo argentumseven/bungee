@@ -5,6 +5,7 @@ mod export;
 mod geography;
 mod history;
 mod management;
+mod photos;
 mod recurrence;
 mod release;
 mod security;
@@ -140,6 +141,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(history::history).delete(api::clear_history),
         )
         .route("/api/devices/{id}/commands", post(api::command))
+        .route(
+            "/api/devices/{id}/photos",
+            get(photos::list).delete(photos::erase),
+        )
+        .route("/api/devices/{id}/photos/{photo}", get(photos::image))
         .route("/api/devices/{id}/history.csv", get(export::history_csv))
         .route(
             "/api/devices/{id}/policy",

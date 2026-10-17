@@ -6,7 +6,7 @@ Current builds enforce the [reversibility contract](SAFETY.md). Device-owner enr
 
 GPS/check-in history, recurring history lookup/export, bounded encrypted GPS backlog, sound/stop sound, recovery notifications, lost-mode contact intent and optional ordinary device-admin locking remain. Failed-credential reports depend on Android eligibility and do not count every biometric failure. App lock uses the phone's existing credential. Bungee changes no credentials or lock complexity.
 
-The updated finder alarm uses a bounded 30-second siren at the phone's alarm volume. Recovery messages remain Android notifications, with illustrative previews in the web message/lost-mode editors. Automatic failed-unlock photos are not implemented; an armed camera foreground-service design needs separate physical GrapheneOS verification. See [recovery behavior, camera limits and feasible additions](RECOVERY_CONTROLS.md).
+The updated finder alarm uses a bounded 30-second siren at the phone's alarm volume. Recovery messages remain Android notifications, with illustrative previews in the web message/lost-mode editors. An optional, locally armed camera foreground service attempts a photo after three new eligible failed credential entries. Local authentication and a visible notification are required; Android can refuse capture. No remote arming, root, shell bridge or device ownership is used. Physical GrapheneOS camera acceptance remains unverified. See [recovery behavior, camera limits and feasible additions](RECOVERY_CONTROLS.md).
 
 The separate **Bungee recovery** launcher works offline without pairing keys. Authenticate locally, stop controls, review cleanup results and use Android app/security settings if needed. The saved local stop survives process/boot/update and prevents automatic reconnect. Clearing it starts no sharing; a manual start is still required. Personal installs remain removable through normal Android administration deactivation and uninstall.
 
@@ -14,7 +14,7 @@ Managed system DNS/always-on, selected-app suspension, uninstall prevention, for
 
 ## Airplane-mode authority
 
-Official app/MDM permissions do not provide the requested scheduled airplane-mode-off/report/airplane-mode-on cycle on the checked GrapheneOS implementations. Eligible management authority can prohibit airplane mode and force it off; removing that restriction does not restore it on. The direct two-way API requires protected system networking authority. The selected scope excludes a shell/ADB bridge, so no C2 radio toggle is added. Ordinary lower-permission operation remains available. See the [verified API boundary and primary sources](AIRPLANE_MODE.md).
+Official app/MDM permissions do not provide the requested scheduled airplane-mode-off/report/airplane-mode-on cycle on the checked GrapheneOS implementations. Eligible management authority can prohibit airplane mode and force it off; removing that restriction does not restore it on. The direct two-way API requires protected system networking authority. The selected scope excludes a shell/ADB bridge, so no C2 radio toggle is added. A locally armed foreground service does not grant this protected authority. Ordinary lower-permission operation remains available. See the [verified API boundary and primary sources](AIRPLANE_MODE.md).
 
 ## Connection and DNS
 

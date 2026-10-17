@@ -18,13 +18,43 @@ The message is also saved in Bungee and can be dismissed after local unlock or c
 
 ## Three failed unlocks and a front-camera photo
 
-**Automatic photos are not implemented.** The existing ordinary device-admin receiver handles eligible device/profile credential failures through Android's `WATCH_LOGIN` callbacks and records the reported failed-attempt count and last failure time. Successful credential entry resets the recorded count. This is not a promise to count all biometric failures or every form of login.
+Version 1.1.0 implements an **optional, locally armed Camera2 foreground service**. This is ordinary official Android camera authority, not a system-permission bypass. It adds no third-party bridge, root, shell/ADB dependency, accessibility automation, device owner, microphone, camera stream or provider. Camera access remains optional for pairing by pasted invitation, GPS sharing and normal recovery commands.
 
-The existing `CAMERA` permission is used for invitation scanning. It does not authorize a background failed-password receiver to start capturing whenever it wants. Modern Android requires appropriate camera foreground-service authority and restricts starting such a service while the app is already in the background or after a boot broadcast.
+### Arm on the phone
 
-An **explicitly armed, user-visible camera foreground service**, started while Bungee is visible and camera permission is granted, is a possible official-API design to investigate. It would need a visible notification, Android's camera privacy indicators, local off/stop controls, bounded capture attempts and private encrypted storage. It could not promise automatic rearming after reboot, force-stop, revoked permissions or camera privacy controls. Lock-screen capture eligibility, callback delivery, front-camera availability and background lifecycle behavior must be verified on a physical GrapheneOS phone before advertising that feature. This is a conditional design option, not an implemented permission toggle.
+1. Set an Android secure screen lock. Pair with the updated server, start Bungee sharing and separately approve household commands.
+2. Use **Enable removable device administration** for Android's eligible `WATCH_LOGIN` credential callbacks. This remains ordinary removable administration, with force-lock/watch-login only.
+3. Grant Bungee camera permission and allow its notifications. The armed-camera notification channel must also be enabled. Bungee checks for a front camera.
+4. Choose **Review & arm locally**, read the consent explanation and authenticate with the existing phone lock. Bungee must be visible and the phone unlocked when it starts the `camera` foreground service. A short-lived, process-local approval is consumed by that start.
+5. The notification says **Bungee recovery camera is armed** and offers **Disarm camera**; its action requests Android authentication when the phone is locked. Camera indicators and Android's foreground-service controls remain available. Dismissing the notification requests disarm. The app can stay in the background after a permitted foreground start; the camera is opened only for a capture attempt.
 
-Device-owner enrollment, accessibility automation, root and shell bridges are not introduced for camera capture. Normal pairing, location sharing and other consented recovery actions do not depend on camera capture being available.
+There is no persisted armed flag, server arm command, automatic boot/replacement arm, sticky service restart or receiver that starts a camera service. Reboot, force-stop, process loss or denied foreground start leaves camera mode disarmed. Normal sharing's separate restart opt-in never arms the camera. Re-arming requires another local approval and replaces any old unsent photo queue.
+
+### Capture and failure limits
+
+The OS-protected receiver handles eligible device/profile credential failures for this Android user. A successful credential entry resets the streak. A new arming starts from the OS count at arming, so it requires **three new failed entries**, not an old threshold. The app does not promise to count biometric failures or every form of login.
+
+Within each armed service session, Bungee attempts at most one capture per qualifying streak, no closer than five minutes apart and at most six attempts per rolling hour. The local **Take a labelled test photo** action uses the same budget and marks its photo `local_test`; it is not presented as a failed-unlock event. An unavailable camera still consumes the streak's attempt; no capture loop retries it. Actual failed-unlock capture requires the phone still to be locked, while a local test requires it unlocked and Bungee visible.
+
+Camera acquisition/capture has an eight-second coroutine timeout and closes the image reader, capture session and camera on completion, error or cancellation. Idle armed mode holds no open camera. Capture uses no flash or microphone. Permission/admin/notification loss or stopping sharing disarms the service. Local stop, command-consent withdrawal and disarm cancel capture/send reservations; a stale operation cannot commit to the queue after re-arming. Bytes already sent to home cannot be recalled.
+
+Android camera privacy controls, another app's camera use, background restrictions, battery policies, hardware or GrapheneOS rules may prevent an image or yield blank output. Arming is not proof that a usable photo can be captured. The public SDK does not expose a general unprivileged camera-privacy-state query; Bungee does not use a hidden API to bypass that boundary. No OS lock screen, credential, radio, routing or persistent management policy is changed. An armed camera service **cannot change airplane mode**; see [the authority boundary](AIRPLANE_MODE.md).
+
+### Private storage and viewing
+
+The original camera JPEG is processed in memory, resized to a longest edge of 320 pixels (160 if needed), decoded/re-encoded to strip EXIF and bounded to **12 KiB**. These deliberately small recovery images are not high-resolution evidence. Android stores up to **three unsent photos** under the existing Keystore AES-256-GCM storage encryption; the oldest is discarded at capacity and the dropped count is reported. Disarming clears pending queue state; cleanup failures are surfaced. After abrupt process loss, any encrypted remnants are never sent by an unarmed process and are replaced at the next explicit arm. Deletion is logical, not a forensic block-erasure promise.
+
+Photos use signed `/v1/telemetry` requests over the existing fixed-home app-contained WireGuard transport. Each is sent separately from GPS batches, keeping the existing 32-KiB body limit and native path allowlist. Camera/photo failures have a separate retry delay and do not block ordinary GPS reporting. No provider fetch, runtime dependency or network endpoint is added to the phone. A unique photo ID allows exact-content retry acknowledgment; conflicting reuse is rejected. The server independently permits at most six new photo records per device per rolling hour.
+
+**Device care → Recovery photos → View saved photos** loads an administrator-authenticated, paginated gallery from this server only. Nothing loads until the section is opened. Photos and their timestamps are separate from ordinary device-list telemetry. Responses use `image/jpeg`, `nosniff` and `no-store`; list/image access is bound to the enrolled, unrevoked phone. The gallery shows captured/received time, eligible failure count or the local-test label. These are signed app reports, not hardware-attested facts or proof of theft.
+
+Server photos stay until explicitly erased, full history erasure or device revocation; they have no automatic expiry. **Erase all recovery photos** requires confirmation and rotates a photo-specific opaque generation transactionally. Old queued/in-flight generations cannot restore erased photos; a new generation can accept later captures. Location-only erasure leaves photos alone. Full history erasure rotates both generations. Authenticated URLs for erased/revoked records stop serving them; already viewed/downloaded copies cannot be recalled. SQLite and updater snapshots require encrypted host storage/backups; the administrator can read uploaded photos. This is not end-to-end encryption against your own server administrator.
+
+### Physical GrapheneOS acceptance — not performed in this cloud
+
+Use a personally owned removable installation with the same signing key. First arm while visible and use **Take a labelled test photo**; check its label, image, capture/receipt times and gallery authentication. A passing local test does **not** establish locked/background capture. Separately verify eligible PIN/password callbacks, locking and the three-new-failure threshold, while respecting Android's credential retry delays. Never change or remove the phone's credential for this test.
+
+Check front-camera access when locked/backgrounded, privacy toggles and another camera app, denied permissions/notifications/admin, notification disarm/dismissal, local stop offline, command-consent withdrawal during capture/upload, Doze and radio loss, encrypted queue capacity, erasure during a delayed upload, force-stop/process loss, reboot/first unlock and same-signer APK update. Confirm that none re-arms automatically and that Settings/deactivation/uninstall remain usable. This feature is implemented and build/API/browser/policy-tested; physical GrapheneOS capture and endurance are **not claimed as passed**.
 
 ## Useful additions that fit the current recovery contract
 
@@ -34,7 +64,7 @@ These are candidates, not features added by this update:
 | --- | --- |
 | Low-battery / missed-check-in alerts | Dashboard alerts derived from saved reports, with explicit timestamps and offline uncertainty. The current dashboard already displays battery and last contact. No external messaging provider is required. |
 | Recovery readiness | Extend existing lock/security-patch/GPS status with reported alarm volume, notification-channel state and missing local permissions. Report facts and offer local Settings links; do not silently grant permissions. |
-| Failed-credential threshold events | Record an alert when an eligible report crosses a configured threshold, such as three attempts. Offline reports arrive later; no automatic photo or destructive response is implied. |
+| Standalone failed-credential alerts | Add configurable dashboard alerts without requiring camera mode. Existing counts and the armed photo trigger are separate; offline reports arrive later. |
 | Geofence events | Operator-defined home areas and arrival/departure events based on saved GPS, with accuracy/late-upload handling. No network lookup service or blocking device policy is needed. |
 | Temporary faster location sharing | A locally approved, time-bounded increase in Bungee's own sampling cadence, subject to GPS/background permission and battery constraints. No radio automation or persistent Android restriction. |
 

@@ -66,6 +66,7 @@ pub fn safe_package(p: &str) -> bool {
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Report {
+    pub camera: Option<CameraReport>,
     pub owner: bool,
     pub consent: bool,
     pub recovery_consent: bool,
@@ -86,6 +87,15 @@ pub struct Report {
     pub failed_unlocks: u32,
     pub last_failed_at: Option<i64>,
     pub delivery: Option<DeliveryReport>,
+}
+#[derive(Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CameraReport {
+    pub armed: bool,
+    pub pending: u32,
+    pub dropped: u64,
+    pub status: String,
+    pub reported_at: i64,
 }
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -220,7 +230,13 @@ pub async fn sync(
     let input: Sync =
         serde_json::from_slice(&body).map_err(|_| bad("Invalid management report"))?;
     let r = &input.report;
-    if r.delivery.as_ref().is_some_and(|d| !d.valid())
+    if r.camera.as_ref().is_some_and(|c| {
+        c.pending > 3
+            || c.dropped > 9_007_199_254_740_991
+            || c.status.len() > 240
+            || c.reported_at <= 0
+            || c.reported_at > now() + 120
+    }) || r.delivery.as_ref().is_some_and(|d| !d.valid())
         || r.revision < 0
         || r.errors.len() > 20
         || r.errors.iter().any(|e| e.len() > 160)
@@ -250,7 +266,7 @@ pub async fn sync(
         |r| r.get(0),
     )?;
     Ok(Json(
-        json!({"revision":revision,"policy":policy.reversible(),"gps_epoch":epoch,"server_time":now(),"dns_available":false,"persistent_controls_enabled":false}),
+        json!({"revision":revision,"policy":policy.reversible(),"gps_epoch":epoch,"photo_epoch":db.query_row("SELECT photo_epoch FROM devices WHERE id=?",[&id],|r|r.get::<_,String>(0))?,"server_time":now(),"dns_available":false,"persistent_controls_enabled":false}),
     ))
 }
 pub fn dns_peer(db: &rusqlite::Connection, address: &str) -> ApiResult<Option<String>> {

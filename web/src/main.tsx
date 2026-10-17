@@ -850,7 +850,7 @@ function App() {
                 </p>
                 <ul>
                   <li>
-                    GPS, IP history and check-in logs stay until explicitly
+                    GPS, IP history, recovery photos and check-in logs stay until explicitly
                     erased or the device is revoked
                   </li>
                   <li>One-use enrollment expires in 10 minutes</li>
@@ -1107,7 +1107,7 @@ function App() {
             {modal === "clear_location" && (
               <>
                 <p>
-                  Erase all GPS history, IP observations, check-in logs, and the
+                  Erase all GPS history, IP observations, recovery photos, check-in logs, and the
                   last-known location for {clearTarget?.name}? The phone stays
                   paired. New fixes can appear while sharing is enabled; older
                   queued fixes will not restore erased history.
@@ -1129,7 +1129,7 @@ function App() {
               <>
                 <p>
                   Remove {device?.name} from your household. Its location
-                  history, IP observations, check-in logs and pending commands
+                  history, IP observations, recovery photos, check-in logs and pending commands
                   will be erased, and its WireGuard access removed. To pair it
                   again, reset pairing on the phone.
                 </p>

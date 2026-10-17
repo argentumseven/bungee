@@ -23,9 +23,11 @@ class HomeApi(private val identity: Identity, val clock: HomeClock = HomeClock()
             val existing = request("/v1/sync", JSONObject().put("report", JSONObject()))
             require(existing.has("revision") && existing.has("policy")) { "Registration could not be confirmed" }
             JSONObject().put("device_id", bundle.getString("device_id")).put("gps_epoch", existing.getString("gps_epoch"))
+                .apply { existing.optString("photo_epoch").takeIf { it.isNotEmpty() }?.let { put("photo_epoch", it) } }
         }
         require(result.getString("device_id") == bundle.getString("device_id"))
         identity.reconcileGpsEpoch(result.getString("gps_epoch"))
+        result.optString("photo_epoch").takeIf { it.isNotEmpty() }?.let { identity.reconcilePhotoEpoch(it) }
         identity.enrolled = true
         identity.bundle = bundle.apply { remove("token") }.toString()
     }
