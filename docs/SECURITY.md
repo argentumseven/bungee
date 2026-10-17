@@ -10,40 +10,9 @@ The [validation record](VALIDATION.md) identifies tested behavior and outstandin
 
 ## Network paths
 
-This diagram describes the direct-Rust deployment in this branch. GitHub renders it from the Markdown itself; it does not load an image from another branch.
+The picture shows the direct-Rust deployment. HTTPS terminates in Rust; the gateway enforces source restrictions without terminating TLS.
 
-```mermaid
-flowchart TB
-    Browser["Administrator browser"]
-    Phone["Bungee Android app"]
-    Other["Other phone apps"]
-    Internet["Existing Internet route"]
-    Resolver["Explicit LAN, home or public DNS resolver"]
-
-    subgraph Host["Linux server or VPS"]
-        subgraph Namespace["Shared gateway network namespace"]
-            Firewall["Gateway firewall: administrator source prefixes"]
-            WG["WireGuard wg0: custom UDP port and per-device PSK"]
-            subgraph Rust["One Rust server process, UID 10001"]
-                Admin["Administrator HTTPS :8443: TLS terminates here; source prefixes checked again"]
-                Device["Signed device HTTP API: 10.77.0.1:8081"]
-                DNS["Optional DNS listener: 10.77.0.1:5353; peer consent and policy checks"]
-            end
-            Firewall -->|"HTTPS bytes stay encrypted"| Admin
-            WG -->|"HTTP inside WireGuard"| Device
-            WG -.->|"Eligible legacy DNS peers: UDP and TCP 53 redirected locally"| DNS
-        end
-        DB[("SQLite, WAL and saved records on the host LUKS2 mount")]
-        Admin --> DB
-        Device --> DB
-        DNS -->|"Local summaries"| DB
-    end
-
-    Browser -->|"Chosen HTTPS TCP port maps to :8443"| Firewall
-    Phone -->|"Chosen WireGuard UDP port"| WG
-    DNS -.->|"Only the configured resolver IP and UDP/TCP port"| Resolver
-    Other --> Internet
-```
+[![Bungee network security: administrator HTTPS goes directly to Rust; the app uses WireGuard to reach the separate device API; optional DNS has its own listener; other phone traffic keeps its normal route.](https://github.com/argentumseven/bungee/blob/d49a19e19d50e039eb82fc4587270a5e3de59003/docs/images/security-architecture.png?raw=true)](https://github.com/argentumseven/bungee/blob/d49a19e19d50e039eb82fc4587270a5e3de59003/docs/images/security-architecture.png)
 
 The gateway firewall filters packets; it does not terminate HTTPS. The administrator TLS connection ends in Rust. The device HTTP API is protected by WireGuard and request signatures. DNS uses a separate Rust listener, not an HTTP API route. General IP forwarding stays disabled. A private home resolver needs a separate routed host-to-home tunnel; setting a private IP alone does not make it reachable. New personal enrollment does not install system DNS or enable legacy managed-DNS policies.
 
@@ -51,26 +20,7 @@ The gateway firewall filters packets; it does not terminate HTTPS. The administr
 
 Host storage sits outside the containers' shared network namespace. The unlock key and backup identity are separate host-only files; neither is mounted into a runtime container.
 
-```mermaid
-flowchart TB
-    Unlock["Host-only LUKS unlock key: /etc/bungee/storage.key"]
-    Identity["Host-only age backup identity: /etc/bungee/backup-identity"]
-    Installer["Host installer and updater"]
-    Live["LUKS2 mount before Docker: SQLite/WAL, saved records, administrator password, WireGuard/peer secrets, CA and leaf keys"]
-    Snapshot["Cold tar stream of the four sensitive data directories"]
-    Archive["age-encrypted *.tar.age backups: stored under LUKS2 or exported as ciphertext"]
-    Verify["Authenticate every archive before replacing any current data"]
-    Restored["Restore data and keys while services remain stopped"]
-
-    Unlock -->|"Unattended boot unlock"| Live
-    Installer -->|"Stops both services before snapshot"| Snapshot
-    Live --> Snapshot
-    Snapshot -->|"Piped through age; no plaintext tar file"| Archive
-    Identity -.->|"Public recipient derived for encryption"| Archive
-    Archive --> Verify
-    Identity -->|"Required for decryption"| Verify
-    Verify --> Restored
-```
+[![Bungee storage security: host-key unlock of LUKS2, cold age-encrypted backups, authentication before restoration, and separate host-only backup identity.](https://github.com/argentumseven/bungee/blob/d49a19e19d50e039eb82fc4587270a5e3de59003/docs/images/storage-lifecycle.png?raw=true)](https://github.com/argentumseven/bungee/blob/d49a19e19d50e039eb82fc4587270a5e3de59003/docs/images/storage-lifecycle.png)
 
 The cold snapshot also includes the CA and leaf keys. The filesystem and archive encryption use different keys. A host-stored unlock key enables unattended startup; it does not protect against a running host/root compromise or a full-host copy that also contains the key.
 

@@ -1,17 +1,10 @@
-# Security diagram exports
+# Security pictures
 
-The two Mermaid blocks in [SECURITY.md](../SECURITY.md) are the diagram sources. GitHub renders them inline, so the Security document has no image request tied to `main`, a pull-request branch, or private raw-file authentication.
+`security-architecture.png` and `storage-lifecycle.png` are the actual drawn pictures used by [SECURITY.md](../SECURITY.md). They are raster PNGs with large type, spacious boxes and fixed arrow placement. There are no Mermaid blocks or automatic layout scripts.
 
-- `security-architecture.png` / `.svg`: direct Rust HTTPS, WireGuard device HTTP, separate optional DNS, network and host storage boundaries.
-- `storage-lifecycle.png` / `.svg`: host-only keys, encrypted data, local certificate issuance and authenticated cold backups.
+- The network picture separates direct administrator HTTPS, the WireGuard device API, optional DNS and other phone traffic. TLS ends in Rust.
+- The storage picture separates the LUKS unlock key from the age backup identity and shows the cold-backup/verified-restore sequence.
 
-Regenerate all exports from those blocks and validate their syntax in Chromium:
+The document links to the exact commit that contains these pictures. That keeps its image targets valid in a private repository and before a PR is merged, without assuming the pictures already exist on `main`. When replacing a picture, commit the PNG first, then update the image link to that commit. The image checker verifies pinned content when that commit is present locally.
 
-```sh
-PUPPETEER_SKIP_DOWNLOAD=true npm install --prefix work/diagram-tools --no-save --no-audit --no-fund @mermaid-js/mermaid-cli@11.12.0
-CHROME_BIN=/usr/bin/chromium node scripts/render-security-diagrams.mjs
-```
-
-Run from the repository root after `npm ci`. The renderer uses the existing Playwright dependency, an installed Chromium and Mermaid's local browser bundle; it requests no remote fonts, icons or diagram service. `MERMAID_BUNDLE` may point to another locally installed Mermaid browser bundle. Intermediate dependencies stay under ignored `work/`.
-
-The repository Security tab displays the default branch. A correction on a PR branch appears there after the PR is merged; use that branch's `docs/SECURITY.md` to preview it before merging.
+The GitHub Security tab displays the default branch. It picks up these document changes when the PR is merged. The PR's `docs/SECURITY.md` provides the current preview.
