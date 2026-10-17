@@ -1,10 +1,13 @@
 # Security pictures
 
-`security-architecture.png` and `storage-lifecycle.png` are the actual drawn pictures used by [SECURITY.md](../SECURITY.md). They are raster PNGs with large type, spacious boxes and fixed arrow placement. There are no Mermaid blocks or automatic layout scripts.
+These are drawn raster PNG pictures with fixed geometry and technical labels. No live Mermaid renderer or automatic box layout is required.
 
-- The network picture separates direct administrator HTTPS, the WireGuard device API, optional DNS and other phone traffic. TLS ends in Rust.
-- The storage picture separates the LUKS unlock key from the age backup identity and shows the cold-backup/verified-restore sequence.
+- `security-architecture.png` separates the logical WireGuard L3 overlay from its routed UDP underlay, including phone userspace addressing, host Docker publication, shared-namespace `eth0`/`wg0`, encapsulation and local INPUT delivery.
+- `backend-topology.png` shows the shared network namespace, distinct gateway/server containers, kernel WireGuard, one Rust process, its three socket services, SQLite file I/O and the peer-configuration control plane.
+- `storage-lifecycle.png` shows host-key unlock, cold encrypted backups and authenticated restore with separate host keys.
 
-The document links to the exact commit that contains these pictures. That keeps its image targets valid in a private repository and before a PR is merged, without assuming the pictures already exist on `main`. When replacing a picture, commit the PNG first, then update the image link to that commit. The image checker verifies pinned content when that commit is present locally.
+The [topology reference](../NETWORK-TOPOLOGY.md) records the address/port notation, forwarding scope, connection and mount tables, omissions and pinned implementation sources. It distinguishes optional legacy DNS from the current personal app's fixed HTTP transport.
 
-The GitHub Security tab displays the default branch. The drawn PNGs and their full image paths are also published there, with a notice that the deployment implementation is awaiting PR #1. This branch documents the implemented deployment; merging it replaces the release-specific notice and older controls.
+The Security document links each PNG to the exact commit containing it. Commit new artwork first, then update its immutable image URL. Keep the full repository path: relative image paths in the repository Security tab previously broke. `python3 scripts/check-doc-images.py` checks referenced assets and pinned content when the commit is available locally.
+
+The default branch also publishes these pictures. Its Security document explicitly labels the direct-Rust deployment as pending PR #1 while release 1.1.4 remains on that branch. The implementation PR documents the new deployment's controls. The drawings do not imply its code is already merged or deployed.

@@ -10,13 +10,25 @@ The [validation record](VALIDATION.md) identifies tested behavior and outstandin
 
 ## Network paths
 
-The picture shows the direct-Rust deployment. HTTPS terminates in Rust; the gateway enforces source restrictions without terminating TLS.
+The first drawing separates logical L3 reachability from the UDP transport carrying it. Its two panels show the same endpoints. `P` is one phone's `10.77.0.n` address, `E` is the reachable numeric WireGuard endpoint IP, and `W` is the configured UDP port. The green dashed path is the inner overlay, not a second physical link.
 
-[![Bungee network security: administrator HTTPS goes directly to Rust; the app uses WireGuard to reach the separate device API; optional DNS has its own listener; other phone traffic keeps its normal route.](https://github.com/argentumseven/bungee/blob/d49a19e19d50e039eb82fc4587270a5e3de59003/docs/images/security-architecture.png?raw=true)](https://github.com/argentumseven/bungee/blob/d49a19e19d50e039eb82fc4587270a5e3de59003/docs/images/security-architecture.png)
+[![WireGuard overlay and UDP underlay: phone userspace stack, inner IPv4/TCP addressing, host Docker publication, shared namespace eth0, kernel WireGuard decapsulation, wg0 and local INPUT to Rust.](https://github.com/argentumseven/bungee/blob/f6bdb8e3e28ae92fb569d2559bd794a976c65b17/docs/images/security-architecture.png?raw=true)](https://github.com/argentumseven/bungee/blob/f6bdb8e3e28ae92fb569d2559bd794a976c65b17/docs/images/security-architecture.png)
 
-[Open the full-size network picture](https://github.com/argentumseven/bungee/blob/d49a19e19d50e039eb82fc4587270a5e3de59003/docs/images/security-architecture.png).
+[Open the full-size overlay and underlay drawing](https://github.com/argentumseven/bungee/blob/f6bdb8e3e28ae92fb569d2559bd794a976c65b17/docs/images/security-architecture.png).
 
-The gateway firewall filters packets; it does not terminate HTTPS. The administrator TLS connection ends in Rust. The device HTTP API is protected by WireGuard and request signatures. DNS uses a separate Rust listener, not an HTTP API route. General IP forwarding stays disabled. A private home resolver needs a separate routed host-to-home tunnel; setting a private IP alone does not make it reachable. New personal enrollment does not install system DNS or enable legacy managed-DNS policies.
+The phone's address belongs to its app-contained userspace TCP/IP stack. The outer UDP flow enters the host's Docker port publication, crosses the bridge/veth into `eth0`, and reaches kernel WireGuard. After decapsulation, `wg0` delivers the inner TCP connection locally to `10.77.0.1:8081` through INPUT. It does not traverse the namespace's FORWARD chain or another container network. The phone peer has `AllowedIPs=10.77.0.1/32`; the server peer has `AllowedIPs=P/32`.
+
+## Backend placement
+
+[![Backend placement: two containers in one network namespace, one Rust process with separate HTTPS, device HTTP and optional DNS sockets, local SQLite file I/O and shared peer configuration.](https://github.com/argentumseven/bungee/blob/f6bdb8e3e28ae92fb569d2559bd794a976c65b17/docs/images/backend-topology.png?raw=true)](https://github.com/argentumseven/bungee/blob/f6bdb8e3e28ae92fb569d2559bd794a976c65b17/docs/images/backend-topology.png)
+
+[Open the full-size backend drawing](https://github.com/argentumseven/bungee/blob/f6bdb8e3e28ae92fb569d2559bd794a976c65b17/docs/images/backend-topology.png).
+
+The gateway and server are separate containers sharing one network namespace. Its WireGuard device is a kernel network object; the gateway manager configures it. One Rust process serves administrator HTTPS, the device HTTP API and optional DNS, with shared application state and local SQLite/WAL file I/O. Dotted black lines show peer-configuration files and `wg syncconf`, not network hops. Administrator TLS terminates in Rust after host port publication and the namespace's source-prefix ACL.
+
+Optional DNS redirects eligible legacy peers' UDP/TCP port 53 locally to Rust port 5353. Rust opens a new connection to the configured resolver; it does not forward the original phone packet. New personal enrollment does not enable this path. A private home resolver requires a separately provisioned host-to-home route. Namespace forwarding stays disabled; host Docker forwarding/NAT is a separate scope.
+
+Read the [address/port tables, packet paths, mount boundaries and pinned implementation references](NETWORK-TOPOLOGY.md) for the drawings' exact scope, including Docker source-address variations and private resolver routing.
 
 ## Storage, keys and backups
 
