@@ -44,9 +44,9 @@ The Kotlin app connects through an app-contained WireGuard tunnel to a Rust serv
 | Network setup | Operator-chosen numeric endpoint and UDP port; 51820 rejected; only `10.77.0.1/32` routed inside Bungee; no default internet route |
 | Administrator access | Argon2id password verification, bounded login work, HttpOnly/SameSite sessions, exact-origin mutation checks, separate admin/device listeners and rate budgets, source-prefix restrictions, security audit events and same-origin CSP |
 | Retention and erasure | GPS/IP/check-in/photo/DNS records retained until erased/revoked; separate location/history/photo/DNS erasure; transactional GPS/photo generations reject erased backlog; revocation deletes device data and tunnel access |
-| Containers | Non-root Rust service, zero capabilities and read-only root; isolated WireGuard gateway; local Caddy CA; TLS 1.3 X25519MLKEM768; runtime egress denied except an explicitly selected legacy private DNS resolver |
+| Containers | Non-root Rust service, zero capabilities and read-only root; isolated WireGuard gateway; host-only local CA; direct Rust HTTPS; TLS 1.3 X25519MLKEM768; runtime egress denied except an explicitly selected LAN/home or public DNS resolver |
 | Installation | Prompted WireGuard/web ports, endpoint/bind address and mandatory administrator hosts/prefixes; bare hosts become /32 or /128; no-write plan, exact HTTPS URL and CA fingerprint; existing installations refused |
-| Server updates | Host systemd timer with Compose image replacement, immutable three-image bundles, staged downloads, admission closed during trials, coherent five-volume snapshots, failed-trial recovery and three retained snapshots |
+| Server updates | Host systemd timer with Compose image replacement, immutable two-image bundles, staged downloads, admission closed during trials, coherent encrypted cold snapshots, failed-trial recovery and three retained snapshots |
 | Builds | ARM64/x86_64 APK, coordinated `release.json`, CI checks and checksums, operator-owned stable signing option, source and synthetic test fixtures |
 
 Bungee does not support device-owner/work-profile management, forced system DNS, app suspension, hidden launchers, lock-screen overlays, airplane-mode cycling, radio schedules, power-off/reboot/wipe, credential reset, arbitrary scripts or software deployment. Powered-off finding, a crowdsourced offline network, relay/NAT traversal, household roles/MFA and hardware attestation are also unavailable. Street-map and production GeoIP datasets are supplied separately.
@@ -60,7 +60,7 @@ bash scripts/install.sh --plan   # validate answers without writes or network ca
 sudo bash scripts/install.sh    # configure and start the stack
 ```
 
-The wizard asks for ports and mandatory administrator source hosts/prefixes. It configures source restrictions in both the gateway firewall and Caddy. Verify the printed local-CA fingerprint and trust the public root certificate on administrator devices before signing in. Keep persistent data and backups on encrypted storage.
+The wizard asks for ports and mandatory administrator source hosts/prefixes. It configures source restrictions in both the gateway firewall and Rust HTTPS. Verify the printed local-CA fingerprint and trust the public root certificate on administrator devices before signing in. Keep persistent data and backups on encrypted storage.
 
 For phones away from home, the selected WireGuard UDP endpoint must be reachable. Public IPv4 normally requires forwarding that UDP port on your router; CGNAT needs another reachable path. The dashboard can stay on your LAN/VPN. WireGuard provides encryption; it does not create inbound reachability. No relay is included.
 
@@ -144,3 +144,5 @@ The server's administrator HTTP listener binds loopback on port 8080; device tes
 See the [platform matrix](docs/PLATFORM.md), [management guide](docs/MANAGEMENT.md), [recovery requirements](docs/SAFETY.md), [remaining work](docs/ROADMAP.md) and [writing guide](docs/WRITING.md).
 
 AGPL-3.0-only. See [LICENSE](LICENSE).
+
+Server deployment now uses direct Rust HTTPS, LUKS2 persistent storage with host-key unattended unlock, and age-encrypted cold backups. Optional DNS forwards only to an explicit numeric LAN/home or public resolver over UDP/TCP; general phone forwarding stays disabled. See [installation](docs/INSTALL.md), [VPS routing](docs/DEPLOYMENT.md), and [1.1.4 migration](docs/MIGRATION-1.1.4.md).

@@ -8,15 +8,16 @@ Protect a consenting household’s device telemetry against internet observers, 
 
 The [validation record](VALIDATION.md) identifies tested behavior and outstanding verification. The trust boundaries below apply to the supported personal-device configuration.
 
-[![Bungee security architecture: administrator browser through Caddy to the Rust administrator API; Android app through WireGuard to the Rust device API; both APIs use private SQLite storage. Other phone apps keep their existing network route.](images/security-architecture.png)](images/security-architecture.png)
+[![Bungee security architecture: direct administrator HTTPS to Rust, separate WireGuard device API, encrypted storage and an optional explicit DNS resolver.](https://github.com/argentumseven/bungee/blob/main/docs/images/security-architecture.svg?raw=true)](https://github.com/argentumseven/bungee/blob/main/docs/images/security-architecture.svg)
 
-Open the image for full-size labels. The paths are:
+The absolute repository image URL also works from GitHub's Security tab. Open the image for full-size labels.
 
-- **Administrator browser → Caddy HTTPS reverse proxy → Rust administrator API.** The operator chooses the public web port and allowed administrator prefixes. Caddy requires TLS 1.3 with X25519MLKEM768 and reaches the administrator listener only at `127.0.0.1:8080`.
-- **Bungee Android app → isolated WireGuard gateway → Rust device API.** The operator chooses the UDP port. Each phone has a separate 256-bit preshared secret and signs device requests to `10.77.0.1:8081`. Only `10.77.0.1/32` exists as a destination inside Bungee's private network stack.
-- **Other phone apps → their existing network route.** Bungee installs no Android VPN, system route or system DNS setting. Another VPN can still carry or filter Bungee's outer UDP traffic.
+- **Administrator browser → Rust HTTPS dashboard/API.** The gateway and Rust check explicit administrator source prefixes. Rust requires TLS 1.3 X25519MLKEM768 and uses a host-generated local CA-signed leaf certificate. No reverse proxy or load balancer is required; forwarding headers carry no authority.
+- **Bungee Android app → isolated WireGuard gateway → Rust device API.** The operator chooses the UDP port. Each phone has a separate 256-bit PSK and signs requests to `10.77.0.1:8081`. The device listener is separate from administration.
+- **Persistent state → LUKS2 encrypted filesystem.** SQLite/WAL, peer secrets, WireGuard keys, TLS keys and cold backups are covered. Host-only unlock and age backup identities enable unattended boot and authenticated encrypted archives. The CA private key is not mounted into Rust.
+- **Optional resolver → one explicit IP/UDP+TCP port.** LAN/home or public resolvers are operator choices, with no fallback. Forwarding remains disabled. Other phone apps retain their existing network route.
 
-The two API listeners belong to one Rust process and share private SQLite storage. Caddy and WireGuard run in separate containers; the three containers share the gateway's network namespace. The illustration omits the optional legacy DNS path, disabled for new enrollment. The detailed container and storage controls below also apply.
+The host, administrator, hypervisor and chosen DNS resolver remain trusted within their roles. A host-stored key cannot protect a complete host snapshot containing that key or a running guest from a privileged provider. See [INSTALL.md](INSTALL.md) for key storage, encrypted swap, backup recovery and mount-before-Docker ordering, and [DEPLOYMENT.md](DEPLOYMENT.md) for private home resolver routes from a VPS.
 
 ## Enrollment protocol
 
@@ -64,15 +65,15 @@ Small EXIF-stripped JPEGs have a 12-KiB bound and a three-record Keystore-encryp
 
 ## Container boundaries
 
-Rust has no Linux capabilities, uses UID 10001, and cannot write its root filesystem. WireGuard is isolated in its own namespace/container with only NET_ADMIN, CHOWN, and DAC_OVERRIDE. Its private-key volume is not mounted into Rust. A separate public-key/peer volume (now including preshared secrets) is shared. The gateway reads configuration as WireGuard data, never as shell code. IP forwarding is disabled. When home DNS is configured, only incoming wg0 UDP/TCP 53 is redirected locally to unprivileged port 5353; there is no internet-forwarding NAT. Gateway startup sets IPv4/IPv6 INPUT, OUTPUT, and FORWARD policies to DROP, permits loopback, established/related replies, inbound custom WireGuard UDP, dashboard TCP 443, and device TCP 8081 on wg0. Essential IPv6 control messages are allowed. Docker DNS egress is blocked. Runtime Compose environments clear inherited HTTP/HTTPS/ALL proxy settings, and Caddy health probes explicitly disable proxying. Rust and Caddy share that namespace, so neither can initiate provider connections. The optional exception permits UDP/TCP only to one operator-selected private home DNS IP/port; there is no provider resolver fallback. ACLs gate DNS by enrolled PSK peer, consent and matching applied policy, and recheck after upstream waits. DNS payloads go to the operator-owned resolver, whose logging/upstreams remain separately controlled. Firewall installation failure prevents gateway startup. Caddy exposes only the administrator API; `10.77.0.1:8081` is bound exclusively on the WireGuard interface.
+Rust has no Linux capabilities, uses UID 10001, disables Linux process dumps and cannot write its root filesystem. WireGuard is isolated in its own container with NET_ADMIN, CHOWN and DAC_OVERRIDE. Its private key is not mounted into Rust. The shared peer configuration includes PSKs and remains on encrypted storage. IP forwarding is disabled. IPv4/IPv6 firewall policies default to DROP; only the selected DNS resolver receives new outbound UDP/TCP connections. Docker DNS is blocked. Runtime proxy settings are cleared. Malformed firewall configuration prevents startup. The gateway admits the selected HTTPS port only from explicit administrator prefixes; Rust repeats that check from the TCP peer. `10.77.0.1:8081` remains the separate device endpoint.
 
-The image build supports an optional `build_ca` BuildKit secret for TLS-inspecting development proxies. Verification remains enabled; the cloud CA is not shipped in the runtime image. The tested Caddy image is pinned by digest. Other base images are versioned tags. Operator-owned stable APK signing is supported; hosted production signing/update provenance is unfinished.
+The image build supports an optional `build_ca` BuildKit secret for TLS-inspecting development proxies. Verification remains enabled; the cloud CA is not shipped in the runtime image. Runtime base images use versioned tags and locked Rust dependencies. Operator-owned stable APK signing is supported; hosted production signing/update provenance is unfinished.
 
 ## Post-quantum protection and limits
 
 A WireGuard Curve25519 key pair is **not** post-quantum. Each new peer additionally requires an independently generated, random 32-byte preshared secret, mixed by WireGuard's standard PSK mechanism. This provides a symmetric protection layer for tunnel confidentiality when the PSK stays secret. The Curve25519 public key remains classical; the PSK adds a symmetric layer.
 
-The dashboard requires TLS 1.3 with **X25519MLKEM768** hybrid key exchange and no classical-only group fallback. The tested Caddy image supports it; a current compatible browser is required. Its local CA avoids disclosing a household hostname to a public certificate authority. Trust the root certificate through a verified local channel before pairing. The QR transfers the PSK from that trusted administrator connection/display to the phone. Never send it through email, cloud photo storage, remote QR generators, or synchronized clipboards.
+The dashboard requires TLS 1.3 with **X25519MLKEM768** hybrid key exchange and no classical-only group fallback. Rust rustls with the AWS-LC provider enforces it; a current compatible browser is required. Its local CA avoids disclosing a household hostname to a public certificate authority. Trust the root certificate through a verified local channel before pairing. The QR transfers the PSK from that trusted administrator connection/display to the phone. Never send it through email, cloud photo storage, remote QR generators, or synchronized clipboards.
 
 Certificate signatures and Android request signatures still use **classical cryptography**. Hardware-backed post-quantum Keystore signing is not implemented. First provisioning and updates still depend on classical authentication. The hybrid/PSK layers do not protect a compromised endpoint or stolen secret. Fully post-quantum authenticated enrollment and signing need further protocol work and independent review.
 
@@ -86,7 +87,7 @@ GPS history and the recovery checkpoint use observation time; check-ins use serv
 
 ## Outstanding security work
 
-Physical GrapheneOS testing and an independent security audit are pending. Other open work includes publisher-authenticated updates, encrypted snapshot archives, passkeys/MFA, household roles, administrator recovery, endpoint-change handling, accessibility, and load/fault testing. See [ROADMAP.md](ROADMAP.md) and the completed checks in [VALIDATION.md](VALIDATION.md).
+Physical GrapheneOS testing and an independent security audit are pending. Other open work includes publisher-authenticated updates, passkeys/MFA, household roles, administrator recovery, endpoint-change handling, accessibility, and load/fault testing. See [ROADMAP.md](ROADMAP.md) and the completed checks in [VALIDATION.md](VALIDATION.md).
 
 ## Reversible policy and legacy DNS boundary
 
@@ -100,11 +101,11 @@ Recurring history is read-only sampling: groups are selected before pagination, 
 
 ## Host installation and updates
 
-See [INSTALL.md](INSTALL.md) for mandatory source-prefix rules at both gateway and Caddy, exact-origin/port configuration, maintenance admission, cold five-volume snapshots, journaled failed-trial recovery and local-console repair. The app has no Docker socket or updater API. Only the host updater downloads artifacts; those providers receive download metadata, never phone records or keys. Registry TLS, fixed repositories and immutable digests are enforced; client-side publisher-signature verification is not implemented. A compromised authorized publisher remains an update compromise path.
+See [INSTALL.md](INSTALL.md) for mandatory source-prefix rules at both gateway and Rust, exact-origin/port configuration, maintenance admission, cold age-encrypted snapshots, journaled failed-trial recovery and local-console repair. The app has no Docker socket or updater API. Only the host updater downloads artifacts; those providers receive download metadata, never phone records or keys. Registry TLS, fixed repositories and immutable digests are enforced; client-side publisher-signature verification is not implemented. A compromised authorized publisher remains an update compromise path.
 
 ## Offline maps and IP evidence
 
-Map requests are authenticated and same-origin; only local raster MBTiles/City MMDB files are read. No geocoder, public-IP endpoint or map/GeoIP provider is contacted. Gateway observations use authenticated WireGuard endpoints/counters, matched to enrolled PSK peers; HTTP forwarding headers and client-reported IPs are not evidence. GeoIP describes a possibly distant carrier/VPN/NAT exit and never replaces GPS. Location/IP snapshots and backups are sensitive. Full-history erasure/revocation also deletes IP records; a cutoff blocks stale endpoint resurrection. Dataset files are operator-trusted public data mounted read-only, versioned separately from five-volume state snapshots. See [GEOGRAPHY.md](GEOGRAPHY.md) for licensing, import, retention and recovery limits.
+Map requests are authenticated and same-origin; only local raster MBTiles/City MMDB files are read. No geocoder, public-IP endpoint or map/GeoIP provider is contacted. Gateway observations use authenticated WireGuard endpoints/counters, matched to enrolled PSK peers; HTTP forwarding headers and client-reported IPs are not evidence. GeoIP describes a possibly distant carrier/VPN/NAT exit and never replaces GPS. Location/IP snapshots and backups are sensitive. Full-history erasure/revocation also deletes IP records; a cutoff blocks stale endpoint resurrection. Dataset files are operator-trusted public data mounted read-only, versioned separately from encrypted cold state snapshots. See [GEOGRAPHY.md](GEOGRAPHY.md) for licensing, import, retention and recovery limits.
 
 ## DDIL and receipts
 
@@ -112,7 +113,7 @@ Requests remain signed, timestamped and nonce-protected within a two-minute repl
 
 ## Review records
 
-The [first review](REVIEW-2026-10.md), [second review](REVIEW-2026-10-SECOND.md) and [adversarial review](REVIEW-2026-10-ADVERSARIAL.md) record historical findings, fixes and regression checks. Current enrollment, erasure, cancellation and resource limits are described above and in the linked guides. Publisher-signature enforcement, application-encrypted archives and physical GrapheneOS acceptance remain open.
+The [first review](REVIEW-2026-10.md), [second review](REVIEW-2026-10-SECOND.md) and [adversarial review](REVIEW-2026-10-ADVERSARIAL.md) record historical findings, fixes and regression checks. Current enrollment, erasure, cancellation and resource limits are described above and in the linked guides. Publisher-signature enforcement, physical GrapheneOS acceptance remains open.
 
 ## Removal and ownership failures
 

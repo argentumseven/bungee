@@ -2,15 +2,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import https from "node:https";
 const prefix = `bungee-network-test-${process.pid}`;
 const gateway = `${prefix}-gateway`,
-  upstream = `${prefix}-upstream`,
-  server = `${prefix}-server`,
-  web = `${prefix}-web`;
+  upstream = `${prefix}-upstream`;
 const image =
-  "caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d";
+  "node:24-bookworm-slim";
 const docker = (args, input) =>
   execFileSync("docker", args, {
     input,
@@ -29,6 +25,7 @@ const probe = (ip) =>
     "probe",
     ip,
   ]);
+const udpProbe = (ip, port=8088) => docker(['exec',gateway,'python3','-c',"import socket,sys;s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.settimeout(1);s.sendto(b'fixture',(sys.argv[1],int(sys.argv[2])));assert s.recv(512)==b'fixture';print('udp-ok')",ip,String(port)]);
 try {
   docker(["network", "create", prefix]);
   docker([
@@ -40,13 +37,7 @@ try {
     "--network",
     prefix,
     image,
-    "caddy",
-    "file-server",
-    "--listen",
-    ":8088",
-    "--root",
-    "/tmp",
-    "--browse",
+    "node", "-e", "require('http').createServer((q,s)=>s.end('fixture')).listen(8088);const u=require('dgram').createSocket('udp4');u.on('message',(b,p)=>u.send(b,p.port,p.address));u.bind(8088);",
   ]);
   docker([
     "run",
@@ -57,7 +48,7 @@ try {
     "--network",
     prefix,
     "-p",
-    "127.0.0.1::443",
+    "127.0.0.1::8443",
     "--cap-drop",
     "ALL",
     "--cap-add",
@@ -79,6 +70,7 @@ try {
   ]);
   assert.match(upstreamIp, /^\d+\.\d+\.\d+\.\d+$/);
   assert.match(probe(upstreamIp), /200 OK/);
+  assert.equal(udpProbe(upstreamIp),'udp-ok');
   const firewall = readFileSync("deploy/wireguard/entrypoint.sh", "utf8").split(
     "mkdir -p /private /peers",
   )[0];
@@ -102,7 +94,8 @@ try {
     (e) => e.status === 124,
     "Docker provider DNS is dropped",
   );
-  // Enable exactly one operator-selected private destination/port. No public fallback.
+  assert.throws(()=>udpProbe(upstreamIp), 'new outbound UDP is dropped');
+  // Enable exactly one operator-selected resolver destination/port. No fallback.
   docker(
     [
       "exec",
@@ -121,6 +114,8 @@ try {
     firewall,
   );
   assert.match(probe(upstreamIp), /200 OK/);
+  assert.equal(udpProbe(upstreamIp),'udp-ok');
+  assert.throws(()=>udpProbe(upstreamIp,8089), 'another UDP resolver port stays blocked');
   assert.throws(
     () =>
       docker([
@@ -162,109 +157,14 @@ try {
   ]);
   assert.match(nat, /-i wg0 -p udp .*--dport 53 -j REDIRECT --to-ports 5353/);
   assert.match(nat, /-i wg0 -p tcp .*--dport 53 -j REDIRECT --to-ports 5353/);
-  docker([
-    "run",
-    "-d",
-    "--rm",
-    "--name",
-    server,
-    "--network",
-    `container:${gateway}`,
-    "--cap-drop",
-    "ALL",
-    "--read-only",
-    "--tmpfs",
-    "/state:uid=10001,gid=10001,mode=0700",
-    "--tmpfs",
-    "/tmp:size=16m",
-    "-e",
-    "BUNGEE_PUBLIC_ORIGIN=https://127.0.0.1",
-    "bungee-server:dev",
-  ]);
-  docker([
-    "run",
-    "-d",
-    "--rm",
-    "--name",
-    web,
-    "--network",
-    `container:${gateway}`,
-    "--cap-drop",
-    "ALL",
-    "--cap-add",
-    "NET_BIND_SERVICE",
-    "--read-only",
-    "--tmpfs",
-    "/data:mode=0700",
-    "--tmpfs",
-    "/config:mode=0700",
-    "--tmpfs",
-    "/tmp:size=16m",
-    "-e",
-    "BUNGEE_DOMAIN=127.0.0.1",
-    "-e",
-    "BUNGEE_ADMIN_SUBNETS=127.0.0.1/32 172.16.0.0/12 192.168.0.0/16",
-    "-v",
-    `${resolve("deploy/Caddyfile")}:/etc/caddy/Caddyfile:ro`,
-    image,
-  ]);
-  let ca;
-  for (let n = 0; n < 50; n++) {
-    try {
-      ca = docker([
-        "exec",
-        web,
-        "cat",
-        "/data/caddy/pki/authorities/local/root.crt",
-      ]);
-      break;
-    } catch {
-      await new Promise((r) => setTimeout(r, 100));
-    }
-  }
-  assert.ok(ca, "local CA is created under outbound-deny policy");
-  const port = Number(docker(["port", gateway, "443/tcp"]).split(":").at(-1));
-  const result = await new Promise((resolveResult, reject) => {
-    const req = https.get(
-      {
-        host: "127.0.0.1",
-        port,
-        path: "/healthz",
-        ca,
-        rejectUnauthorized: true,
-        minVersion: "TLSv1.3",
-        ecdhCurve: "X25519MLKEM768",
-      },
-      (res) => {
-        let body = "";
-        res.on("data", (b) => (body += b));
-        res.on("end", () =>
-          resolveResult({ status: res.statusCode, body: JSON.parse(body) }),
-        );
-      },
-    );
-    req.on("error", reject);
-    req.setTimeout(5000, () => req.destroy(new Error("timeout")));
-  });
-  assert.equal(result.status, 200);
-  assert.equal(result.body.status, "ok");
-  console.log(
-    "PASS: baseline TCP succeeds; new outbound TCP and Docker DNS are dropped; trusted hybrid HTTPS reaches Rust through the same namespace with all non-gateway capabilities dropped; only the selected private DNS destination/port is allowed.",
-  );
+  const rules = docker(['exec', gateway, 'iptables', '-S', 'OUTPUT']);
+  assert.ok(rules.includes(`-d ${upstreamIp}/32 -p udp`) && rules.includes('--dport 8088 -j ACCEPT'));
+  assert.ok(rules.includes(`-d ${upstreamIp}/32 -p tcp`));
+  console.log('PASS: default outbound deny; only configured UDP/TCP resolver destination and port; forwarding disabled; Docker DNS remains blocked.');
 } catch (e) {
-  for (const name of [gateway, server, web]) {
-    try {
-      process.stderr.write(docker(["logs", name]) + "\n");
-    } catch {}
-  }
+  try { process.stderr.write(docker(['logs',gateway])+'\n'); } catch {}
   throw e;
 } finally {
-  for (const name of [web, server, gateway, upstream]) {
-    try {
-      docker(["rm", "-f", name]);
-    } catch {}
-  }
-  try {
-    docker(["network", "rm", prefix]);
-  } catch {}
+  for (const name of [gateway, upstream]) { try { docker(['rm','-f',name]); } catch {} }
+  try { docker(['network','rm',prefix]); } catch {}
 }

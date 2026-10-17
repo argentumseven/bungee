@@ -63,11 +63,9 @@ pub fn now() -> i64 {
 pub fn admin_bind(value: &str) -> Result<std::net::SocketAddr, &'static str> {
     let bind: std::net::SocketAddr = value
         .parse()
-        .map_err(|_| "BUNGEE_ADMIN_BIND must be a numeric loopback address")?;
-    if bind.port() == 0 || !bind.ip().is_loopback() {
-        return Err(
-            "BUNGEE_ADMIN_BIND must use a nonzero loopback port; this listener is HTTP and requires the local TLS gateway for remote access",
-        );
+        .map_err(|_| "BUNGEE_ADMIN_BIND must be a numeric socket address")?;
+    if bind.port() == 0 || bind.ip().is_multicast() {
+        return Err("BUNGEE_ADMIN_BIND requires a nonzero unicast or wildcard port");
     }
     Ok(bind)
 }
@@ -155,16 +153,35 @@ pub async fn device_source_guard(State(app): State<App>, req: Request, next: Nex
     next.run(req).await
 }
 
-pub fn admin_source(peer: IpAddr, headers: &HeaderMap, trusted_proxy: bool) -> ApiResult<IpAddr> {
-    if trusted_proxy && peer.is_loopback() {
-        headers
-            .get("x-bungee-admin-ip")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse().ok())
-            .ok_or_else(denied)
-    } else {
-        Ok(peer)
+pub fn admin_networks(https: bool) -> Result<Vec<ipnet::IpNet>, Box<dyn std::error::Error>> {
+    let value = std::env::var("BUNGEE_ADMIN_SUBNETS").unwrap_or_default();
+    if value.trim().is_empty() && !https {
+        return Ok(vec!["127.0.0.0/8".parse()?, "::1/128".parse()?]);
     }
+    let mut nets = Vec::new();
+    for entry in value
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|s| !s.is_empty())
+    {
+        let net: ipnet::IpNet = if entry.contains('/') {
+            entry.parse()?
+        } else {
+            ipnet::IpNet::from(entry.parse::<IpAddr>()?)
+        };
+        let min = if net.addr().is_ipv4() { 8 } else { 16 };
+        if net.prefix_len() < min
+            || net.network().is_unspecified()
+            || net.network().is_multicast()
+            || matches!(net, ipnet::IpNet::V6(n) if n.addr().to_ipv4_mapped().is_some())
+        {
+            return Err("Administrator prefixes must be explicit unicast networks (/8 IPv4 or /16 IPv6 or narrower)".into());
+        }
+        nets.push(net);
+    }
+    if nets.is_empty() || nets.len() > 32 {
+        return Err("Configure 1–32 BUNGEE_ADMIN_SUBNETS".into());
+    }
+    Ok(nets)
 }
 
 pub fn require_admin(app: &App, headers: &HeaderMap) -> ApiResult<()> {
@@ -190,6 +207,21 @@ pub fn require_admin(app: &App, headers: &HeaderMap) -> ApiResult<()> {
 }
 
 pub async fn browser_guard(State(app): State<App>, req: Request, next: Next) -> Response {
+    let Some(peer) = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+    else {
+        return denied().into_response();
+    };
+    let ip = match peer.0.ip() {
+        IpAddr::V6(v) => v.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(IpAddr::V6(v)),
+        ip => ip,
+    };
+    if !(app.admin_networks.iter().any(|net| net.contains(&ip))
+        || (ip.is_loopback() && req.uri().path() == "/healthz"))
+    {
+        return Error(StatusCode::FORBIDDEN, "Administrator source rejected").into_response();
+    }
     // Cookie-authenticated mutations require an exact same-origin Origin header, including login.
     if !matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS)
         && req
@@ -318,18 +350,17 @@ pub fn private_write(path: &Path, data: &[u8]) -> io::Result<()> {
 mod tests {
     use super::*;
     #[test]
-    fn admin_http_listener_is_always_loopback() {
-        for address in ["127.0.0.1:8080", "[::1]:8080"] {
+    fn admin_bind_is_numeric_and_nonzero() {
+        for address in [
+            "127.0.0.1:8080",
+            "[::1]:8080",
+            "0.0.0.0:8443",
+            "[::]:8443",
+            "192.168.1.5:8443",
+        ] {
             assert!(admin_bind(address).is_ok());
         }
-        for address in [
-            "0.0.0.0:8080",
-            "[::]:8080",
-            "192.168.1.5:8080",
-            "203.0.113.1:8080",
-            "localhost:8080",
-            "127.0.0.1:0",
-        ] {
+        for address in ["224.0.0.1:8443", "localhost:8080", "127.0.0.1:0"] {
             assert!(admin_bind(address).is_err());
         }
     }
@@ -373,21 +404,5 @@ mod tests {
                 .check(RateClass::AdminSource, "source".into(), 5, 1000)
                 .is_err()
         );
-    }
-    #[test]
-    fn admin_forwarding_identity_requires_explicit_loopback_trust() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-bungee-admin-ip", "192.0.2.7".parse().unwrap());
-        let direct = "192.0.2.8".parse::<IpAddr>().unwrap();
-        let proxy = "127.0.0.1".parse::<IpAddr>().unwrap();
-        assert_eq!(admin_source(direct, &headers, true).unwrap(), direct);
-        assert_eq!(admin_source(proxy, &headers, false).unwrap(), proxy);
-        assert_eq!(
-            admin_source(proxy, &headers, true).unwrap(),
-            "192.0.2.7".parse::<IpAddr>().unwrap()
-        );
-        assert!(admin_source(proxy, &HeaderMap::new(), true).is_err());
-        headers.insert("x-bungee-admin-ip", "192.0.2.7,192.0.2.8".parse().unwrap());
-        assert!(admin_source(proxy, &headers, true).is_err());
     }
 }

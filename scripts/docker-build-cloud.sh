@@ -19,4 +19,3 @@ fi
 if [ -f /etc/ssl/certs/ca-certificates.crt ]; then args+=(--secret id=build_ca,src=/etc/ssl/certs/ca-certificates.crt); fi
 docker build "${args[@]}" -t bungee-gateway:dev -f deploy/wireguard/Dockerfile deploy
 docker build "${args[@]}" -t bungee-server:dev .
-docker build "${args[@]}" -t bungee-web:dev -f deploy/web.Dockerfile deploy

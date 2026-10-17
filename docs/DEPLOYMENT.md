@@ -10,30 +10,29 @@ Choose an unused UDP port yourself. **There is no default, and 51820 is rejected
 
 Wireshark analyzes packets; WireGuard creates an encrypted tunnel. Neither gives a CGNAT home connection a reachable public listener. A reachable public IPv4 address, correctly firewalled IPv6 path, or an end-to-end-encrypted relay is still required for away-from-home use. No relay mode is implemented. Personal app-contained mode can coexist with a mesh VPN, but the endpoint still must be reachable numerically through that network; it is not an automatic relay or discovery integration. Managed system DNS / Android always-on is disabled in the current app.
 
-## Private dashboard deployment
+## Direct HTTPS deployment
 
-Use the [guided installer](INSTALL.md) for prompted ports, mandatory administrator networks and the host update timer. The following manual alternative does not install automatic updates.
+Use [the host installer](INSTALL.md) to provision LUKS2 storage, root-only host unlock/backup keys, local TLS certificates and mount-before-Docker boot ordering. Rust serves the administrator dashboard/API directly using TLS 1.3 X25519MLKEM768. No reverse proxy or load balancer is required. Trust the public local CA after verifying its fingerprint through an authenticated channel. There is no public ACME contact or port 80 listener.
 
-1. Copy .env.example to .env and choose BUNGEE_WG_PORT and BUNGEE_WG_ENDPOINT explicitly. Use an IP address or locally resolved dashboard name for BUNGEE_DOMAIN.
-2. Set BUNGEE_ADMIN_PORT, the exact BUNGEE_PUBLIC_ORIGIN (including a nonstandard port), and mandatory BUNGEE_ADMIN_SUBNETS. Set BUNGEE_ADMIN_ADDRESS to the server's LAN address to make HTTPS available to administrator devices on that LAN. Its default is 127.0.0.1; loopback requires a local browser or an SSH tunnel with correct origin/host handling. There is no dashboard WAN-forwarding requirement. Prefer keeping administration on a trusted LAN.
-3. The web image bundles its Caddy configuration. Run `docker compose up --build -d`, then check health and logs. Never publish internal API ports 8080/8081.
-4. Caddy creates and renews certificates with its **local CA**. Retrieve only the public root: `docker compose exec -T web cat /data/caddy/pki/authorities/local/root.crt > bungee-root.crt`. Verify its SHA-256 fingerprint locally/over an authenticated channel, then explicitly trust it on administrator devices. Never export root.key or disable verification. CA trust grants certificate authority; use an administrator browser/profile under your control.
-5. Use a current browser supporting TLS 1.3 **X25519MLKEM768**. The server rejects classical-only key exchange; there is no automatic fallback. Read the generated administrator password locally with `docker compose exec server cat /state/admin-password` and sign in to the exact HTTPS origin.
+Choose the exact HTTPS origin/port and explicit administrator source prefixes. The gateway and Rust enforce these prefixes using the actual TCP source; forwarding headers are ignored. Only the chosen HTTPS TCP port and custom WireGuard UDP port are published. Keep the device API private at `10.77.0.1:8081`. See the installer guide for IPv4/IPv6 prefix validation, SSH access and recovery.
 
-There is **no public ACME/certificate-provider contact**, port 80 listener, HTTP/3 listener, cloud push, remote map/geocoding service, analytics or in-app runtime update check. The optional host updater downloads release artifacts as described in INSTALL.md. Only the chosen dashboard HTTPS TCP port on the chosen bind address and the custom WireGuard UDP port are published. Do not add a third-party TLS-terminating proxy if the provider must not see data.
+## Container boundary and storage
 
-## Container boundary and volumes
+The WireGuard gateway and Rust share a network namespace. Rust runs as UID 10001, with zero capabilities and a read-only root. The gateway has NET_ADMIN, CHOWN and DAC_OVERRIDE. Both have no-new-privileges, disabled core limits and tmpfs scratch storage. Runtime containers never receive the Docker socket, host unlock key or backup identity. Rust receives the leaf TLS key read-only; the local CA private key stays host-only.
 
-The gateway owns one network namespace shared by Rust and Caddy. Rust's administrator listener and Caddy upstream use loopback; the device API binds only 10.77.0.1:8081. Gateway firewall policy drops newly initiated external connections, including Docker provider-DNS requests, except the explicitly configured private home DNS upstream IP/port. It permits responses to inbound phone/dashboard connections. Essential IPv6 control traffic remains permitted. IP forwarding stays disabled. Rust runs as UID 10001 with zero capabilities and a read-only root filesystem. Caddy has only NET_BIND_SERVICE; gateway has NET_ADMIN, CHOWN and DAC_OVERRIDE.
+All persistent sensitive paths live on the dedicated encrypted mount: SQLite and WAL, photos/history, administrator password, server WireGuard private key, peer PSKs/configuration, certificate keys and backups. The gateway private-key directory is not mounted into Rust. `crypttab`/`fstab` unlock with a root-only host key, and Docker requires the mount before automatic container restarts. Host operations reject an unmounted or wrong storage source. Unencrypted swap is refused. Cold backups stream directly to age ciphertext; all archives authenticate before restoration changes current data. Read [the key/recovery limits](INSTALL.md#updates-encrypted-backups-and-recovery-keys), especially the limits of a host-stored key on a VPS.
 
-| Volume | Access | Contains |
-| --- | --- | --- |
-| server-data | Rust only | SQLite history, per-device preshared secrets, administrator password |
-| gateway-private | Gateway only | Server WireGuard private key |
-| gateway-peers | Rust + gateway | Server public key and approved /32 peers with secret preshared keys |
-| caddy-data/config | Caddy only | Local CA private keys, certificates and configuration state |
+Gateway IPv4/IPv6 INPUT, OUTPUT and FORWARD default to DROP. There is no general phone traffic forwarding. Replies to admitted connections and necessary IPv6 control traffic remain permitted. The only optional new outbound application flow is UDP/TCP to one explicitly configured DNS resolver IP/port. Docker provider DNS stays blocked.
 
-Back up application state coherently while Rust is stopped, or use SQLite's online backup API plus a coherent key/peer backup. Do not copy a live database without its transaction state. Caddy CA material also requires an encrypted backup; replacing the CA requires updating administrator trust. Backups retain erased history until the backup expires. Test restoration in isolation and monitor disk capacity: server GPS/check-in history has no automatic eviction.
+## VPS and private home DNS
+
+Use a minimal patched VPS with trusted hypervisor/provider, SSH keys, a restricted SSH source policy, console recovery and a provider/host firewall matching the administrator prefixes. Route the chosen HTTPS TCP and WireGuard UDP ports directly to Bungee. Do not expose either internal API port. Check the TCP source actually observed through the host's Docker/NAT path; Rust does not trust a header to restore an address hidden by a proxy. Configure Docker IPv6 routing explicitly if using IPv6 administration. For localhost/SSH access, Docker may present the host bridge address as the TCP source; allow that exact host address if needed and verify it locally. Do not widen the rule to all container addresses.
+
+Set optional `dns_upstream_ip` and `dns_upstream_port` in the host answers (or the corresponding `BUNGEE_DNS_UPSTREAM_IP`/`PORT` in the reference Compose environment). A numeric LAN/home **or public** resolver is accepted. Empty disables the listener and exception. UDP truncation retries TCP to the same resolver; there is no fallback destination. Existing peer consent/policy checks still apply. This server option does not install an Android VPN or change system DNS on newly enrolled personal phones.
+
+A VPS cannot reach a private home address merely because it is configured. Establish a separate host-to-home WireGuard/site-to-site tunnel or private routed network first. Route only the resolver address (a `/32` or `/128`) through it; use a distinct non-overlapping tunnel subnet/interface from Bungee's `10.77.0.0/24`. Give the Bungee Docker namespace a host route to that resolver. On the home side, allow only the VPS/tunnel source to the selected UDP **and TCP** DNS port and provide a return route (or narrowly scoped source NAT at the tunnel boundary). For a home behind NAT, initiate the tunnel from home with keepalive. Do not publish a home resolver as an open Internet service. Test both DNS transports from the Bungee namespace and verify other destinations/ports and phone forwarding remain denied.
+
+A public resolver receives DNS question names and VPS source metadata; its policy is a deliberate operator choice. Private resolvers may themselves use public upstreams. No resolver is selected automatically.
 
 ## Pairing and upgrade
 
@@ -65,13 +64,13 @@ The server reads the password file at startup and keeps an Argon2id verifier in 
 
 ## Optional management and home DNS
 
-See [MANAGEMENT.md](MANAGEMENT.md) for supported personal operation, local recovery, stable signing and legacy ownership limitations. Leave the legacy DNS upstream unset for new deployments; new managed-DNS policies are refused.
+See [MANAGEMENT.md](MANAGEMENT.md) for supported personal operation, local recovery, stable signing and legacy ownership limitations. The optional server DNS forwarder does not enable system DNS/managed-DNS policies on new personal phones.
 
 ## Image builds behind a TLS proxy
 
-Use the README's Compose build on an ordinary host. In a development environment with a TLS-inspecting proxy, Docker may need an explicit proxy hostname mapping and the environment's CA for build-time HTTPS. `scripts/docker-build-cloud.sh` derives the proxy hostname/address without reading credential values, forwards existing proxy bindings using Docker’s predefined build arguments, and supplies the system CA bundle as a BuildKit secret. It never disables TLS/package signature checks and does not install the cloud CA into runtime images.
+Use the host installer on an ordinary deployment host. In a development environment with a TLS-inspecting proxy, Docker may need an explicit proxy hostname mapping and the environment's CA for build-time HTTPS. `scripts/docker-build-cloud.sh` derives the proxy hostname/address without reading credential values, forwards existing proxy bindings using Docker’s predefined build arguments, and supplies the system CA bundle as a BuildKit secret. It never disables TLS/package signature checks and does not install the cloud CA into runtime images.
 
-`scripts/docker-build-cloud.sh` builds all three local development image tags. It does not deploy or expose them. Live Caddy certificate issuance and the complete Compose stack still require the host prerequisites above.
+`scripts/docker-build-cloud.sh` builds both runtime development image tags. It does not deploy or expose them. Host-generated local certificates, encrypted storage and the complete Compose stack still require the host prerequisites above.
 
 Local OpenStreetMap/GeoIP datasets and import/recovery/licensing instructions are in [GEOGRAPHY.md](GEOGRAPHY.md). These are read-only offline files; no external map or GeoIP lookup is permitted by the runtime egress policy.
 

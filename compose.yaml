@@ -1,104 +1,182 @@
-name: bungee
-x-private-env: &private-env
-  HTTP_PROXY: ""
-  HTTPS_PROXY: ""
-  ALL_PROXY: ""
-  http_proxy: ""
-  https_proxy: ""
-  all_proxy: ""
-  NO_PROXY: "*"
-  no_proxy: "*"
-services:
-  gateway:
-    build:
-      context: ./deploy
-      dockerfile: wireguard/Dockerfile
-    image: bungee-gateway:dev
-    restart: unless-stopped
-    cap_drop: [ALL]
-    cap_add: [NET_ADMIN, CHOWN, DAC_OVERRIDE]
-    security_opt: [no-new-privileges:true]
-    read_only: true
-    tmpfs: [/run:mode=0700]
-    environment:
-      <<: *private-env
-      BUNGEE_WG_PORT: ${BUNGEE_WG_PORT:?Choose a custom UDP port in .env}
-      BUNGEE_ADMIN_SUBNETS: ${BUNGEE_ADMIN_SUBNETS:?Set explicit administrator IPs or prefixes}
-      BUNGEE_DNS_UPSTREAM_IP: ${BUNGEE_DNS_UPSTREAM_IP:-}
-      BUNGEE_DNS_UPSTREAM_PORT: ${BUNGEE_DNS_UPSTREAM_PORT:-53}
-    ports:
-      - "${BUNGEE_WG_PORT:?Choose a custom UDP port}:${BUNGEE_WG_PORT:?Choose a custom UDP port}/udp"
-      - "${BUNGEE_ADMIN_ADDRESS:-127.0.0.1}:${BUNGEE_ADMIN_PORT:?Choose the dashboard HTTPS port}:443"
-    sysctls:
-      net.ipv4.ip_forward: "0"
-      net.ipv6.conf.all.forwarding: "0"
-    volumes:
-      - gateway-private:/private
-      - gateway-peers:/peers
-    healthcheck:
-      test: [CMD, wg, show, wg0]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-  server:
-    build: .
-    image: bungee-server:dev
-    restart: unless-stopped
-    network_mode: service:gateway
-    depends_on:
-      gateway: {condition: service_healthy}
-    environment:
-      <<: *private-env
-      BUNGEE_PUBLIC_ORIGIN: ${BUNGEE_PUBLIC_ORIGIN:?Set the exact HTTPS URL including a nonstandard port}
-      BUNGEE_ADMIN_BIND: 127.0.0.1:8080
-      BUNGEE_TRUST_LOOPBACK_PROXY: "true"
-      BUNGEE_DEVICE_BIND: 10.77.0.1:8081
-      BUNGEE_WG_ENDPOINT: ${BUNGEE_WG_ENDPOINT:?Set BUNGEE_WG_ENDPOINT to your reachable IP and custom port}
-      BUNGEE_DNS_UPSTREAM_IP: ${BUNGEE_DNS_UPSTREAM_IP:-}
-      BUNGEE_DNS_UPSTREAM_PORT: ${BUNGEE_DNS_UPSTREAM_PORT:-53}
-      BUNGEE_DNS_BIND: 10.77.0.1:5353
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    read_only: true
-    tmpfs: [/tmp:size=16m]
-    volumes:
-      - server-data:/state
-      - gateway-peers:/state/wireguard
-      - type: bind
-        source: ${BUNGEE_GEODATA_DIR:-./datasets}
-        target: /datasets
-        read_only: true
-        bind:
-          create_host_path: false
-  web:
-    build:
-      context: ./deploy
-      dockerfile: web.Dockerfile
-    image: bungee-web:dev
-    restart: unless-stopped
-    environment:
-      <<: *private-env
-      BUNGEE_DOMAIN: ${BUNGEE_DOMAIN:?Set BUNGEE_DOMAIN in .env}
-      BUNGEE_ADMIN_SUBNETS: ${BUNGEE_ADMIN_SUBNETS:?Set explicit administrator IPs or prefixes}
-    network_mode: service:gateway
-    cap_drop: [ALL]
-    cap_add: [NET_BIND_SERVICE]
-    security_opt: [no-new-privileges:true]
-    read_only: true
-    tmpfs: [/tmp:size=16m]
-    volumes:
-      - caddy-data:/data
-      - caddy-config:/config
-    depends_on:
-      server: {condition: service_healthy}
-    healthcheck:
-      test: [CMD, wget, -q, -Y, "off", -O, /dev/null, http://127.0.0.1:8090/healthz]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-volumes:
-  server-data:
-  gateway-private:
-  gateway-peers:
-  caddy-data:
-  caddy-config:
+# Reference for an already provisioned encrypted installation. The host installer generates the live Compose file.
+{
+  "name": "bungee",
+  "services": {
+    "gateway": {
+      "restart": "unless-stopped",
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "read_only": true,
+      "ulimits": {
+        "core": {
+          "soft": 0,
+          "hard": 0
+        }
+      },
+      "image": "bungee-gateway:dev",
+      "cap_add": [
+        "NET_ADMIN",
+        "CHOWN",
+        "DAC_OVERRIDE"
+      ],
+      "tmpfs": [
+        "/run:mode=0700"
+      ],
+      "environment": {
+        "HTTP_PROXY": "",
+        "HTTPS_PROXY": "",
+        "ALL_PROXY": "",
+        "http_proxy": "",
+        "https_proxy": "",
+        "all_proxy": "",
+        "NO_PROXY": "*",
+        "no_proxy": "*",
+        "BUNGEE_DNS_UPSTREAM_IP": "${BUNGEE_DNS_UPSTREAM_IP:-}",
+        "BUNGEE_DNS_UPSTREAM_PORT": "${BUNGEE_DNS_UPSTREAM_PORT:-53}",
+        "BUNGEE_WG_PORT": "${BUNGEE_WG_PORT:?Choose UDP port}",
+        "BUNGEE_ADMIN_SUBNETS": "${BUNGEE_ADMIN_SUBNETS:?Set explicit administrator prefixes}",
+        "BUNGEE_UPDATE_CONTROL": "/control"
+      },
+      "ports": [
+        "${BUNGEE_ADMIN_ADDRESS:-127.0.0.1}:${BUNGEE_ADMIN_PORT:?Choose HTTPS port}:8443/tcp",
+        "${BUNGEE_WG_PORT:?Choose UDP port}:${BUNGEE_WG_PORT:?Choose UDP port}/udp"
+      ],
+      "sysctls": {
+        "net.ipv4.ip_forward": "0",
+        "net.ipv6.conf.all.forwarding": "0"
+      },
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "${BUNGEE_STORAGE_ROOT:?Provision encrypted storage first}/volumes/gateway-private",
+          "target": "/private",
+          "read_only": false,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${BUNGEE_STORAGE_ROOT:?Provision encrypted storage first}/volumes/gateway-peers",
+          "target": "/peers",
+          "read_only": false,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${BUNGEE_STORAGE_ROOT:?Provision encrypted storage first}/control",
+          "target": "/control",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        }
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "wg",
+          "show",
+          "wg0"
+        ],
+        "interval": "10s",
+        "timeout": "3s",
+        "retries": 5
+      },
+      "build": {
+        "context": "./deploy",
+        "dockerfile": "wireguard/Dockerfile"
+      }
+    },
+    "server": {
+      "restart": "unless-stopped",
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "read_only": true,
+      "ulimits": {
+        "core": {
+          "soft": 0,
+          "hard": 0
+        }
+      },
+      "image": "bungee-server:dev",
+      "network_mode": "service:gateway",
+      "depends_on": {
+        "gateway": {
+          "condition": "service_healthy"
+        }
+      },
+      "environment": {
+        "HTTP_PROXY": "",
+        "HTTPS_PROXY": "",
+        "ALL_PROXY": "",
+        "http_proxy": "",
+        "https_proxy": "",
+        "all_proxy": "",
+        "NO_PROXY": "*",
+        "no_proxy": "*",
+        "BUNGEE_DNS_UPSTREAM_IP": "${BUNGEE_DNS_UPSTREAM_IP:-}",
+        "BUNGEE_DNS_UPSTREAM_PORT": "${BUNGEE_DNS_UPSTREAM_PORT:-53}",
+        "BUNGEE_PUBLIC_ORIGIN": "${BUNGEE_PUBLIC_ORIGIN:?Set exact HTTPS origin}",
+        "BUNGEE_ADMIN_BIND": "0.0.0.0:8443",
+        "BUNGEE_ADMIN_SUBNETS": "${BUNGEE_ADMIN_SUBNETS:?Set explicit administrator prefixes}",
+        "BUNGEE_DEVICE_BIND": "10.77.0.1:8081",
+        "BUNGEE_WG_ENDPOINT": "${BUNGEE_WG_ENDPOINT:?Set reachable numeric IP and UDP port}",
+        "BUNGEE_TLS_CERT_FILE": "/tls/current/server.crt",
+        "BUNGEE_TLS_KEY_FILE": "/tls/current/server.key"
+      },
+      "tmpfs": [
+        "/tmp:size=16m"
+      ],
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "${BUNGEE_STORAGE_ROOT:?Provision encrypted storage first}/volumes/server-data",
+          "target": "/state",
+          "read_only": false,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${BUNGEE_STORAGE_ROOT:?Provision encrypted storage first}/volumes/gateway-peers",
+          "target": "/state/wireguard",
+          "read_only": false,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${BUNGEE_STORAGE_ROOT:?Provision encrypted storage first}/volumes/tls-data/issued",
+          "target": "/tls",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${BUNGEE_GEODATA_DIR:-./datasets}",
+          "target": "/datasets",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        }
+      ],
+      "build": "."
+    }
+  }
+}

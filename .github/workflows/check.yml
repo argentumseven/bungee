@@ -16,10 +16,13 @@ jobs:
           }
       - uses: dtolnay/rust-toolchain@1.90.0
         with: { components: "clippy,rustfmt" }
+      - run: python3 scripts/check-doc-images.py
       - run: npm ci && npm ci --prefix web && npm run build --prefix web
       - run: cargo fmt --manifest-path server/Cargo.toml -- --check
       - run: cargo clippy --locked --all-targets --manifest-path server/Cargo.toml -- -D warnings
       - run: cargo test --locked --manifest-path server/Cargo.toml && cargo build --locked --manifest-path server/Cargo.toml && npm test
+      - run: sudo apt-get update && sudo apt-get install --yes age openssl
+      - run: npm run test:tls
       - run: python3 -m unittest discover -s tests -p 'test_*.py' -v
       - run: npx playwright-core install --with-deps chromium
       - run: CHROME_BIN=$(find "$HOME/.cache/ms-playwright" -path '*/chrome-linux*/chrome' -type f | head -1) npm run test:browser
@@ -64,10 +67,10 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with: { node-version: "24" }
-      - run: docker build -t bungee-gateway:dev -f deploy/wireguard/Dockerfile deploy && docker build -t bungee-server:dev . && docker build -t bungee-web:dev -f deploy/web.Dockerfile deploy
+      - run: docker build -t bungee-gateway:dev -f deploy/wireguard/Dockerfile deploy && docker build -t bungee-server:dev .
       - run: npm run test:network
-      - run: npm run test:tls
-      - run: node scripts/check-admin-network.mjs
+      - run: node scripts/check-server-container.mjs
+      - run: sudo apt-get update && sudo apt-get install --yes age openssl
       - run: python3 scripts/check-updater.py
   publish-containers:
     if: github.repository == 'argentumseven/bungee' && startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
@@ -109,39 +112,27 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ghcr.io/argentumseven/bungee-gateway:${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
           provenance: mode=max
-      - uses: docker/build-push-action@v6
-        id: web
-        with:
-          context: deploy
-          file: deploy/web.Dockerfile
-          push: true
-          pull: true
-          platforms: linux/amd64,linux/arm64
-          tags: ghcr.io/argentumseven/bungee-web:${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
-          provenance: mode=max
       - name: Check the exact published amd64 candidates before channel promotion
         env:
           SERVER_DIGEST: ${{ steps.server.outputs.digest }}
           GATEWAY_DIGEST: ${{ steps.gateway.outputs.digest }}
-          WEB_DIGEST: ${{ steps.web.outputs.digest }}
         run: |
           set -euo pipefail
-          for service in server gateway web; do
+          for service in server gateway; do
             key="${service^^}_DIGEST"
             reference="ghcr.io/argentumseven/bungee-$service@${!key}"
             docker pull "$reference"
             docker tag "$reference" "bungee-$service:dev"
           done
           npm run test:network
-          npm run test:tls
-          node scripts/check-admin-network.mjs
+          node scripts/check-server-container.mjs
+          sudo apt-get update && sudo apt-get install --yes age openssl
           python3 scripts/check-updater.py
       - name: Assemble one immutable stack manifest
         env:
           RELEASE_VERSION: ${{ github.ref_name }}
           SERVER_DIGEST: ${{ steps.server.outputs.digest }}
           GATEWAY_DIGEST: ${{ steps.gateway.outputs.digest }}
-          WEB_DIGEST: ${{ steps.web.outputs.digest }}
         run: |
           python3 - <<'PY'
           import json, os, pathlib, re, time
@@ -150,7 +141,7 @@ jobs:
           assert version == release['version'], 'Tag and release manifest must match'
           assert re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-alpha\.[1-9][0-9]*)?', version)
           images = {}
-          for service in ('server', 'gateway', 'web'):
+          for service in ('server', 'gateway'):
               digest = os.environ[service.upper() + '_DIGEST']
               assert re.fullmatch(r'sha256:[a-f0-9]{64}', digest)
               images[service] = f'ghcr.io/argentumseven/bungee-{service}@{digest}'
@@ -218,17 +209,17 @@ jobs:
           cat > release-notes.md <<'NOTES'
           Install **bungee-debug.apk** on a consenting Android 12+ device. Verify the accompanying SHA-256 checksum. The build supports ARM64 and x86_64.
 
-          Bungee provides retained GPS/check-in/IP history, recurring time lookups and CSV; an encrypted offline GPS queue; household-approved recovery commands; local OpenStreetMap/GeoIP datasets; and an app-contained WireGuard connection that leaves Android's VPN slot free. Runtime map, analytics, public DNS and push-provider fallbacks are absent.
+          Bungee provides retained GPS/check-in/IP history, recurring time lookups and CSV; an encrypted offline GPS queue; household-approved recovery commands; local OpenStreetMap/GeoIP datasets; and an app-contained WireGuard connection that leaves Android's VPN slot free. Runtime map, analytics, DNS and push-provider fallbacks are absent; an optional explicit DNS upstream can be selected.
 
           Update the server before the APK. GPS erasure rotates a server generation so earlier queued/in-flight fixes cannot restore erased points. Consent withdrawal invalidates prepared work and cancels active captures/requests; bytes already delivered home cannot be recalled. Locate requires current consent, a server expiry check and an exact stored-fix acknowledgment.
 
-          Guided installation requires custom HTTPS/WireGuard ports and administrator source prefixes. The host updater stages immutable image bundles, closes admission, snapshots five volumes and restores a failed trial before reopening. Runtime containers do not receive the Docker socket.
+          Guided installation requires custom HTTPS/WireGuard ports and administrator source prefixes. The host updater stages immutable image bundles, closes admission, encrypts cold snapshots of all sensitive storage and restores a failed trial before reopening. Runtime containers do not receive the Docker socket.
 
           Device-owner enrollment and persistent MDM controls are disabled. The separate Bungee recovery launcher can stop controls offline without pairing keys or a server. Ordinary Android deactivation/uninstall remains available. No wipe, credential reset, firmware/bootloader action, kiosk mode or remote reboot is implemented.
 
           This APK uses a debug signer. CI signer changes can require uninstall/re-pair; use your own stable signing key for in-place updates. The existing helper scripts/build-owner-apk.sh configures signing only; it does not enable device ownership.
 
-          Physical GrapheneOS lifecycle checks remain unperformed. Independent publisher-signature verification and encrypted snapshot archives are not implemented; use encrypted persistent/snapshot storage. Certificate/device/APK signatures remain classical. Read README.md, docs/SECURITY.md, docs/INSTALL.md and docs/VALIDATION.md for feature scope, trust assumptions and test evidence.
+          Physical GrapheneOS lifecycle checks remain unperformed. Independent publisher-signature verification remains open. The host installer uses LUKS2 storage, host-key boot unlock and age-encrypted archives. Certificate/device/APK signatures remain classical. Read README.md, docs/SECURITY.md, docs/INSTALL.md and docs/VALIDATION.md for feature scope, trust assumptions and test evidence.
           NOTES
           release_flags=(--prerelease=false)
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then release_flags=(--prerelease); fi

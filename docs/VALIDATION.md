@@ -2,6 +2,22 @@
 
 This record covers automated checks and their limits. Physical GrapheneOS testing and an independent security audit are pending. The [device procedure](RECOVERY_CONTROLS.md#physical-device-checks) covers camera/boot acceptance; [SAFETY.md](SAFETY.md) covers local recovery and removal.
 
+## Server deployment changes after 1.1.4 (unreleased)
+
+The host/storage contract is now 2. Android and the phone protocol are unchanged. These checks cover direct Rust TLS, explicit DNS upstreams, LUKS2 provisioning/boot configuration and age-encrypted cold archives.
+
+| Check | Result |
+| --- | --- |
+| Rust | Formatting, all-target Clippy with warnings denied, locked build and 12 unit tests pass; obsolete proxy-trust unit coverage was replaced by direct-source integration checks |
+| API | 97 tests pass, no failures/skips; forged forwarding headers no longer create administrator identities |
+| Host/storage | 32 tests pass, including real tar/age encryption/restore, corruption/wrong-key refusal before mutation, certificate renewal retaining its CA, key/mount rejection and helper termination when an updater dies |
+| TLS | Trusted direct Rust TLS 1.3 X25519MLKEM768 succeeds; classical-only, TLS 1.2, untrusted CA and unlisted/forged source tests pass |
+| Web | TypeScript/Vite production build and all 18 browser tests pass |
+| Containers | Both images build; built Rust image serves direct trusted hybrid HTTPS with UID 10001, zero capabilities, no-new-privileges and a read-only root. Gateway checks retain outbound deny, Docker-DNS blocking and scoped UDP/TCP resolver rules |
+| Documentation | Seven embedded image references resolve, including HTML and the absolute Security-tab diagram; all 15 documentation/brand PNG files decode. Workflow actionlint and whitespace checks pass |
+
+This cloud host cannot perform a real LUKS mount, systemd reboot/power-loss test or kernel WireGuard deployment. Storage mount/type rejection is tested with injected observations; archive encryption/restoration uses real processes. The updater check now reports this distinction explicitly rather than claiming a full container/boot acceptance test. Complete the console reboot and migration/recovery procedure on the target host. Android/native checks were not repeated for server-only changes. No release tag or production deployment is created by these source changes.
+
 ## Version 1.1.4
 
 This version closes the ownership/removal and pairing-stop gaps in [REMOVAL_AUDIT.md](REMOVAL_AUDIT.md). Android permission declarations, native transport code and server protocols are unchanged. The app checks device/profile ownership and failed role queries, confirms asynchronous administration removal, cancels control requests during local stop, closes pairing-only peers and expires stale camera-start approvals.

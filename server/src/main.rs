@@ -10,6 +10,7 @@ mod recurrence;
 mod release;
 mod security;
 mod store;
+mod tls;
 
 use axum::{
     Router, middleware,
@@ -29,7 +30,7 @@ pub struct App {
     origin: String,
     secure_cookie: bool,
     admin_hash: String,
-    trust_admin_proxy: bool,
+    admin_networks: Vec<ipnet::IpNet>,
     limiter: Arc<Mutex<security::RateLimits>>,
     state_dir: PathBuf,
     wg_endpoint: Option<String>,
@@ -43,6 +44,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", geography::Geography::load()?.status);
         return Ok(());
     }
+    #[cfg(target_os = "linux")]
+    // SAFETY: PR_SET_DUMPABLE takes a scalar flag and no pointers.
+    if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
     tracing_subscriber::fmt()
         .with_env_filter("bungee_server=info")
         .init();
@@ -55,8 +61,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         security::device_bind(&env::var("BUNGEE_DEVICE_BIND").unwrap_or("127.0.0.1:8081".into()))?;
     let admin_bind =
         security::admin_bind(&env::var("BUNGEE_ADMIN_BIND").unwrap_or("127.0.0.1:8080".into()))?;
+    let admin_networks = security::admin_networks(secure_cookie)?;
+    if !secure_cookie && !admin_bind.ip().is_loopback() {
+        return Err("Plain HTTP is limited to loopback development".into());
+    }
+    if env::var("BUNGEE_TRUST_LOOPBACK_PROXY").as_deref() == Ok("true") {
+        return Err("Proxy trust is no longer supported; connect directly to Rust HTTPS".into());
+    }
     if !secure_cookie && !origin.starts_with("http://127.0.0.1:") {
-        return Err("Use an HTTPS BUNGEE_PUBLIC_ORIGIN behind the local TLS gateway".into());
+        return Err("Use an HTTPS BUNGEE_PUBLIC_ORIGIN for direct Rust TLS".into());
     }
     let password_file = env::var_os("BUNGEE_ADMIN_PASSWORD_FILE")
         .map(PathBuf::from)
@@ -65,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         security::private_write(&password_file, security::token().as_bytes())?;
         tracing::info!(path = %password_file.display(), "Generated admin password file; read it locally. Password is never logged.");
     }
-    let password = fs::read_to_string(&password_file)?;
+    let password = zeroize::Zeroizing::new(fs::read_to_string(&password_file)?);
     if password.trim().len() < 16 {
         return Err("Admin password must be at least 16 characters".into());
     }
@@ -92,22 +105,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         secure_cookie,
         admin_hash: security::password_hash(password.trim())
             .map_err(|_| "Password hashing failed")?,
-        trust_admin_proxy: match env::var("BUNGEE_TRUST_LOOPBACK_PROXY").as_deref() {
-            Ok("true") if admin_bind.ip().is_loopback() => true,
-            Err(env::VarError::NotPresent) | Ok("false") => false,
-            _ => {
-                return Err(
-                    "BUNGEE_TRUST_LOOPBACK_PROXY requires true/false and a loopback admin bind"
-                        .into(),
-                );
-            }
-        },
+        admin_networks,
         limiter: Arc::new(Mutex::new(security::RateLimits::default())),
         state_dir: dir,
         wg_endpoint,
         dns,
         geography: Arc::new(geography::Geography::load()?),
     };
+    drop(password);
     // Expire sessions across restarts, including snapshots of the development machine.
     app.db.lock().unwrap().execute("DELETE FROM sessions", [])?;
     let housekeeping = app.clone();
@@ -179,21 +184,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(axum::extract::DefaultBodyLimit::max(32 * 1024))
         .with_state(app.clone());
     dns::start(app).await?;
-    let admin_listener = tokio::net::TcpListener::bind(admin_bind).await?;
+
     let device_listener = tokio::net::TcpListener::bind(device_bind).await?;
     tracing::info!(%admin_bind, %device_bind, "Bungee listening; admin and device APIs are separate");
-    tokio::try_join!(
-        axum::serve(
-            admin_listener,
-            admin.into_make_service_with_connect_info::<SocketAddr>()
-        )
-        .with_graceful_shutdown(shutdown()),
+    let admin_server = async {
+        if secure_cookie {
+            let config = tls::load().await?;
+            let handle = axum_server::Handle::new();
+            let shutdown_handle = handle.clone();
+            tokio::spawn(async move {
+                shutdown().await;
+                shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
+            });
+            axum_server::bind_rustls(admin_bind, config)
+                .handle(handle)
+                .serve(admin.into_make_service_with_connect_info::<SocketAddr>())
+                .await?;
+        } else {
+            let listener = tokio::net::TcpListener::bind(admin_bind).await?;
+            axum::serve(
+                listener,
+                admin.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(shutdown())
+            .await?;
+        }
+        Ok::<(), Box<dyn std::error::Error>>(())
+    };
+    let device_server = async {
         axum::serve(
             device_listener,
-            device.into_make_service_with_connect_info::<SocketAddr>()
+            device.into_make_service_with_connect_info::<SocketAddr>(),
         )
-        .with_graceful_shutdown(shutdown()),
-    )?;
+        .with_graceful_shutdown(shutdown())
+        .await?;
+        Ok::<(), Box<dyn std::error::Error>>(())
+    };
+    tokio::try_join!(admin_server, device_server)?;
     Ok(())
 }
 

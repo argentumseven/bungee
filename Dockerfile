@@ -7,7 +7,7 @@ COPY release.json /build/release.json
 RUN npm run build
 
 FROM rust:1.90-slim-bookworm AS server
-RUN apt-get update && apt-get install --yes --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install --yes --no-install-recommends gcc libc6-dev cmake && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY server/Cargo.toml server/Cargo.lock ./server/
 COPY release.json ./
@@ -23,6 +23,6 @@ COPY --from=web /build/web/dist /app/web
 USER 10001:10001
 WORKDIR /app
 ENV BUNGEE_STATE_DIR=/state BUNGEE_WEB_DIR=/app/web
-EXPOSE 8080 8081
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s CMD curl --fail --silent http://127.0.0.1:8080/healthz || exit 1
+EXPOSE 8443 8081
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s CMD curl --fail --silent http://10.77.0.1:8081/healthz || exit 1
 ENTRYPOINT ["/usr/local/bin/bungee-server"]
