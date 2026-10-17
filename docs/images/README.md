@@ -1,10 +1,13 @@
 # Security pictures
 
-These are drawn raster PNG pictures, with fixed spacing and large labels. There are no Mermaid blocks or automatic layout scripts.
+These are drawn raster PNG pictures with fixed geometry and technical labels. No live Mermaid renderer or automatic box layout is required.
 
-- `security-architecture.png` shows direct Rust HTTPS, the separate WireGuard device API, optional DNS and other phone traffic.
-- `storage-lifecycle.png` shows encrypted live data and cold encrypted backups with separate host keys.
+- `security-architecture.png` separates the logical WireGuard L3 overlay from its routed UDP underlay, including phone userspace addressing, host Docker publication, shared-namespace `eth0`/`wg0`, encapsulation and local INPUT delivery.
+- `backend-topology.png` shows the shared network namespace, distinct gateway/server containers, kernel WireGuard, one Rust process, its three socket services, SQLite file I/O and the peer-configuration control plane.
+- `storage-lifecycle.png` shows host-key unlock, cold encrypted backups and authenticated restore with separate host keys.
 
-The pictures describe the deployment changes in [PR #1](https://github.com/argentumseven/bungee/pull/1). They are published on the default branch so the repository Security tab can display them before the implementation is merged. The Security document labels this deployment status explicitly.
+The [topology reference](../NETWORK-TOPOLOGY.md) records the address/port notation, forwarding scope, connection and mount tables, omissions and pinned implementation sources. It distinguishes optional legacy DNS from the current personal app's fixed HTTP transport.
 
-Security-tab image URLs include the full repository path and an immutable commit containing the PNG, rather than relying on relative paths resolved from the Security tab. Run `python3 scripts/check-doc-images.py` to check embedded assets and pinned content.
+The Security document links each PNG to the exact commit containing it. Commit new artwork first, then update its immutable image URL. Keep the full repository path: relative image paths in the repository Security tab previously broke. `python3 scripts/check-doc-images.py` checks referenced assets and pinned content when the commit is available locally.
+
+The default branch also publishes these pictures. Its Security document explicitly labels the direct-Rust deployment as pending PR #1 while release 1.1.4 remains on that branch. The implementation PR documents the new deployment's controls. The drawings do not imply its code is already merged or deployed.

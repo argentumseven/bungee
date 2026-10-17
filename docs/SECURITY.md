@@ -14,11 +14,25 @@ The [validation record](VALIDATION.md) identifies tested behavior and outstandin
 
 ### Network paths
 
-[![Bungee network paths: direct Rust HTTPS, a separate WireGuard device API, optional DNS, and the existing route for other phone traffic.](https://github.com/argentumseven/bungee/blob/d49a19e19d50e039eb82fc4587270a5e3de59003/docs/images/security-architecture.png?raw=true)](https://github.com/argentumseven/bungee/blob/d49a19e19d50e039eb82fc4587270a5e3de59003/docs/images/security-architecture.png)
+The first drawing separates logical L3 reachability from the UDP transport carrying it. Its two panels show the same endpoints. `P` is one phone's `10.77.0.n` address, `E` is the reachable numeric WireGuard endpoint IP, and `W` is the configured UDP port. The green dashed path is the inner overlay, not a second physical link.
 
-[Open the full-size network picture](https://github.com/argentumseven/bungee/blob/d49a19e19d50e039eb82fc4587270a5e3de59003/docs/images/security-architecture.png).
+[![WireGuard overlay and UDP underlay: phone userspace stack, inner IPv4/TCP addressing, host Docker publication, shared namespace eth0, kernel WireGuard decapsulation, wg0 and local INPUT to Rust.](https://github.com/argentumseven/bungee/blob/f6bdb8e3e28ae92fb569d2559bd794a976c65b17/docs/images/security-architecture.png?raw=true)](https://github.com/argentumseven/bungee/blob/f6bdb8e3e28ae92fb569d2559bd794a976c65b17/docs/images/security-architecture.png)
 
-Administrator HTTPS terminates directly in Rust, with source-prefix restrictions at the gateway and Rust listener. The WireGuard device API remains separate. Optional DNS uses one explicitly configured resolver over UDP and TCP; general phone-traffic forwarding remains disabled. New enrollment cannot enable managed DNS. A private home resolver requires a separate authenticated host-to-home route.
+[Open the full-size overlay and underlay drawing](https://github.com/argentumseven/bungee/blob/f6bdb8e3e28ae92fb569d2559bd794a976c65b17/docs/images/security-architecture.png).
+
+The phone's address belongs to its app-contained userspace TCP/IP stack. The outer UDP flow enters the host's Docker port publication, crosses the bridge/veth into `eth0`, and reaches kernel WireGuard. After decapsulation, `wg0` delivers the inner TCP connection locally to `10.77.0.1:8081` through INPUT. It does not traverse the namespace's FORWARD chain or another container network. The phone peer has `AllowedIPs=10.77.0.1/32`; the server peer has `AllowedIPs=P/32`.
+
+### Backend placement
+
+[![Backend placement: two containers in one network namespace, one Rust process with separate HTTPS, device HTTP and optional DNS sockets, local SQLite file I/O and shared peer configuration.](https://github.com/argentumseven/bungee/blob/f6bdb8e3e28ae92fb569d2559bd794a976c65b17/docs/images/backend-topology.png?raw=true)](https://github.com/argentumseven/bungee/blob/f6bdb8e3e28ae92fb569d2559bd794a976c65b17/docs/images/backend-topology.png)
+
+[Open the full-size backend drawing](https://github.com/argentumseven/bungee/blob/f6bdb8e3e28ae92fb569d2559bd794a976c65b17/docs/images/backend-topology.png).
+
+The gateway and server are separate containers sharing one network namespace. Its WireGuard device is a kernel network object; the gateway manager configures it. One Rust process serves administrator HTTPS, the device HTTP API and optional DNS, with shared application state and local SQLite/WAL file I/O. Dotted black lines show peer-configuration files and `wg syncconf`, not network hops. Administrator TLS terminates in Rust after host port publication and the namespace's source-prefix ACL.
+
+Optional DNS redirects eligible legacy peers' UDP/TCP port 53 locally to Rust port 5353. Rust opens a new connection to the configured resolver; it does not forward the original phone packet. New personal enrollment does not enable this path. A private home resolver requires a separately provisioned host-to-home route. Namespace forwarding stays disabled; host Docker forwarding/NAT is a separate scope.
+
+Read the [address/port tables, packet paths, mount boundaries and pinned implementation references](NETWORK-TOPOLOGY.md) for the drawings' exact scope, including Docker source-address variations and private resolver routing.
 
 ### Storage, keys and backups
 
