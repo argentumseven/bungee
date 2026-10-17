@@ -42,6 +42,7 @@ import {
   type NetworkObservation,
 } from "./PrivateMap";
 import { DeviceCare } from "./DeviceCare";
+import { AppearanceControl, useAppearance } from "./Appearance";
 
 type Location = {
   latitude: number;
@@ -110,6 +111,7 @@ function Brand() {
   );
 }
 function App() {
+  const appearance = useAppearance();
   const [auth, setAuth] = useState<boolean | null>(null),
     [password, setPassword] = useState(""),
     [error, setError] = useState(""),
@@ -316,6 +318,7 @@ function App() {
           </div>
         </section>
         <section className="login-panel">
+          <div className="login-appearance"><AppearanceControl {...appearance} /></div>
           <div className="login-form">
             <div className="icon-tile">
               <Fingerprint size={30} />
@@ -439,6 +442,7 @@ function App() {
             <strong>{page}</strong>
           </div>
           <div className="top-status">
+            <AppearanceControl {...appearance} />
             <i className="status-dot" />
             Self-hosted<span className="avatar">H</span>
           </div>
@@ -1518,6 +1522,7 @@ function HistoryView({ device }: { device: Device }) {
                   cx={cx}
                   cy={cy}
                   r={chosen?.observed_at === p.observed_at ? 6 : 3}
+                  className={chosen?.observed_at === p.observed_at ? "selected" : undefined}
                   fill={
                     chosen?.observed_at === p.observed_at
                       ? "#47316d"

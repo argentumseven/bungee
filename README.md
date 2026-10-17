@@ -2,7 +2,7 @@
 
 **A private way home for your household’s phones.** A self-hosted, open-source device finder for modern Android and GrapheneOS.
 
-**Version 1.0.0.** Bungee combines an Android app, an app-contained WireGuard connection, a Rust server and a web dashboard. GPS, connection-IP and check-in history stay on the operator's server until explicitly erased. The app remains removable through ordinary Android controls.
+**Version 1.0.1.** Bungee combines an Android app, an app-contained WireGuard connection, a Rust server and a web dashboard. GPS, connection-IP and check-in history stay on the operator's server until explicitly erased. The app remains removable through ordinary Android controls.
 
 See the [feature checklist](#feature-checklist), [security design](docs/SECURITY.md), [recovery contract](docs/SAFETY.md) and [validation record](docs/VALIDATION.md) for implemented behavior, test evidence and remaining verification work.
 
@@ -10,7 +10,7 @@ See the [feature checklist](#feature-checklist), [security design](docs/SECURITY
 
 ## Android APK
 
-Build version **1.0.0** from this checkout or use its matching **bungee-android-debug** artifact in [GitHub Actions](https://github.com/argentumseven/bungee/actions). Published tags also provide **bungee-debug.apk** and its SHA-256 checksum in [GitHub Releases](https://github.com/argentumseven/bungee/releases). The host installer, server, dashboard and APK share the version in `release.json`. Earlier APKs with device-owner controls do not meet the current recovery contract.
+Build version **1.0.1** from this checkout or use its matching **bungee-android-debug** artifact in [GitHub Actions](https://github.com/argentumseven/bungee/actions). Published tags also provide **bungee-debug.apk** and its SHA-256 checksum in [GitHub Releases](https://github.com/argentumseven/bungee/releases). The host installer, server, dashboard and APK share the version in `release.json`. Earlier APKs with device-owner controls do not meet the current recovery contract.
 
 The CI APK is a signed **debug build** for Android 12+. CI generates development signing keys; a later test build may require uninstalling the previous one and pairing again. **Do not enroll Bungee as device owner.** Use a stable signer for in-place personal-app updates; see [stable signing](docs/MANAGEMENT.md#stable-signing-and-updates). APK binaries and private signing keys are not committed into the source tree.
 
@@ -32,6 +32,7 @@ The source implements the features listed below. The validation record distingui
 | Local offline recovery | Separate Bungee recovery launcher; independent of pairing/server/Compose/native transport; authenticated local stop; separate persisted stop flag; independent cleanup attempts with errors surfaced; direct links to Android app/security settings; no automatic resume after a local stop |
 | Phone controls | QR scan or pasted invitation; visible sharing notification; durable stop and explicit local-recovery/manual restart; separate GPS consent and commands off until explicit local approval; checked consent/app-lock persistence with visible failures; optional restart after first unlock; explicit optional background-location grant for automatic GPS restart; paused-GPS state and manual resume; authenticated local unpair; notification/local sound stop; authenticated message dismissal |
 | App privacy | Biometric/device-credential app lock; screen capture and OS backup disabled; Keystore signing key; AES-GCM encrypted local secrets, policy state, command receipts and GPS queue; no Play services, analytics, crash-report provider or push account |
+| Appearance | Dashboard and Android app support System, Light and Dark themes; System follows OS changes, manual choices stay on that browser/phone; dark dialogs, history, map controls and independent Android recovery; no provider requests for themes |
 | VPN coexistence | Default **app-contained WireGuard + userspace TCP** carries only Bungee's fixed home API, creates no OS routes and leaves Android's VPN slot free. Another VPN may carry/filter its outer UDP traffic. No root required |
 | DNS compatibility | New managed DNS enrollment is disabled; server legacy forwarding and saved rollup read/erase remain for earlier-version compatibility and tests. Current app changes no system DNS or VPN settings |
 | DNS overview | Per-phone, time-ranged top site groups; bundled public-suffix grouping; random subdomains and A/AAAA/HTTPS/retries folded into 10-second activity windows; known OS probes combined; query counts/types/results/last seen; five-minute rollups; refresh and separate erase; no retained raw subdomains, answer IPs or payloads |
@@ -52,7 +53,7 @@ The source implements the features listed below. The validation record distingui
 
 **Coverage limits:** Bungee uses app-contained WireGuard for its own API and leaves Android's VPN slot free. It does not redirect other apps' DNS or enforce restrictions. No claim of universal DNS coverage is made. Post-quantum PSK/hybrid key exchange does not make classical certificate/device/APK signatures quantum-proof. Physical GrapheneOS validation is still required.
 
-There are no live phones, sample coordinates or hard-coded credentials in the normal dashboard. Screenshots use isolated synthetic fixtures. See [management and DNS setup](docs/MANAGEMENT.md).
+There are no live phones, sample coordinates or hard-coded credentials in the normal dashboard. Screenshots show dark mode using isolated synthetic fixtures. The dashboard appearance selector is available before sign-in and in the top bar; the Android choice is under **Appearance**. Raster basemaps keep the colors of the locally imported dataset. See [management and DNS setup](docs/MANAGEMENT.md).
 
 ## Start development
 
@@ -139,4 +140,4 @@ Household commands are **off by default**, including after upgrading from the ea
 
 Expired or lost never-enrolled invitations can be reissued from Settings using the same phone public key. Reissue invalidates earlier tokens and rotates the tunnel PSK. Paired signing identities are never rebound. CSV exports stream to your browser Downloads panel, where they can be cancelled; two concurrent exports and a five-minute limit bound server work. Large interval exports can need temporary disk space. Downloads are plaintext sensitive records; keep them on encrypted storage.
 
-Version 1.0.0 retains the behavior verified for alpha.11. Physical GrapheneOS lifecycle testing has not been completed; the updater does not independently verify publisher signatures; its snapshot archives are plaintext and require encrypted storage. See [validation](docs/VALIDATION.md), [update trust](docs/INSTALL.md) and [backup confidentiality](docs/SECURITY.md) for the precise scope.
+Version 1.0.1 adds appearance controls while retaining the transport and recovery behavior verified for alpha.11. Physical GrapheneOS lifecycle testing has not been completed; the updater does not independently verify publisher signatures; its snapshot archives are plaintext and require encrypted storage. See [validation](docs/VALIDATION.md), [update trust](docs/INSTALL.md) and [backup confidentiality](docs/SECURITY.md) for the precise scope.

@@ -1,16 +1,16 @@
 # Validation of installation, updates and reversibility
 
-This record separates automated results, fixture scope and physical-device checks. The exact supported-mode contract and excluded actions are in [SAFETY.md](SAFETY.md). Version 1.0.0 preserves the alpha.11 runtime behavior; version metadata and documentation have been updated.
+This record separates automated results, fixture scope and physical-device checks. The exact supported-mode contract and excluded actions are in [SAFETY.md](SAFETY.md). Version 1.0.1 adds appearance controls while preserving the alpha.11 transport and recovery behavior.
 
 | Check | Evidence / result |
 | --- | --- |
 | Rust | fmt, Clippy with warnings denied, locked build and 13 unit tests passed; Clippy also covers test targets |
 | API/privacy/legacy-DNS | 92 reported tests passed, zero failures/skips: persistent fields rejected even with owner consent; old policy projected to permitted recovery; reboot refused regardless of capability/password; queued legacy reboot withheld; signed requests/replay/history/erasure and legacy resolver isolation still work |
-| Web | TypeScript/Vite build and 13 reported browser tests passed, zero failures/skips: no persistent controls/reboot button; permitted recovery saves; time-range/recurrence/CSV/history/session/mobile flows; no runtime errors or third-party requests |
+| Web | TypeScript/Vite build and 16 reported browser tests passed, zero failures/skips: no persistent controls/reboot button; permitted recovery saves; time-range/recurrence/CSV/history/session/mobile flows; no runtime errors or third-party requests |
 | Android debug | APK builds and lint passes with nonfatal warnings. 38 JUnit tests pass: backlog behavior, forbidden policy rejection, cleanup continuation/order when a policy action or local-stop persistence fails, stop/restart-consent transitions including stale opt-in invalidation; jitter/backoff/batch bounds; conservative elapsed-time deadlines; bounded persistent receipt reservations/settlement; future-fix filtering |
 | Android optimized release | R8-minified unsigned release compiles and release lint passes. No production signing key is configured; this artifact is not a published installable production release |
 | APK manifest | Merged APK inspected: separate recovery launcher present; both owner-provisioning activities disabled; unused library VpnService absent. Ordinary administration requests force-lock/watch-login only |
-| APK integrity | Debug APK signature and ZIP 16-KiB alignment checked. Rebuilt ARM64/x86_64 Go ELF PT_LOAD alignment checked at 16 KiB; package version 1.0.0/code 12; optional background-location permission present |
+| APK integrity | Debug APK signature and ZIP 16-KiB alignment checked. Rebuilt ARM64/x86_64 Go ELF PT_LOAD alignment checked at 16 KiB; package version 1.0.1/code 13; optional background-location permission present |
 | Native WireGuard | Alpha.11 native code/AAR rebuilt: 2 real loopback peer/protocol/boundary tests with 3 additional reservation/deadline subcases pass under Go race detection, including wrong-PSK failure, cancellation before/during send, a short deadline and peer stop. This does not prove Android routing, background behavior or coexistence |
 | Container boundary | All three current images build. Actual isolated Docker network test passes: default new egress and Docker DNS blocked, only a selected legacy private resolver IP/port allowed, trusted hybrid HTTPS reaches non-root/zero-capability/read-only Rust |
 | Caddy TLS | Unchanged pinned issuer/group configuration previously passed local-CA/hybrid TLS checks and rejection of classical/TLS1.2. Current container-boundary test also establishes trusted hybrid HTTPS |
@@ -73,3 +73,12 @@ Alpha.11 verification includes a clean debug/release build and a final increment
 Rebuilt and checked the coordinated host/server/dashboard/APK version: Rust fmt and Clippy for all targets, 13 Rust tests, 92 API tests, 24 host tests, 38 Android JVM tests and 13 browser checks passed. Web, Android debug/optimized release and all three container images build; debug/release lint passes. The signed APK reports version 1.0.0/code 12 and passes signature/16-KiB ZIP alignment checks. The final non-root, read-only server image reports 1.0.0 and serves the matching dashboard. Screenshots were regenerated from the browser fixtures.
 
 The TLS, network/source-ACL and transactional rollback evidence above was collected for alpha.11; the version/documentation update retains those implementations. Physical-device and remaining security work are listed separately above. This source update creates no stable release tag or update-channel promotion.
+
+
+## Version 1.0.1 appearance verification
+
+The dashboard and Android app now offer System, Light and Dark. The browser suite passes 16 reported checks, including live OS changes, persisted overrides, cross-tab synchronization, invalid/unavailable browser storage and at least 4.5:1 contrast on the tested sign-in/dashboard text and controls in both palettes. All nine dashboard screenshots were regenerated in dark mode using the isolated synthetic fixtures. They are browser screenshots, not Android runtime captures. Locally imported raster tiles retain their original colors; map controls, legends, tooltips and history charts follow the theme.
+
+TypeScript/Vite and the locked Rust build pass. Android debug and optimized release builds, both lint checks and all 38 existing JVM tests pass; lint reports no errors and retains nonfatal warnings. The signed debug APK reports 1.0.1/code 13 and passes signature and 16-KiB ZIP alignment checks. All 24 host tests pass. No native transport, API, ownership, permission or recovery policy changed. Android recovery reads only the separate cosmetic preference and platform resources before constructing its existing offline controls. Native Android appearance, OS transitions and accessibility still need physical-device verification.
+
+Earlier container/network/TLS/rollback evidence above remains historical; those checks were not repeated for this appearance update. No stable release tag or update-channel promotion is created by this source change.

@@ -1,6 +1,24 @@
 <resources>
-    <style name="Theme.Bungee" parent="android:style/Theme.Material.Light.NoActionBar">
-        <item name="android:fontFamily">sans</item><item name="android:windowLightStatusBar">true</item><item name="android:statusBarColor">#FAF9FD</item><item name="android:navigationBarColor">#FAF9FD</item><item name="android:windowActionModeOverlay">true</item>
+    <style name="Theme.Bungee" parent="Theme.Bungee.Light" />
+    <style name="Theme.Bungee.Light" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:statusBarColor">#F7F8FA</item>
+        <item name="android:navigationBarColor">#F7F8FA</item>
+        <item name="android:windowBackground">#F7F8FA</item>
+        <item name="android:colorAccent">#6550C5</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+    <style name="Theme.Bungee.Dark" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:statusBarColor">#10141E</item>
+        <item name="android:navigationBarColor">#10141E</item>
+        <item name="android:windowBackground">#10141E</item>
+        <item name="android:colorAccent">#BAA7FF</item>
+        <item name="android:windowActionModeOverlay">true</item>
     </style>
     <string name="admin_description">Allow your household server to lock this phone. No remote wipe or password changes. You can revoke access in Android settings.</string>
 </resources>

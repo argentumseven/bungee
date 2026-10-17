@@ -24,7 +24,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -35,13 +34,10 @@ import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.*
 import org.json.JSONObject
 
-private val Purple = Color(0xFF6A57D5)
-private val Muted = Color(0xFF9294A4)
-private val Paper = Color(0xFFFAF9FD)
-
 class MainActivity : FragmentActivity() {
     private lateinit var identity: Identity
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var appearance by mutableStateOf(AppearanceMode.SYSTEM)
     private var locked by mutableStateOf(false)
     private var error by mutableStateOf<String?>(null)
     private var busy by mutableStateOf(false)
@@ -62,6 +58,8 @@ class MainActivity : FragmentActivity() {
     }
     private val scan = registerForActivityResult(ScanContract()) { result -> result.contents?.let { pairingText = it; showPairing = true } }
     override fun onCreate(savedInstanceState: Bundle?) {
+        AppearancePreference.applyTo(this)
+        appearance = AppearancePreference.read(this)
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         if (LocalSafety.isStopped(this) || ManagementAgent.isOwner(this)) {
@@ -71,8 +69,8 @@ class MainActivity : FragmentActivity() {
             startActivity(Intent(this, LocalRecoveryActivity::class.java)); finish(); return
         }
         enrolled = identity.enrolled; locked = identity.appLock
-        setContent { MaterialTheme(colorScheme = lightColorScheme(primary = Purple, background = Paper, surface = Color.White, onSurface = Color(0xFF30303C))) {
-            Surface(Modifier.fillMaxSize(), color = Paper) { if (locked) LockScreen() else HomeScreen() }
+        setContent { BungeeTheme(appearance, window) {
+            Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) { if (locked) LockScreen() else HomeScreen() }
         } }
     }
     override fun onStop() { super.onStop(); if (::identity.isInitialized && identity.appLock) locked = true }
@@ -131,12 +129,12 @@ class MainActivity : FragmentActivity() {
     }
     @Composable private fun LockScreen() {
         Column(Modifier.fillMaxSize().padding(38.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(Icons.Outlined.Fingerprint, null, Modifier.size(65.dp), tint = Purple)
+            Icon(Icons.Outlined.Fingerprint, null, Modifier.size(65.dp), tint = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.height(26.dp)); Text("A private place.", fontSize = 29.sp, fontWeight = FontWeight.SemiBold)
-            Text("Unlock to see your household connection.", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(vertical = 13.dp))
+            Text("Unlock to see your household connection.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(vertical = 13.dp))
             Button(onClick = { unlock() }, modifier = Modifier.fillMaxWidth().padding(top = 20.dp), shape = RoundedCornerShape(13.dp)) { Text("Unlock Bungee", Modifier.padding(7.dp)) }
             TextButton(onClick = { startActivity(Intent(this@MainActivity, LocalRecoveryActivity::class.java)) }) { Text("Local recovery · works offline") }
-            error?.let { Text(it, color = Color(0xFFB97777), fontSize = 12.sp, modifier = Modifier.padding(top = 15.dp)) }
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(top = 15.dp)) }
         }
     }
     @Composable private fun HomeScreen() {
@@ -150,20 +148,20 @@ class MainActivity : FragmentActivity() {
         fun saveRestart(enabled: Boolean) { runCatching { LocalSafety.setRestartAllowed(this@MainActivity, enabled) }.onSuccess { resume = enabled }.onFailure { error = "Restart preference could not be saved." } }
         Column(Modifier.fillMaxSize().systemBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 25.dp)) {
             Row(Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 35.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(36.dp).background(Purple, RoundedCornerShape(11.dp)), contentAlignment = Alignment.Center) { Icon(Icons.Outlined.Sensors, null, tint = Color.White, modifier = Modifier.size(23.dp)) }
+                Box(Modifier.size(36.dp).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(11.dp)), contentAlignment = Alignment.Center) { Icon(Icons.Outlined.Sensors, null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(23.dp)) }
                 Text(" bungee.", fontSize = 27.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.weight(1f)); Icon(Icons.Outlined.Shield, "Self hosted", tint = Muted, modifier = Modifier.size(22.dp))
+                Spacer(Modifier.weight(1f)); Icon(Icons.Outlined.Shield, "Self hosted", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
             }
-            Text("CONNECTED, ON YOUR TERMS", letterSpacing = 2.sp, fontSize = 9.sp, color = Color(0xFF9D92B0), fontWeight = FontWeight.SemiBold)
+            Text("CONNECTED, ON YOUR TERMS", letterSpacing = 2.sp, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
             Text(if (enrolled) "A little closer to home." else "Give your phone\na private way home.", fontSize = 30.sp, lineHeight = 37.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 12.dp))
-            Text(if (enrolled) "Your household. Your server. Your peace of mind." else "Find it. Ring it. Keep it close.\nYour data stays with the people you trust.", fontSize = 12.sp, lineHeight = 21.sp, color = Muted, modifier = Modifier.padding(top = 13.dp, bottom = 26.dp))
+            Text(if (enrolled) "Your household. Your server. Your peace of mind." else "Find it. Ring it. Keep it close.\nYour data stays with the people you trust.", fontSize = 12.sp, lineHeight = 21.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 13.dp, bottom = 26.dp))
             if (!enrolled) {
-                Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(20.dp)) {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), shape = RoundedCornerShape(20.dp)) {
                     Column(Modifier.padding(22.dp)) {
-                        Icon(Icons.Outlined.Key, null, tint = Purple, modifier = Modifier.size(27.dp))
+                        Icon(Icons.Outlined.Key, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(27.dp))
                         Text("A key that belongs to you.", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp))
-                        Text("Copy this public key into “Add a device” on your home server. Your private keys stay on this phone.", fontSize = 12.sp, lineHeight = 20.sp, color = Muted, modifier = Modifier.padding(top = 9.dp, bottom = 17.dp))
-                        Text(identity.wgPublic, fontSize = 11.sp, color = Purple, modifier = Modifier.fillMaxWidth().background(Color(0xFFF4F1FB), RoundedCornerShape(10.dp)).clickable {
+                        Text("Copy this public key into “Add a device” on your home server. Your private keys stay on this phone.", fontSize = 12.sp, lineHeight = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 9.dp, bottom = 17.dp))
+                        Text(identity.wgPublic, fontSize = 11.sp, color = MaterialTheme.colorScheme.primary, modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(10.dp)).clickable {
                             getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Bungee WireGuard public key", identity.wgPublic))
                             android.widget.Toast.makeText(this@MainActivity, "Public key copied", android.widget.Toast.LENGTH_SHORT).show()
                         }.padding(13.dp))
@@ -175,36 +173,36 @@ class MainActivity : FragmentActivity() {
                     }
                 }
             } else {
-                Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(20.dp)) {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), shape = RoundedCornerShape(20.dp)) {
                     Column(Modifier.padding(22.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(Modifier.size(45.dp).background(Color(0xFFECF5EF), RoundedCornerShape(13.dp)), contentAlignment = Alignment.Center) { Icon(if (status.connected) Icons.Outlined.Wifi else Icons.Outlined.Pause, null, tint = Color(0xFF6E9E80)) }
-                            Column(Modifier.padding(start = 13.dp)) { Text(if (status.connected) "Home is within reach." else if (status.running) "Finding the way home…" else "Sharing is stopped.", fontSize = 14.sp, fontWeight = FontWeight.SemiBold); Text(status.text, fontSize = 10.sp, color = Muted, modifier = Modifier.padding(top = 5.dp)) }
+                            Box(Modifier.size(45.dp).background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(13.dp)), contentAlignment = Alignment.Center) { Icon(if (status.connected) Icons.Outlined.Wifi else Icons.Outlined.Pause, null, tint = MaterialTheme.colorScheme.secondary) }
+                            Column(Modifier.padding(start = 13.dp)) { Text(if (status.connected) "Home is within reach." else if (status.running) "Finding the way home…" else "Sharing is stopped.", fontSize = 14.sp, fontWeight = FontWeight.SemiBold); Text(status.text, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 5.dp)) }
                         }
-                        HorizontalDivider(Modifier.padding(vertical = 20.dp), color = Color(0xFFF0EDF5))
-                        Row { Icon(Icons.Outlined.VpnLock, null, tint = Purple, modifier = Modifier.size(17.dp)); Text("  Household traffic uses app-contained WireGuard.", fontSize = 11.sp, color = Muted) }
-                        Text("Bungee’s app-contained connection leaves Android’s VPN slot free for your other VPN. That VPN may still filter Bungee’s UDP connection.", color = Muted, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
-                        Text("Queued GPS fixes: ${status.queuedFixes} · dropped at capacity: ${status.droppedFixes}", color = Muted, fontSize = 11.sp, modifier = Modifier.padding(top = 10.dp))
+                        HorizontalDivider(Modifier.padding(vertical = 20.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                        Row { Icon(Icons.Outlined.VpnLock, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(17.dp)); Text("  Household traffic uses app-contained WireGuard.", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        Text("Bungee’s app-contained connection leaves Android’s VPN slot free for your other VPN. That VPN may still filter Bungee’s UDP connection.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
+                        Text("Queued GPS fixes: ${status.queuedFixes} · dropped at capacity: ${status.droppedFixes}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.padding(top = 10.dp))
                         Text(when (status.gpsAccess) {
                             "foreground" -> "GPS active while the location service continues. Allow background location for restart recovery."
                             "background" -> "Background GPS permission granted. Android power and location settings still apply."
                             "disabled" -> "GPS sharing is off."
                             "permission_denied" -> "Precise GPS permission is missing. Connection does not mean GPS is recording."
                             else -> "GPS is paused. Open this screen and resume GPS, or grant background location for automatic restart."
-                        }, color = Muted, fontSize = 12.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
+                        }, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
                         if (status.running && status.gpsAccess !in listOf("foreground", "background", "disabled")) TextButton(onClick = { startSharing() }) { Text("Resume GPS from this screen") }
-                        status.nextRetryAt?.let { Text("Next retry around ${java.text.DateFormat.getTimeInstance().format(java.util.Date(it))}", color = Muted, fontSize = 10.sp) }
-                        status.lastSent?.let { Text("Last check-in · ${java.text.DateFormat.getTimeInstance().format(java.util.Date(it))}", color = Color(0xFF9BA99F), fontSize = 10.sp, modifier = Modifier.padding(top = 16.dp)) }
+                        status.nextRetryAt?.let { Text("Next retry around ${java.text.DateFormat.getTimeInstance().format(java.util.Date(it))}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp) }
+                        status.lastSent?.let { Text("Last check-in · ${java.text.DateFormat.getTimeInstance().format(java.util.Date(it))}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, modifier = Modifier.padding(top = 16.dp)) }
                         Button(onClick = {
                             if (status.running) { runCatching { LocalSafety.setStopped(this@MainActivity, true) }.onFailure { error = "Stop could not be saved. Force-stop Bungee in Android Settings." }; locallyStopped = LocalSafety.isStopped(this@MainActivity); resume = false; stopService(Intent(this@MainActivity, TelemetryService::class.java)) }
                             else if (LocalSafety.isStopped(this@MainActivity)) startActivity(Intent(this@MainActivity, LocalRecoveryActivity::class.java))
                             else startSharing()
                         }, modifier = Modifier.fillMaxWidth().padding(top = 20.dp), shape = RoundedCornerShape(11.dp)) { Text(SharingControl.label(status.running, locallyStopped || LocalSafety.isStopped(this@MainActivity)), Modifier.padding(6.dp)) }
-                        Text("Stop is saved across restarts. To resume, open local recovery, allow a manual restart, then start sharing here.", color = Muted, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
+                        Text("Stop is saved across restarts. To resume, open local recovery, allow a manual restart, then start sharing here.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
                     }
                 }
-                Text("YOU’RE IN CONTROL", color = Muted, fontSize = 9.sp, letterSpacing = 1.8.sp, modifier = Modifier.padding(top = 30.dp, bottom = 15.dp))
-                Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(17.dp)) {
+                Text("YOU’RE IN CONTROL", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp, letterSpacing = 1.8.sp, modifier = Modifier.padding(top = 30.dp, bottom = 15.dp))
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), shape = RoundedCornerShape(17.dp)) {
                     Column(Modifier.padding(horizontal = 18.dp)) {
                         SettingRow("Share GPS history", "Turning off cancels pending sends; already sent data stays at home until erased", locate) { value ->
                             scope.launch {
@@ -213,7 +211,7 @@ class MainActivity : FragmentActivity() {
                                     .onFailure { locate = identity.allowLocate; error = "Location preference or queue cleanup failed. Stop sharing and use local recovery or Android Settings." }
                             }
                         }
-                        HorizontalDivider(color = Color(0xFFF4F1F7))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         SettingRow("Household commands", "Off until you approve sound, messages, fresh GPS & optional locking", commands) { enabled ->
                             if (enabled) showCommandConsent = true
                             else scope.launch {
@@ -229,13 +227,13 @@ class MainActivity : FragmentActivity() {
                                 }
                             }
                         }
-                        HorizontalDivider(color = Color(0xFFF4F1F7))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         SettingRow("Resume after restart", "After first unlock; automatic GPS needs background location", resume) { enabled -> unlock {
                             if (enabled && locate && !backgroundLocation) { backgroundGuideForRestart = true; showBackgroundGuide = true }
                             else saveRestart(enabled)
                         } }
                         if (locate && !backgroundLocation) TextButton(onClick = { backgroundGuideForRestart = false; showBackgroundGuide = true }) { Text("Allow GPS after restart") }
-                        HorizontalDivider(color = Color(0xFFF4F1F7))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         SettingRow("Lock this app", "Use your phone’s secure screen lock", lockEnabled) { enabled ->
                             unlock {
                                 runCatching { identity.appLock = enabled }
@@ -245,27 +243,44 @@ class MainActivity : FragmentActivity() {
                         }
                     }
                 }
-                Card(Modifier.fillMaxWidth().padding(top = 18.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                Card(Modifier.fillMaxWidth().padding(top = 18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                     Column(Modifier.padding(18.dp)) {
                         Text("Recovery stays local", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                        Text("This build refuses device-owner operation and persistent policies. Android Settings remains available to deactivate administration, force-stop or uninstall Bungee on a personal phone. No wipe, credential change, app suspension, forced DNS or remote reboot is available.", color = Muted, fontSize = 11.sp, lineHeight = 19.sp)
+                        Text("This build refuses device-owner operation and persistent policies. Android Settings remains available to deactivate administration, force-stop or uninstall Bungee on a personal phone. No wipe, credential change, app suspension, forced DNS or remote reboot is available.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp)
                     }
                 }
                 TextButton(onClick = { unlock(requireCredential = true) { startActivity(Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, ComponentName(this@MainActivity, BungeeAdminReceiver::class.java)).putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Optional removable screen locking. Locking requires your existing PIN/password afterward. No credential changes or wipe. Deactivate in Android Settings.")) } }, modifier = Modifier.padding(top = 9.dp)) {
                     Icon(Icons.Outlined.AdminPanelSettings, null, Modifier.size(17.dp)); Text("  Enable optional remote locking", fontSize = 11.sp)
                 }
-                if (recovery != null) Card(Modifier.fillMaxWidth().padding(top = 15.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFFF0EBF8))) {
+                if (recovery != null) Card(Modifier.fillMaxWidth().padding(top = 15.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
                     Column(Modifier.padding(18.dp)) { Text("From your household", fontWeight = FontWeight.SemiBold, fontSize = 12.sp); Text(recovery!!, fontSize = 13.sp, modifier = Modifier.padding(top = 9.dp)); TextButton(onClick = { unlock { identity.recoveryMessage = null; recovery = null; getSystemService(NotificationManager::class.java).cancel(2) } }) { Text("Dismiss after unlocking", fontSize = 10.sp) } }
                 }
-                TextButton(onClick = { confirmReset = true }) { Text("Unpair this phone", color = Color(0xFFB78C94), fontSize = 11.sp) }
+                TextButton(onClick = { confirmReset = true }) { Text("Unpair this phone", color = MaterialTheme.colorScheme.error, fontSize = 11.sp) }
+            }
+            Card(Modifier.fillMaxWidth().padding(top = 18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), shape = RoundedCornerShape(17.dp)) {
+                Column(Modifier.padding(18.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.Palette, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                        Text("  Appearance", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    Text("Follow Android or choose a theme for Bungee.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.padding(top = 7.dp, bottom = 14.dp))
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        AppearanceMode.entries.forEachIndexed { index, mode ->
+                            SegmentedButton(selected = appearance == mode, onClick = {
+                                if (AppearancePreference.write(this@MainActivity, mode)) appearance = mode
+                                else error = "Appearance could not be saved. Your previous choice is still selected."
+                            }, shape = SegmentedButtonDefaults.itemShape(index, AppearanceMode.entries.size)) { Text(mode.label, fontSize = 11.sp) }
+                        }
+                    }
+                }
             }
             TextButton(onClick = { startActivity(Intent(this@MainActivity, LocalRecoveryActivity::class.java)) }) { Text("Local recovery · stop and release") }
-            if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 20.dp), color = Purple)
-            error?.let { Text(it, color = Color(0xFFB97777), fontSize = 12.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 18.dp)) }
+            if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 20.dp), color = MaterialTheme.colorScheme.primary)
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 18.dp)) }
             Row(Modifier.fillMaxWidth().padding(vertical = 32.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Outlined.FavoriteBorder, null, Modifier.size(13.dp), tint = Color(0xFFB6A9BC)); Text("  Home is the cloud.", fontSize = 10.sp, color = Muted)
+                Icon(Icons.Outlined.FavoriteBorder, null, Modifier.size(13.dp), tint = MaterialTheme.colorScheme.primary); Text("  Home is the cloud.", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Text("Early release · test device recommended · no Google Play services required", color = Color(0xFFB0ABB9), fontSize = 9.sp, modifier = Modifier.padding(bottom = 22.dp))
+            Text("Version ${BuildConfig.VERSION_NAME} · no Google Play services required", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp, modifier = Modifier.padding(bottom = 22.dp))
         }
         if (showCommandConsent) AlertDialog(onDismissRequest = { showCommandConsent = false }, title = { Text("Allow household recovery commands?") }, text = {
             Text("Your home server administrator can request a fresh GPS fix, play or stop a sound, and display or clear a recovery message. Screen locking additionally needs your separate, removable Android administrator approval. Lost mode can apply those permitted actions, including an existing request after you enable this. GPS sharing alone does not grant these commands. You can turn them off here or stop Bungee through local recovery or Android Settings.")
@@ -295,7 +310,7 @@ class MainActivity : FragmentActivity() {
             }
         })
         if (showPairing) AlertDialog(onDismissRequest = { if (!busy) showPairing = false }, title = { Text("Connect to your home") }, text = {
-            Column { Text("This creates a private tunnel and shares your phone’s location and battery with the server you chose. Timestamped GPS history stays on that server until explicitly erased or the device is revoked. Unsent GPS fixes are encrypted on this phone, up to 10,080 points. Household recovery commands start off and need separate approval after pairing. Continue only if you consent.", fontSize = 12.sp, lineHeight = 20.sp); OutlinedTextField(value = pairingText, onValueChange = { pairingText = it }, label = { Text("Enrollment invitation") }, modifier = Modifier.fillMaxWidth().padding(top = 16.dp), minLines = 4); error?.let { Text(it, color = Color(0xFFB97777), fontSize = 11.sp) } }
+            Column { Text("This creates a private tunnel and shares your phone’s location and battery with the server you chose. Timestamped GPS history stays on that server until explicitly erased or the device is revoked. Unsent GPS fixes are encrypted on this phone, up to 10,080 points. Household recovery commands start off and need separate approval after pairing. Continue only if you consent.", fontSize = 12.sp, lineHeight = 20.sp); OutlinedTextField(value = pairingText, onValueChange = { pairingText = it }, label = { Text("Enrollment invitation") }, modifier = Modifier.fillMaxWidth().padding(top = 16.dp), minLines = 4); error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 11.sp) } }
         }, confirmButton = { TextButton(onClick = { pair(pairingText) }, enabled = !busy) { Text("Agree & pair") } }, dismissButton = { TextButton(onClick = { showPairing = false }, enabled = !busy) { Text("Cancel") } })
         if (confirmReset) AlertDialog(onDismissRequest = { confirmReset = false }, title = { Text("Unpair this phone?") }, text = { Text("This erases local keys and stops sharing. Also revoke this device on the server to erase its location history and remove the peer.") }, confirmButton = { TextButton(onClick = { unlock {
             if (ManagementAgent.isOwner(this@MainActivity)) { error = "Use Bungee recovery first. Do not discard the identity while device ownership remains."; return@unlock }
@@ -317,7 +332,7 @@ class MainActivity : FragmentActivity() {
     }
     @Composable private fun SettingRow(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
         Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) { Text(title, fontSize = 12.sp, fontWeight = FontWeight.Medium); Text(subtitle, fontSize = 9.sp, lineHeight = 15.sp, color = Muted, modifier = Modifier.padding(top = 4.dp)) }
+            Column(Modifier.weight(1f)) { Text(title, fontSize = 12.sp, fontWeight = FontWeight.Medium); Text(subtitle, fontSize = 9.sp, lineHeight = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp)) }
             Switch(checked = checked, onCheckedChange = onChange, modifier = Modifier.padding(start = 10.dp))
         }
     }

@@ -23,6 +23,7 @@ class LocalRecoveryActivity : FragmentActivity() {
     private lateinit var result: TextView
     private var recoveryRunning = false
     override fun onCreate(savedInstanceState: Bundle?) {
+        AppearancePreference.applyTo(this)
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(32), dp(24), dp(24)) }

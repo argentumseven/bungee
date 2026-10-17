@@ -1,0 +1,3 @@
+<resources>
+    <style name="Theme.Bungee" parent="Theme.Bungee.Dark" />
+</resources>

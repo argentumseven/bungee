@@ -67,6 +67,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
   t.after(() => browser.close());
   const context = await browser.newContext({
       viewport: { width: 1440, height: 1050 },
+      colorScheme: "dark",
     }),
     page = await context.newPage();
   context.setDefaultTimeout(10000);
@@ -76,18 +77,97 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     errors.push(e.message);
     process.stderr.write(e.stack + "\n");
   });
-  page.on("request", (r) => {
+  context.on("request", (r) => {
     if (!r.url().startsWith(origin) && !r.url().startsWith("data:"))
       external.push(r.url());
   });
   await page.goto(origin);
   await page.getByRole("heading", { name: "Welcome home." }).waitFor();
+  async function assertTheme(theme) {
+    await page.waitForFunction((expected) => document.documentElement.dataset.theme === expected, theme);
+    assert.equal(await page.locator("html").evaluate((el) => getComputedStyle(el).colorScheme), theme);
+  }
+  async function assertReadable(selectors) {
+    const ratios = await page.evaluate((selectors) => {
+      const luminance = (color) => {
+        const values = color.match(/[\d.]+/g).slice(0, 3).map((v) => Number(v) / 255)
+          .map((v) => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+        return values[0] * 0.2126 + values[1] * 0.7152 + values[2] * 0.0722;
+      };
+      return selectors.map((selector) => {
+        const el = document.querySelector(selector);
+        if (!el) throw new Error(`Missing contrast target: ${selector}`);
+        let parent = el, background;
+        do {
+          background = getComputedStyle(parent).backgroundColor;
+          parent = parent.parentElement;
+        } while (parent && background === "rgba(0, 0, 0, 0)");
+        const fg = luminance(getComputedStyle(el).color), bg = luminance(background);
+        return [selector, (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05)];
+      });
+    }, selectors);
+    for (const [selector, ratio] of ratios) assert.ok(ratio >= 4.5, `${selector}: contrast ${ratio.toFixed(2)} < 4.5`);
+  }
+  async function screenshot(name) {
+    // Dismiss real transient UI so it cannot cover the history or connection details.
+    await page.evaluate(() => document.querySelector('button[aria-label="Dismiss notification"]')?.click());
+    await assertTheme("dark");
+    await page.screenshot({ path: `docs/screenshots/${name}.png`, fullPage: true, animations: "disabled" });
+  }
+  await t.test("appearance follows the OS, saves overrides and synchronizes tabs", async () => {
+    const appearance = page.getByRole("combobox", { name: "Appearance", exact: true });
+    const readable = [".login-form h2", ".login-form > p", ".login-form label", ".primary", "input", ".appearance-control"];
+    await assertTheme("dark");
+    assert.equal(await appearance.inputValue(), "system");
+    await assertReadable(readable);
+    await page.emulateMedia({ colorScheme: "light" });
+    await assertTheme("light");
+    await assertReadable(readable);
+    await appearance.selectOption("dark");
+    await page.reload();
+    await assertTheme("dark");
+    assert.equal(await appearance.inputValue(), "dark");
+    await appearance.selectOption("light");
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page.reload();
+    await assertTheme("light");
+    assert.equal(await appearance.inputValue(), "light");
+    const other = await context.newPage();
+    other.on("pageerror", (e) => errors.push(e.message));
+    await other.goto(origin);
+    const otherAppearance = other.getByRole("combobox", { name: "Appearance", exact: true });
+    assert.equal(await otherAppearance.inputValue(), "light");
+    await otherAppearance.selectOption("system");
+    await page.waitForFunction(() => document.documentElement.dataset.theme === "dark");
+    assert.equal(await appearance.inputValue(), "system");
+    await other.close();
+    // Invalid old/browser-edited values fall back to the OS without breaking sign-in.
+    await page.evaluate(() => localStorage.setItem("bungee.appearance", "unknown"));
+    await page.reload();
+    await assertTheme("dark");
+    assert.equal(await appearance.inputValue(), "system");
+    await appearance.selectOption("system");
+  });
+  await t.test("appearance remains usable when browser storage is disabled", async () => {
+    const isolated = await browser.newContext({ colorScheme: "dark" });
+    try {
+      await isolated.addInitScript(() => Object.defineProperty(window, "localStorage", {
+        get() { throw new DOMException("Disabled by browser test", "SecurityError"); },
+      }));
+      const restricted = await isolated.newPage();
+      restricted.on("pageerror", (e) => errors.push(e.message));
+      await restricted.goto(origin);
+      await restricted.getByRole("combobox", { name: "Appearance", exact: true }).selectOption("light");
+      await restricted.waitForFunction(() => document.documentElement.dataset.theme === "light");
+      await restricted.getByRole("status").filter({ hasText: "Browser storage is unavailable" }).waitFor();
+      await restricted.reload();
+      await restricted.waitForFunction(() => document.documentElement.dataset.theme === "dark");
+      await restricted.getByRole("heading", { name: "Welcome home." }).waitFor();
+    } finally { await isolated.close(); }
+  });
   await mkdir("docs/screenshots", { recursive: true });
   await page.evaluate(() => scrollTo(0, 0));
-  await page.screenshot({
-    path: "docs/screenshots/sign-in.png",
-    fullPage: true,
-  });
+  await screenshot("sign-in");
   await page.getByLabel("Server administrator password").fill(password);
   await page.getByRole("button", { name: "Unlock your household" }).click();
   await page
@@ -97,10 +177,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     .getByRole("heading", { name: "It starts with one phone." })
     .waitFor();
   await page.evaluate(() => scrollTo(0, 0));
-  await page.screenshot({
-    path: "docs/screenshots/dashboard.png",
-    fullPage: true,
-  });
+  await screenshot("dashboard");
   let phone;
   const phoneRequest = async (path, data) => {
     const body = JSON.stringify(data),
@@ -325,10 +402,17 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     .waitFor();
   await page.locator(".leaflet-tile-loaded").first().waitFor();
   await page.getByText("London, England, GB", { exact: true }).waitFor();
-  await page.screenshot({
-    path: "docs/screenshots/dashboard.png",
-    fullPage: true,
+  await t.test("both dashboard palettes keep key text and controls readable", async () => {
+    const appearance = page.getByRole("combobox", { name: "Appearance", exact: true });
+    for (const theme of ["light", "dark"]) {
+      await appearance.selectOption(theme);
+      await assertTheme(theme);
+      await assertReadable([".stat-label", ".stat > small", ".device-text small", ".network-card p", ".private-map-status", ".primary", ".nav-item.active"]);
+    }
+    await appearance.selectOption("system");
+    await assertTheme("dark");
   });
+  await screenshot("dashboard");
   await t.test(
     "device care exposes reversible recovery and no persistent management or reboot controls",
     async () => {
@@ -407,10 +491,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
         .waitFor();
       await page.getByText("Paused · open Bungee to resume GPS", {exact:true}).waitFor();
       await page.evaluate(() => scrollTo(0, 0));
-      await page.screenshot({
-        path: "docs/screenshots/device-care.png",
-        fullPage: true,
-      });
+      await screenshot("device-care");
       await page.setViewportSize({ width: 390, height: 844 });
       assert.equal(
         await page.evaluate(
@@ -419,10 +500,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
         true,
       );
       await page.evaluate(() => scrollTo(0, 0));
-      await page.screenshot({
-        path: "docs/screenshots/mobile-device-care.png",
-        fullPage: true,
-      });
+      await screenshot("mobile-device-care");
       await page.setViewportSize({ width: 1440, height: 1050 });
       await page.getByRole("button", { name: "Overview", exact: true }).click();
       assert.equal(
@@ -450,10 +528,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       await page.getByRole("button", { name: "Show IP estimate" }).click();
       await page.getByText(/Database radius: 10 km/).waitFor();
       await page.setViewportSize({ width: 390, height: 844 });
-      await page.screenshot({
-        path: "docs/screenshots/mobile-dashboard.png",
-        fullPage: true,
-      });
+      await screenshot("mobile-dashboard");
       assert.equal(
         await page.evaluate(
           () => document.documentElement.scrollWidth <= innerWidth,
@@ -486,10 +561,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
         .waitFor();
       await page.getByText(/Selected:.*37.780000, -122.420000/).waitFor();
       await page.evaluate(() => scrollTo(0, 0));
-      await page.screenshot({
-        path: "docs/screenshots/history.png",
-        fullPage: true,
-      });
+      await screenshot("history");
       await page.setViewportSize({ width: 390, height: 844 });
       assert.equal(
         await page.evaluate(
@@ -519,10 +591,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       await page.getByRole("button", { name: "Look up history" }).click();
       await page.getByText(/Showing the newest saved record/).waitFor();
       await page.evaluate(() => scrollTo(0, 0));
-      await page.screenshot({
-        path: "docs/screenshots/history-interval.png",
-        fullPage: true,
-      });
+      await screenshot("history-interval");
       await page.getByLabel("History recurrence").selectOption("daily");
       const now = new Date();
       await page
@@ -536,10 +605,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
         })
         .waitFor();
       await page.evaluate(() => scrollTo(0, 0));
-      await page.screenshot({
-        path: "docs/screenshots/history-daily.png",
-        fullPage: true,
-      });
+      await screenshot("history-daily");
       await page.getByLabel("History recurrence").selectOption("all");
       await page.getByLabel("History from").fill("2000-01-01T00:00");
       await page.getByLabel("History to").fill("2000-01-02T00:00");
@@ -557,10 +623,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       await page
         .getByRole("img", { name: "Historical approximate IP location" })
         .waitFor();
-      await page.screenshot({
-        path: "docs/screenshots/history-ip.png",
-        fullPage: true,
-      });
+      await screenshot("history-ip");
       const networkDownload = page.waitForEvent("download");
       await page
         .getByRole("button", { name: "Export CSV", exact: true })
