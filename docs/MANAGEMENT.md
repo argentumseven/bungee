@@ -1,6 +1,6 @@
 # Personal-device recovery and legacy management
 
-Current builds enforce the [reversibility contract](SAFETY.md). Device-owner enrollment and operation are unsupported because Android cannot guarantee owner removal without a reset. Earlier preview MDM features are disabled rather than advertised as safely reversible.
+Current builds enforce the [reversibility contract](SAFETY.md). Device-owner enrollment and operation are unsupported because Android cannot guarantee owner removal without a reset. Earlier MDM features are disabled rather than advertised as safely reversible.
 
 ## Current features
 
@@ -14,11 +14,13 @@ Managed system DNS/always-on, selected-app suspension, uninstall prevention, for
 
 The app-contained official WireGuard/gVisor transport carries only Bungee's home API and leaves Android's VPN slot free. Bungee changes no system routes/DNS. Other VPNs can route or filter its outer socket. Ordinary networking remains under the user's Android/VPN configuration.
 
-The server retains legacy DNS rollup/read/erase and forwarding code for prior-preview compatibility/tests. New phones cannot enroll in managed DNS or enable it through the API. Leave BUNGEE_DNS_UPSTREAM_IP empty for new deployments. Existing summaries are five-minute registrable-site groups with folded 10-second activity windows, not app-attributed browsing history. No raw subdomain/answer/payload log is added. Any separately configured legacy private resolver controls its own logging/upstreams.
+The server retains legacy DNS rollup/read/erase and forwarding code for prior-version compatibility/tests. New phones cannot enroll in managed DNS or enable it through the API. Leave BUNGEE_DNS_UPSTREAM_IP empty for new deployments. Existing summaries are five-minute registrable-site groups with folded 10-second activity windows, not app-attributed browsing history. No raw subdomain/answer/payload log is added. Any separately configured legacy private resolver controls its own logging/upstreams.
 
-## Existing owner from an older preview
+<a id="existing-owner-from-an-older-preview"></a>
 
-No phone has been enrolled by the project owner. Do not create an owner with ADB or OS provisioning. If you independently tested an older preview as owner, preserve its original signer and data. Uninstall/clearing data/different-signature replacement can strand the management path. The new recovery entry attempts removal of known restrictions; it cannot guarantee removal of Android's owner role and will not automatically reset the phone. See [legacy boundaries](SAFETY.md#earlier-preview-device-owner-state).
+## Legacy device-owner enrollment
+
+Do not create an owner with ADB or OS provisioning. If you independently tested an older version as owner, preserve its original signer and data. Uninstall/clearing data/different-signature replacement can strand the management path. The new recovery entry attempts removal of known restrictions; it cannot guarantee removal of Android's owner role and will not automatically reset the phone. See [legacy boundaries](SAFETY.md#earlier-preview-device-owner-state).
 
 ## Stable signing and updates
 

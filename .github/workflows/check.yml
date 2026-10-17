@@ -1,4 +1,4 @@
-name: Check foundation
+name: Build and verify Bungee
 on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
@@ -196,7 +196,7 @@ jobs:
                   raise SystemExit(0)
           subprocess.check_call(['docker', 'buildx', 'imagetools', 'create', '--tag', channel, repository + '@' + os.environ['BUNDLE_DIGEST']])
           PY
-  prerelease:
+  publish-apk:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [server-and-web, android, container-boundaries, publish-containers]
     runs-on: ubuntu-24.04
@@ -207,7 +207,7 @@ jobs:
         with:
           name: bungee-android-debug
           path: artifacts
-      - name: Verify artifact and publish test prerelease
+      - name: Verify artifact and publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -216,33 +216,23 @@ jobs:
           cd artifacts
           sha256sum --check bungee-debug.apk.sha256
           cat > release-notes.md <<'NOTES'
-          Install **bungee-debug.apk** on a consenting Android 12+ test device. The accompanying SHA-256 file verifies the download.
+          Install **bungee-debug.apk** on a consenting Android 12+ device. Verify the accompanying SHA-256 checksum. The build supports ARM64 and x86_64.
 
-          GPS/check-in history stays saved until erased. History now supports every-N-minute and daily-at-time lookups, private coordinate trails and CSV. The phone has a bounded encrypted offline GPS queue.
+          Bungee provides retained GPS/check-in/IP history, recurring time lookups and CSV; an encrypted offline GPS queue; household-approved recovery commands; local OpenStreetMap/GeoIP datasets; and an app-contained WireGuard connection that leaves Android's VPN slot free. Runtime map, analytics, public DNS and push-provider fallbacks are absent.
 
-          Reversibility is now enforced: device-owner enrollment and operation, managed DNS/always-on, app suspension, uninstall protection, forced lock complexity, recovery-setting restrictions and remote reboot are disabled. New policy requests are rejected by both server and phone; old queued reboots are not delivered. There is no wipe, credential reset, firmware/bootloader change or kiosk mode.
+          Update the server before the APK. GPS erasure rotates a server generation so earlier queued/in-flight fixes cannot restore erased points. Consent withdrawal invalidates prepared work and cancels active captures/requests; bytes already delivered home cannot be recalled. Locate requires current consent, a server expiry check and an exact stored-fix acknowledgment.
 
-          A separate **Bungee recovery** launcher entry stops controls offline without pairing keys or a server. The saved local stop takes precedence over boot/restart/connect/command execution. Cleanup attempts continue after individual failures and report errors. Android's ordinary personal-app deactivation/uninstall paths remain available. Device ownership from old previews is not automatically removable; do not enroll a phone as device owner.
+          Guided installation requires custom HTTPS/WireGuard ports and administrator source prefixes. The host updater stages immutable image bundles, closes admission, snapshots five volumes and restores a failed trial before reopening. Runtime containers do not receive the Docker socket.
 
-          Alpha.7 adds local OpenStreetMap raster MBTiles, offline City MMDB GeoIP and distinct authenticated connection-IP history. No production geodata is bundled; no external map/GeoIP provider is contacted. Import licensed local datasets using the host tool; GPS remains primary and carrier/VPN IP estimates can be far away.
+          Device-owner enrollment and persistent MDM controls are disabled. The separate Bungee recovery launcher can stop controls offline without pairing keys or a server. Ordinary Android deactivation/uninstall remains available. No wipe, credential reset, firmware/bootloader action, kiosk mode or remote reboot is implemented.
 
-          Alpha.7 adds guided host installation, chosen HTTPS/WireGuard ports, mandatory administrator source-prefix restrictions at both the gateway firewall and Caddy, and a host-side Compose updater. Updates stage immutable images, close admission, snapshot all five volumes, check health and recover a failed trial before reopening. Stable is the default update channel; preview updates require an explicit choice. The app containers never receive the Docker socket. See docs/INSTALL.md for prerequisites, recovery and update trust boundaries.
+          This APK uses a debug signer. CI signer changes can require uninstall/re-pair; use your own stable signing key for in-place updates. The existing helper scripts/build-owner-apk.sh configures signing only; it does not enable device ownership.
 
-          Alpha.8 adds DDIL handling: network-aware jittered backoff, independent encrypted GPS collection, adaptive bounded catch-up, durable command receipt retries and explicit expired/unconfirmed status. Update the SERVER FIRST, then the APK. Request authentication/expiry and local stop remain enforced; no radio/airplane-mode automation or provider fallback is added. See docs/DDIL.md for queue limits, clock assumptions and physical-test limits.
-
-          Alpha.9 corrects confirmed independent-review defects: explicit optional background-location permission for GPS restart after first unlock, truthful GPS-paused reporting, incremental encrypted SQLite GPS storage, separate source/authenticated/admin limiter budgets, trusted loopback Caddy identity, offered-command labels, explicit receipt reconciliation and authentication cooldown protected from network flapping. Physical GrapheneOS acceptance, publisher-signature enforcement and built-in encrypted backup archives remain open. Read docs/REVIEW-2026-10.md.
-
-          Alpha.10 adds explicit command consent (off by default, including after upgrade), checked security-preference writes, recoverable transactional invitation reissue/peer-file publication, safe device-API bind validation, bounded server-streamed CSV and coordinated host/APK/server release metadata. Core regression checks include full address-pool recovery, storage-failure injection and a 500,000-row synthetic export. Physical GrapheneOS acceptance, publisher-signature enforcement and encrypted snapshot archives remain open. Read docs/REVIEW-2026-10-SECOND.md.
-
-          Update BOTH server and APK. Choose a custom UDP port (51820 rejected). Version-2 pairing requires a per-peer random 256-bit WireGuard PSK. Dashboard HTTPS requires the trusted local CA and TLS 1.3 X25519MLKEM768. Certificate/device/APK signatures remain classical; this is not a wholly quantum-proof product. Runtime egress is denied except an explicitly configured legacy private home DNS upstream; leave it unset for new deployments. No public DNS fallback, telemetry provider, analytics or cloud push.
-
-          This is a signed **debug build** of an unaudited prototype for test devices. CI debug keys are ephemeral: updates may require uninstall/re-pair. **Device-owner enrollment is unsupported; do not use ADB to assign that role.** Build with your own stable signing key using scripts/build-owner-apk.sh.
-
-          ARM64 phones and x86_64 test devices, Android 12+. Native WireGuard protocol tests run without kernel TUN. Physical GrapheneOS routing, other-VPN coexistence and local recovery still need testing. Automatic photos, hidden launcher, remote power-off/wipe and crowdsourced finding are absent. See README.md for the full feature checklist and docs/VALIDATION.md for evidence.
+          Physical GrapheneOS lifecycle checks remain unperformed. Independent publisher-signature verification and encrypted snapshot archives are not implemented; use encrypted persistent/snapshot storage. Certificate/device/APK signatures remain classical. Read README.md, docs/SECURITY.md, docs/INSTALL.md and docs/VALIDATION.md for feature scope, trust assumptions and test evidence.
           NOTES
           release_flags=(--prerelease=false)
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then release_flags=(--prerelease); fi
           gh release create "$GITHUB_REF_NAME" bungee-debug.apk bungee-debug.apk.sha256 \
             --repo "$GITHUB_REPOSITORY" --verify-tag --draft "${release_flags[@]}" \
-            --title "Bungee $GITHUB_REF_NAME — development preview" --notes-file release-notes.md
+            --title "Bungee $GITHUB_REF_NAME" --notes-file release-notes.md
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false "${release_flags[@]}"

@@ -32,6 +32,7 @@ import {
   Zap,
 } from "lucide-react";
 import QRCode from "qrcode";
+import { version as releaseVersion } from "../../release.json";
 import "./style.css";
 import { api } from "./api";
 import {
@@ -426,7 +427,7 @@ function App() {
             Lock dashboard
           </button>
           <div className="sidebar-foot">
-            BUNGEE <span>FOUNDATION · v0.1</span>
+            BUNGEE <span>SELF-HOSTED · v{releaseVersion}</span>
           </div>
         </div>
       </aside>

@@ -50,7 +50,7 @@ A delayed, freshly signed receipt may reconcile a command retained by the server
 - An authenticated contact updates `last_contact` independently of `last_seen` (latest accepted telemetry). A short command-only connection can establish presence while the battery reading remains older; the dashboard's battery tooltip identifies the saved telemetry age.
 - A configured tunnel is not proof of delivery. Records become acknowledged only on an accepted home-server response.
 
-Update the **server first, then the APK** to alpha.11. New phones report fields that older servers reject; the queue is retained if that mismatch occurs. Stable local APK signing is still required for reliable in-place updates. No production deployment, physical DDIL/jamming trial or real GrapheneOS background/sleep validation is claimed. See [VALIDATION.md](VALIDATION.md) for automated evidence and [SAFETY.md](SAFETY.md) for the recovery boundary.
+Update the **server first, then the APK** to alpha.11. New phones report fields that older servers reject; the queue is retained if that mismatch occurs. Stable local APK signing is still required for reliable in-place updates. Physical DDIL/jamming trials and GrapheneOS background/sleep checks have not been run. See [VALIDATION.md](VALIDATION.md) for automated evidence and [SAFETY.md](SAFETY.md) for the recovery boundary.
 
 ## Explicit command consent and invitation recovery (alpha.10)
 

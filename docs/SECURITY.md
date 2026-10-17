@@ -1,12 +1,12 @@
 # Security design and review boundaries
 
-Alpha.6 enforces the [reversibility contract](SAFETY.md). Device-owner enrollment/operation and persistent MDM controls are disabled. References to old DNS forwarding below describe compatibility boundaries, not an enrollment option.
+Bungee enforces the [reversibility contract](SAFETY.md). Device-owner enrollment/operation and persistent MDM controls are disabled. References to old DNS forwarding below describe compatibility boundaries, not an enrollment option.
 
 ## Intended trust model
 
 Protect a consenting household’s device telemetry against internet observers, unsolicited enrollment, request tampering/replay, browser cross-origin attacks, and access by a revoked phone. The administrator, host operating system, Android OS, and selected dependencies remain trusted. A compromised administrator browser or server can locate devices and issue granted commands. Root compromise on a phone is out of scope.
 
-This code is a first implementation. Its tests establish specific behavior, not production security.
+The [validation record](VALIDATION.md) identifies tested behavior and outstanding verification. The trust boundaries below apply to the supported personal-device configuration.
 
 ```mermaid
 flowchart LR
@@ -107,7 +107,7 @@ Alpha.8 retains signed/timestamped/nonce-protected requests and the two-minute r
 
 ## Independent review corrections (alpha.9)
 
-See [REVIEW-2026-10.md](REVIEW-2026-10.md) for confirmed defects, corrections, test boundaries and remaining deployment gates. Optional background location is explicitly granted by the owner for automatic GPS restart after first unlock; a connection alone never establishes a fresh fix. GPS coordinates are individually encrypted in SQLite, with timestamps/counters as sandbox-protected indexing metadata. Unverified IDs cannot allocate signed-device limiter entries; administrative budgets are separate, and bundled Caddy overwrites its trusted loopback identity header. Unknown/conflicting command receipts remain unresolved. Publisher signatures and encrypted snapshot archives are still absent; root-only archives and digest checks do not supply those protections.
+See [REVIEW-2026-10.md](REVIEW-2026-10.md) for confirmed defects, corrections, test boundaries and remaining open security requirements. Optional background location is explicitly granted by the owner for automatic GPS restart after first unlock; a connection alone never establishes a fresh fix. GPS coordinates are individually encrypted in SQLite, with timestamps/counters as sandbox-protected indexing metadata. Unverified IDs cannot allocate signed-device limiter entries; administrative budgets are separate, and bundled Caddy overwrites its trusted loopback identity header. Unknown/conflicting command receipts remain unresolved. Publisher signatures and encrypted snapshot archives are still absent; root-only archives and digest checks do not supply those protections.
 
 ## Second review corrections (alpha.10)
 

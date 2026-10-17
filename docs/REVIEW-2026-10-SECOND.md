@@ -37,7 +37,7 @@ These additional changes compile and pass lint; Android Keystore interruption, i
 - **Administrator authority/reachability:** MFA/roles, administrator recovery, dynamic numeric endpoint changes and provider-free relay/CGNAT recovery remain open. The two-minute signature clock window remains enforced.
 - **Accessibility/endurance:** screen readers, large fonts, contrast/touch targets, long exports over real home networks, battery/flash endurance and power-loss behavior still need testing.
 
-Indefinite server location history remains the owner's explicit policy. This review did not authorize automatic age-based deletion, provider fallbacks, device-owner enrollment or irreversible phone controls. Bungee still must not be relied on as the sole means of recovering an important phone.
+Indefinite server location history remains the owner's explicit policy. This review did not authorize automatic age-based deletion, provider fallbacks, device-owner enrollment or irreversible phone controls.
 
 ## Physical acceptance additions
 

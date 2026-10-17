@@ -1,6 +1,6 @@
 # Reversibility and recovery contract
 
-Applies to alpha.6 and later. Earlier previews with device-owner controls do not meet this contract. At this audit (2026-10-16), the project owner confirmed that nothing had been deployed or enrolled.
+Applies to the current release and to versions from alpha.6 onward. Earlier versions with device-owner controls do not meet this contract.
 
 The requirement is that a Bungee fault, lost server, lost app key or failed update must not create a new persistent restriction on the phone. Bungee must not depend on a working home server or decryptable pairing identity to let the user stop it locally. We cannot promise bug-free software or recovery from arbitrary Android, storage or hardware failures. This document specifies the narrower properties enforced in the supported personal-device mode and distinguishes tests from remaining validation.
 
@@ -42,9 +42,11 @@ The saved stop is checked before service/boot identity loading, network connecti
 
 The recovery screen directly opens Android app settings and security settings. On a supported personal installation, Android's administration deactivation, force-stop and uninstall remain the final local exits if Bungee's own UI/state fails. Stop/recovery preserves pairing keys and saved server history. Explicit unpairing deletes only Bungee's own identity; server-history erasure/revocation remains a separate confirmed data-management operation. This is not an assurance that intentional deletion of Bungee records can be undone.
 
-## Earlier preview device-owner state
+<a id="earlier-preview-device-owner-state"></a>
 
-No phone has been deployed by the project owner, so new installation must use the supported personal mode. The cleanup code is only a best-effort aid for anyone who separately tested an earlier preview.
+## Legacy device-owner state
+
+New installations use the supported personal mode. The cleanup code is a best-effort aid for earlier versions that enabled device ownership.
 
 Android device ownership is OS-managed. It can prevent ordinary uninstall and may require a factory reset to remove if the app/signing key or management path fails. Clearing known restrictions does not remove that role. Bungee does not call deprecated testing-only ownership removal, transfer ownership, reset the phone or discard its old pairing state as a supposed cure.
 

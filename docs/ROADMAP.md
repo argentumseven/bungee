@@ -1,8 +1,8 @@
 # Implementation priorities
 
-The [reversibility contract](SAFETY.md) takes precedence over adding MDM features. No deployment is currently being operated by the project owner.
+The [reversibility contract](SAFETY.md) takes precedence over adding MDM features.
 
-## Current preview
+## Implemented features
 
 Personal Android finder, encrypted app-contained home tunnel, durable GPS/check-in history, recurring lookup/CSV, bounded encrypted offline queue, optional removable administration for screen locking, sound/contact notifications, consent/app lock, strict no-persistent-policy guards and an independent local recovery entry. Server/Docker hardening and legacy DNS-summary compatibility remain. Alpha.7 adds guided host installation, required source-prefix restrictions and a Compose updater with closed admission, coherent snapshots and failed-trial recovery (INSTALL.md), local OpenStreetMap raster basemaps and separate IP/GeoIP history (GEOGRAPHY.md).
 
@@ -10,7 +10,7 @@ Alpha.8 adds network-aware DDIL retries, independent GPS sampling, adaptive catc
 
 Device-owner enrollment/operation, managed system DNS/always-on, package suspension, uninstall prevention, forced credential complexity, blocked recovery settings and reboot have been disabled. No wipe, credential reset, kiosk, bootloader or firmware action exists.
 
-## Before household deployment
+## Verification and hardening work
 
 1. Prove personal installation/removal, ordinary admin deactivation and independent offline recovery on physical GrapheneOS. Test app lock, bad app state/keys, process death, restart, denied permissions, full storage and server loss; verify normal phone functions and Android Settings remain accessible.
 2. Test the actual Docker gateway, direct and other-VPN transport, roaming/MTU/IPv6 and reconnect. Preserve the default app-contained route; do not restore a persistent network policy as a workaround.
@@ -37,4 +37,4 @@ Checked, explicit command consent; recoverable invitation lifecycle/peer publica
 
 Implemented: transactional GPS erasure generations, cancellation of stale capture/upload reservations, continuous remote-locate consent checks, exact-point acknowledgment and commit-admission expiry, loopback-only admin HTTP, bounded separate JSON readers, interval span/bucket limits and accurate durable-stop labels. [Detailed evidence and limits](REVIEW-2026-10-ADVERSARIAL.md).
 
-Still gated on publisher-authenticated updates, authenticated encrypted archive recovery and measured physical GrapheneOS/storage/network acceptance. No certification or complete distributed-revocation guarantee is claimed.
+Remaining work includes publisher-authenticated updates, authenticated encrypted archive recovery and physical GrapheneOS/storage/network testing. Local cancellation cannot recall bytes already delivered to the server.

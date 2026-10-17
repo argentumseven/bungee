@@ -39,11 +39,11 @@ Normal unfiltered history retains paginated access to old data; these limits do 
 
 Read snapshots use separate read-only connections and never hold the canonical write mutex during the scan. Final session/revocation/history-revision checks use current state. A change detected before delivery rejects the JSON response; bytes already sent cannot be recalled. Reads can still consume CPU, temporary storage and retain WAL pages until completion/cancellation. This is resource isolation with finite limits, not an availability proof for arbitrary storage/hardware.
 
-## D findings remain deployment gates
+## D findings: implementation and verification status
 
 - **D-01 — publisher authentication:** registry TLS, repository constraints and digests do not independently authorize a publisher. Signature/provenance verification, pinned trust roots and tested key rotation/revocation/replay handling remain unimplemented. No publisher key was invented or represented as trusted.
 - **D-02 — backup encryption:** updater snapshots remain root-only plaintext tar archives with checksums. Require encrypted trusted persistent/snapshot storage; encrypt external copies separately with recovery keys held separately. Existing plaintext blocks/copies are not retroactively erased. Built-in authenticated archive encryption and hostile/lost-key restore drills remain open.
-- **D-03 — physical acceptance:** no physical GrapheneOS lifecycle, power-loss or storage-fault campaign was run here. Host tests, compilers and fake transport schedules cannot establish sensor, Keystore, Android binder/service, Doze or firmware behavior. Bungee remains experimental and should not be the only recovery mechanism for an important handset.
+- **D-03 — physical acceptance:** no physical GrapheneOS lifecycle, power-loss or storage-fault campaign was run here. Host tests, compilers and fake transport schedules cannot establish sensor, Keystore, Android binder/service, Doze or firmware behavior.
 
 This change adds no owner enrollment, root operation, airplane automation, hidden persistence, wipe, credential change or irreversible restriction. It neither changes retention to automatic expiry nor introduces a map/DNS/analytics provider.
 

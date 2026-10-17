@@ -3,6 +3,7 @@ WORKDIR /build/web
 COPY web/package*.json ./
 RUN --mount=type=secret,id=build_ca if [ -s /run/secrets/build_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/build_ca; fi; npm ci --no-audit --no-fund
 COPY web/ ./
+COPY release.json /build/release.json
 RUN npm run build
 
 FROM rust:1.90-slim-bookworm AS server

@@ -37,7 +37,7 @@ class LocalRecoveryActivity : FragmentActivity() {
         } })
         content.addView(Button(this).apply { text = "Allow a manual restart"; setOnClickListener { authenticate {
             if (ManagementAgent.isOwner(this@LocalRecoveryActivity)) {
-                result.text = "Android still lists Bungee as device owner. Follow the legacy ownership recovery guide before using this preview. Do not uninstall or replace it with a differently signed APK."
+                result.text = "Android still lists Bungee as device owner. Follow the legacy ownership recovery guide before using Bungee. Do not uninstall or replace it with a differently signed APK."
             } else if (!LocalSafety.isStopped(this@LocalRecoveryActivity)) {
                 result.text = "No local stop is set. Use Stop Bungee first if you want to stop sharing."
             } else {

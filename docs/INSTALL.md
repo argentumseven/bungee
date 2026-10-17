@@ -1,6 +1,6 @@
 # Guided installation and container updates
 
-Alpha.7 adds a local installer and transactional Compose updater. It remains a development preview under the [recovery contract](SAFETY.md). No household deployment or physical GrapheneOS validation has been performed.
+The local installer configures a transactional Docker Compose stack under the [recovery contract](SAFETY.md). The [validation record](VALIDATION.md) describes tested installation/update behavior and physical-device checks that remain unperformed.
 
 ## Start with a plan
 

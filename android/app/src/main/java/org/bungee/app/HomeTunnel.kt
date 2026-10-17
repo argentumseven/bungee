@@ -29,7 +29,7 @@ object HomeTunnel {
         require(psk.matches(Regex("[A-Za-z0-9+/]{43}=")) && Base64.decode(psk, Base64.NO_WRAP).any { it != 0.toByte() }) { "A unique 256-bit preshared key is required" }
         require(wg.getString("server_public_key").matches(Regex("[A-Za-z0-9+/]{43}="))) { "Invalid server key" }
         check(!LocalSafety.isStopped(context)) { "Bungee is stopped locally" }
-        check(!ManagementAgent.isOwner(context)) { "Release legacy device ownership before using this preview" }
+        check(!ManagementAgent.isOwner(context)) { "Release legacy device ownership before using Bungee" }
         val parameters = wg.toString()
         if (state == Tunnel.State.UP && appContained && activeParameters == parameters) { activeOwner = owner; return }
         disconnect()
