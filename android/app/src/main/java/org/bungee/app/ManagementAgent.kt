@@ -22,8 +22,16 @@ object ManagementAgent {
         val state = identity.state("management")
         val signals = identity.state("unlock")
         val attempts = if (identity.allowCommands) runCatching { dpm.currentFailedPasswordAttempts }.getOrNull() else null
+        // Retained photos can exist while the camera service is unavailable after reboot.
+        // Do not turn its fresh process-local counters into a false empty-queue report.
+        val cameraReport = runCatching {
+            val camera = ArmedCameraService.status.value
+            val queue = if (LocalSafety.isCameraEnabled(context)) identity.photoQueueReport() else 0 to 0L
+            JSONObject().put("armed", camera.armed).put("pending", queue.first).put("dropped", queue.second)
+                .put("status", camera.detail.take(80)).put("reported_at", System.currentTimeMillis()/1000)
+        }.getOrDefault(JSONObject.NULL) // A broken photo queue must not block ordinary reporting.
         return JSONObject().put("owner", isOwner(context)).put("consent", false)
-            .put("camera", ArmedCameraService.status.value.let { JSONObject().put("armed", it.armed).put("pending", it.pending).put("dropped", it.dropped).put("status", it.detail.take(80)).put("reported_at", System.currentTimeMillis()/1000) })
+            .put("camera", cameraReport)
             .put("delivery", identity.backlogReport().put("reported_at", System.currentTimeMillis()/1000).put("gps_access", TelemetryService.status.value.gpsAccess))
             .put("recovery_consent", identity.allowCommands && !LocalSafety.isStopped(context)).put("revision", state.optLong("revision", 0))
             .put("dns_active", false).put("always_on", isOwner(context) && runCatching { dpm.getAlwaysOnVpnPackage(admin(context)) == context.packageName }.getOrDefault(false))

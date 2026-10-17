@@ -31,6 +31,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.withResumed
+import kotlinx.coroutines.flow.first
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.*
@@ -55,6 +58,8 @@ class MainActivity : FragmentActivity() {
     private var showCommandConsent by mutableStateOf(false)
     private var showCameraConsent by mutableStateOf(false)
     private var cameraGranted by mutableStateOf(false)
+    private var cameraEnabled by mutableStateOf(false)
+    private var cameraResumeJob: Job? = null
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         cameraGranted = granted
         if (!granted) error = "Camera permission was not granted. Ordinary sharing still works."
@@ -83,11 +88,37 @@ class MainActivity : FragmentActivity() {
     }
     override fun onStop() { super.onStop(); if (::identity.isInitialized && identity.appLock) locked = true }
     override fun onResume() { super.onResume(); backgroundLocation = TelemetryService.hasBackgroundLocation(this); locallyStopped = LocalSafety.isStopped(this); cameraGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED }
+    override fun onPostResume() {
+        super.onPostResume()
+        cameraEnabled = LocalSafety.isCameraEnabled(this)
+        resumeCameraIfEnabled()
+    }
+    private fun resumeCameraIfEnabled() {
+        if (!::identity.isInitialized || !LocalSafety.isCameraEnabled(this) || LocalSafety.isStopped(this) || ManagementAgent.isOwner(this)) return
+        if (!identity.enrolled || !identity.allowCommands || getSystemService(KeyguardManager::class.java).isDeviceLocked) return
+        if (cameraResumeJob?.isActive == true) return
+        cameraResumeJob = scope.launch {
+            try {
+                if (!TelemetryService.status.value.running) {
+                    ContextCompat.startForegroundService(this@MainActivity, Intent(this@MainActivity, TelemetryService::class.java).setAction("USER_START"))
+                    withTimeout(5000) { TelemetryService.status.first { it.running } }
+                }
+                if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) ArmedCameraService.resume(this@MainActivity)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                ArmedCameraService.refreshReadiness(this@MainActivity, e.message ?: "Check Android permissions")
+            }
+        }
+    }
     override fun onDestroy() { scope.cancel(); super.onDestroy() }
     private fun unlock(requireCredential: Boolean = false, onSuccess: () -> Unit = { locked = false }) {
         if (!getSystemService(KeyguardManager::class.java).isDeviceSecure) { error = "Set a screen lock in Android settings first."; return }
         BiometricPrompt(this, ContextCompat.getMainExecutor(this), object : BiometricPrompt.AuthenticationCallback() {
-            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) { onSuccess() }
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                // Device-credential authentication can return before this activity resumes.
+                // Camera foreground starts must wait for actual visible/resumed authority.
+                scope.launch { lifecycle.withResumed { onSuccess() } }
+            }
             override fun onAuthenticationError(code: Int, text: CharSequence) { error = text.toString() }
         }).authenticate(BiometricPrompt.PromptInfo.Builder().setTitle("Unlock Bungee").setSubtitle("Your household stays private")
             .setAllowedAuthenticators(if (requireCredential) DEVICE_CREDENTIAL else BIOMETRIC_STRONG or DEVICE_CREDENTIAL).build())
@@ -148,6 +179,7 @@ class MainActivity : FragmentActivity() {
     @Composable private fun HomeScreen() {
         val status by TelemetryService.status.collectAsState()
         val camera by ArmedCameraService.status.collectAsState()
+        LaunchedEffect(camera) { cameraEnabled = LocalSafety.isCameraEnabled(this@MainActivity) }
         var lockEnabled by remember { mutableStateOf(identity.appLock) }
         var locate by remember { mutableStateOf(identity.allowLocate) }
         var commands by remember { mutableStateOf(identity.allowCommands) }
@@ -203,7 +235,9 @@ class MainActivity : FragmentActivity() {
                         status.nextRetryAt?.let { Text("Next retry around ${java.text.DateFormat.getTimeInstance().format(java.util.Date(it))}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp) }
                         status.lastSent?.let { Text("Last check-in · ${java.text.DateFormat.getTimeInstance().format(java.util.Date(it))}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, modifier = Modifier.padding(top = 16.dp)) }
                         Button(onClick = {
-                            if (status.running) { runCatching { LocalSafety.setStopped(this@MainActivity, true) }.onFailure { error = "Stop could not be saved. Force-stop Bungee in Android Settings." }; locallyStopped = LocalSafety.isStopped(this@MainActivity); resume = false; stopService(Intent(this@MainActivity, TelemetryService::class.java)) }
+                            if (status.running) { runCatching { LocalSafety.setStopped(this@MainActivity, true) }.onFailure { error = "Stop could not be saved. Force-stop Bungee in Android Settings." }; locallyStopped = LocalSafety.isStopped(this@MainActivity); resume = false; cameraEnabled = false
+                                runCatching { ArmedCameraService.disarm(this@MainActivity) }.onFailure { error = "Camera cleanup failed; use local recovery or Android Settings." }
+                                stopService(Intent(this@MainActivity, TelemetryService::class.java)) }
                             else if (LocalSafety.isStopped(this@MainActivity)) startActivity(Intent(this@MainActivity, LocalRecoveryActivity::class.java))
                             else startSharing()
                         }, modifier = Modifier.fillMaxWidth().padding(top = 20.dp), shape = RoundedCornerShape(11.dp)) { Text(SharingControl.label(status.running, locallyStopped || LocalSafety.isStopped(this@MainActivity)), Modifier.padding(6.dp)) }
@@ -237,7 +271,7 @@ class MainActivity : FragmentActivity() {
                             }
                         }
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                        SettingRow("Resume after restart", "After first unlock; automatic GPS needs background location", resume) { enabled -> unlock {
+                        SettingRow("Resume after restart", "After first unlock; theft photos also keep the connection recoverable", resume) { enabled -> unlock {
                             if (enabled && locate && !backgroundLocation) { backgroundGuideForRestart = true; showBackgroundGuide = true }
                             else saveRestart(enabled)
                         } }
@@ -254,17 +288,19 @@ class MainActivity : FragmentActivity() {
                 }
                 Card(Modifier.fillMaxWidth().padding(top = 18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                     Column(Modifier.padding(18.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Outlined.PhotoCamera, null, Modifier.size(19.dp), tint = MaterialTheme.colorScheme.primary); Text("  Locally armed recovery camera", fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
+                        Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Outlined.PhotoCamera, null, Modifier.size(19.dp), tint = MaterialTheme.colorScheme.primary); Text("  Automatic theft photos", fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
                         Text(camera.detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
-                        Text("Optional · one front-camera attempt after three new failed PIN/password entries. No biometric guarantee. A visible camera service must be armed here again after app/process loss or reboot. Android camera privacy controls apply.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 8.dp))
-                        if (camera.armed) {
-                            Text("Encrypted pending photos: ${camera.pending}/3 · discarded at capacity: ${camera.dropped}", fontSize = 10.sp, modifier = Modifier.padding(top = 10.dp))
-                            Button(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { ArmedCameraService.disarm(this@MainActivity) } }.onFailure { error = "Camera disarmed; pending-photo cleanup failed. Use Android Settings to force-stop or clear Bungee storage." } } }, modifier = Modifier.padding(top = 12.dp)) { Text("Disarm camera") }
-                            TextButton(onClick = { unlock { locked = false; runCatching { ArmedCameraService.test(this@MainActivity) }.onFailure { error = it.message } } }) { Text("Take a labelled test photo") }
+                        Text("Enable once before the phone is lost. Three new failed PIN/password entries trigger one front-camera attempt while ready. Protection requests system restart after process loss. After reboot or force-stop, open Bungee once to resume automatically. Android camera privacy controls apply; biometric failures are not guaranteed.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 8.dp))
+                        if (!cameraGranted) TextButton(onClick = { cameraPermission.launch(Manifest.permission.CAMERA) }) { Text("Grant camera permission") }
+                        if (camera.armed || cameraEnabled) {
+                            if (camera.armed) Text("Encrypted pending photos: ${camera.pending}/3 · discarded at capacity: ${camera.dropped}", fontSize = 10.sp, modifier = Modifier.padding(top = 10.dp))
+                            else Text("Retained photos will be counted here when protection resumes.", fontSize = 10.sp, modifier = Modifier.padding(top = 10.dp))
+                            Button(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { ArmedCameraService.disarm(this@MainActivity) }; cameraEnabled = LocalSafety.isCameraEnabled(this@MainActivity) }.onFailure { error = "Camera disarmed; pending-photo cleanup failed. Use Android Settings to force-stop or clear Bungee storage." } } }, modifier = Modifier.padding(top = 12.dp)) { Text("Disarm camera") }
+                            TextButton(enabled = camera.armed, onClick = { unlock { locked = false; runCatching { ArmedCameraService.test(this@MainActivity) }.onFailure { error = it.message } } }) { Text("Take a labelled test photo") }
+                            if (!camera.armed) TextButton(onClick = { resumeCameraIfEnabled() }) { Text("Resume protection") }
                             Text("Test photos go to your server and share the five-minute/six-per-hour limit.", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         } else {
-                            if (!cameraGranted) TextButton(onClick = { cameraPermission.launch(Manifest.permission.CAMERA) }) { Text("Grant camera permission") }
-                            Button(onClick = { showCameraConsent = true }, enabled = commands && status.running && cameraGranted, modifier = Modifier.padding(top = 12.dp)) { Text("Review & arm locally") }
+                            Button(onClick = { showCameraConsent = true }, enabled = commands && status.running && cameraGranted, modifier = Modifier.padding(top = 12.dp)) { Text("Enable theft photos") }
                             Text("Needs sharing, household commands, camera, notifications and removable device administration. Disarming clears unsent photos; saved server photos need separate erasure.", fontSize = 9.sp, lineHeight = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
                         }
                     }
@@ -275,7 +311,7 @@ class MainActivity : FragmentActivity() {
                         Text("This build refuses device-owner operation and persistent policies. Android Settings remains available to deactivate administration, force-stop or uninstall Bungee on a personal phone. No wipe, credential change, app suspension, forced DNS or remote reboot is available.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp)
                     }
                 }
-                TextButton(onClick = { unlock(requireCredential = true) { startActivity(Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, ComponentName(this@MainActivity, BungeeAdminReceiver::class.java)).putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Optional removable screen locking and eligible failed-credential callbacks for the separately armed camera. No camera capture until locally armed. Locking needs your existing PIN/password afterward. No credential changes or wipe. Deactivate in Android Settings.")) } }, modifier = Modifier.padding(top = 9.dp)) {
+                TextButton(onClick = { unlock(requireCredential = true) { startActivity(Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, ComponentName(this@MainActivity, BungeeAdminReceiver::class.java)).putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Optional removable screen locking and eligible failed-credential callbacks for the separately armed camera. Camera protection needs separate one-time local approval. Locking needs your existing PIN/password afterward. No credential changes or wipe. Deactivate in Android Settings.")) } }, modifier = Modifier.padding(top = 9.dp)) {
                     Icon(Icons.Outlined.AdminPanelSettings, null, Modifier.size(17.dp)); Text("  Enable removable device administration", fontSize = 11.sp)
                 }
                 if (recovery != null) Card(Modifier.fillMaxWidth().padding(top = 15.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
@@ -323,9 +359,9 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }) { Text("Approve with phone unlock") } }, dismissButton = { TextButton(onClick = { showCommandConsent = false }) { Text("Keep commands off") } })
-        if (showCameraConsent) AlertDialog(onDismissRequest = { showCameraConsent = false }, title = { Text("Arm the recovery camera?") }, text = {
-            Text("While armed, Bungee may take one front-camera photo after three new failed device/profile PIN or password entries in a row. Android may refuse camera access; fingerprints and face failures are not guaranteed callbacks. A visible foreground notification and Android camera indicators remain. No root, shell bridge or provider is used.\n\nPhotos are resized, stripped of EXIF and kept in an encrypted queue of up to three, then sent only to your own Bungee server. Server copies remain until erased. At most one attempt per five minutes and six per hour, including manual tests.\n\nDisarm here, in the camera notification, through local recovery or Android Settings. Disarm clears unsent photos. After process loss, old pending photos cannot upload and are replaced when you rearm. Reboot also requires local rearming; the server cannot arm this feature.")
-        }, confirmButton = { TextButton(onClick = { showCameraConsent = false; unlock { locked = false; runCatching { ArmedCameraService.arm(this@MainActivity) }.onFailure { error = it.message ?: "Keep Bungee open and try arming again" } } }) { Text("Unlock & arm") } }, dismissButton = { TextButton(onClick = { showCameraConsent = false }) { Text("Keep disarmed") } })
+        if (showCameraConsent) AlertDialog(onDismissRequest = { showCameraConsent = false }, title = { Text("Enable automatic theft photos?") }, text = {
+            Text("Once enabled and ready, Bungee may take one front-camera photo after three new failed device/profile PIN or password entries in a row. Android may refuse camera access; fingerprints and face failures are not guaranteed callbacks. A visible foreground notification and Android camera indicators remain. No root, shell bridge or provider is used.\n\nPhotos are resized, stripped of EXIF and kept in an encrypted queue of up to three, then sent only to your own Bungee server. Server copies remain until erased. At most one attempt per five minutes and six per hour, including manual tests.\n\nYour choice stays enabled until you disarm. Android may restart the service after process loss; the failure streak, attempt budget and unsent photos survive that restart. This also permits automatic recovery of the home connection. Reboot, APK replacement or force-stop can leave camera protection unavailable until you open Bungee once; no new consent prompt is needed. The server cannot arm this feature.\n\nDisarm here or in the camera notification, stop through local recovery, or use Android Settings. Disarm and local stop clear unsent photos and prevent automatic camera resumption. Dismissing the notification alone does not disable protection.", modifier = Modifier.verticalScroll(rememberScrollState()))
+        }, confirmButton = { TextButton(onClick = { showCameraConsent = false; unlock { locked = false; runCatching { ArmedCameraService.enable(this@MainActivity); cameraEnabled = LocalSafety.isCameraEnabled(this@MainActivity) }.onFailure { error = it.message ?: "Keep Bungee open and try arming again" } } }) { Text("Enable with phone unlock") } }, dismissButton = { TextButton(onClick = { showCameraConsent = false }) { Text("Keep disarmed") } })
         if (showBackgroundGuide) AlertDialog(onDismissRequest = { showBackgroundGuide = false }, title = { Text("GPS after restart") }, text = {
             Text("Bungee records your GPS trail for your home server. To resume GPS after reboot and first unlock, Android requires Location → Allow all the time, with precise location enabled. This is optional and reversible in Android Settings. Without it, automatic restart can reconnect but GPS stays paused until you open Bungee and resume GPS. No data is available before the first unlock.")
         }, confirmButton = { TextButton(onClick = {
@@ -352,7 +388,7 @@ class MainActivity : FragmentActivity() {
                     withContext(Dispatchers.IO) { ManagementAgent.release(this@MainActivity); HomeTunnel.disconnect() }
                     identity.reset(); identity = Identity(this@MainActivity)
                     LocalSafety.setStopped(this@MainActivity, false)
-                    resume = false; enrolled = false; confirmReset = false
+                    resume = false; cameraEnabled = false; enrolled = false; confirmReset = false
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
                     error = "Unpairing did not finish. Use local recovery or Android Settings before trying again."

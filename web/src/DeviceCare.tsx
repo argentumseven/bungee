@@ -295,7 +295,7 @@ export function DeviceCare({
                     </strong>
                   </div>
                   <h3 className="delivery-heading">Locally armed camera</h3>
-                  <p className="fine">{report.camera ? `${report.camera.armed ? "Armed at last report" : "Disarmed at last report"} · ${time(report.camera.reported_at)}. ${report.camera.status}. Pending ${report.camera.pending}/3; discarded at capacity ${report.camera.dropped}.` : "Not reported by this app. Update the phone and arm locally if wanted."} An offline phone’s current state is unknown. The server cannot arm it.</p>
+                  <p className="fine">{report.camera ? `${report.camera.armed ? "Armed at last report" : "Not ready at last report"} · ${time(report.camera.reported_at)}. ${report.camera.status}. Pending ${report.camera.pending}/3; discarded at capacity ${report.camera.dropped}.` : "Not reported by this app. Update the phone and enable theft photos once if wanted."} An offline phone’s current state is unknown. Enable protection on the phone before it is lost; the server cannot arm it.</p>
                   <h3 className="delivery-heading">Delivery &amp; offline queue</h3>
                   {report.delivery ? (
                     <>

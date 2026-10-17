@@ -60,9 +60,11 @@ Physical GrapheneOS checks remain required: personal installation and removal; o
 
 Any future control that can outlive the app or remove a local recovery path must remain unavailable until its reversal, failure handling, update behavior and OS escape route are established. Short leases or a rollback timer alone are insufficient: an OS-persisted restriction can survive a broken app that never runs its timer.
 
-## Optional locally armed camera
+## Optional automatic theft photos
 
-The optional `camera` foreground service is started only from the visible app after explicit local consent and phone authentication, with camera/notification permission and removable ordinary administration. It creates no OS-persisted policy and has no boot, server or sticky restart path. Eligible failed-credential callbacks only notify an already armed in-process service. Camera access, captures, queue and uploads remain bounded and revocable; disarm is available in the app/notification, independent local recovery and Android Settings. Sharing stop or household-command withdrawal also disarms it. Queue cleanup errors do not prevent independent service stop or other recovery steps. An abrupt process loss cannot guarantee physical queue cleanup, but does remove armed authority; the next explicit arm replaces old queue state. Camera mode is not permission to change airplane mode. See [the exact limits and unperformed physical acceptance](RECOVERY_CONTROLS.md).
+The optional `camera` foreground service uses one locally authenticated, persistent opt-in. Initial starts and visible app resumption require an unlocked visible activity; system sticky restarts require an encrypted checkpoint from the same OS boot. Eligible failed-credential callbacks only notify an already live service. A boot receiver or server never starts camera protection. The app clearly reports when enabled protection is not ready, including the reboot/force-stop gap; opening the app resumes standing consent without a fresh dialog. No system policy, owner role or shell bridge is introduced.
+
+Disarm, local stop, command withdrawal and ordinary-administration deactivation disable camera recovery and independently clear its checkpoint and pending photos. Local recovery performs these steps without pairing keys, camera hardware or server availability, and continues other stop actions when cleanup fails. Clearing a saved stop does not restore camera consent. Unexpected process/connection-service loss preserves the opt-in and encrypted queue for permitted recovery; it does not override a withdrawal. Capture/send reservations remain subject to the privacy fence. Camera mode cannot change airplane mode. See [the lifecycle boundaries and unperformed physical acceptance](RECOVERY_CONTROLS.md).
 
 ## Server updates
 
@@ -74,7 +76,7 @@ Network callbacks, monotonic retries, independent GPS sampling and bounded uploa
 
 ## Restart location permission
 
-Automatic GPS recovery after first unlock requires precise and background location permission, explicitly granted through Android Settings, plus the independent restart opt-in. The grant is optional and can be revoked normally. Without it, automatic restart can reconnect in a connection-only foreground service and reports GPS paused; open Bungee and resume GPS from the visible screen. A blocked foreground-service start posts an attention notification when notifications are allowed. No identity or GPS access is promised before first unlock. Physical GrapheneOS cold-boot/lock/Doze acceptance is still open; see [the review follow-up](REVIEW-2026-10.md).
+Automatic GPS recovery after first unlock requires precise and background location permission, explicitly granted through Android Settings, plus the sharing restart opt-in or standing theft-photo opt-in. The grant is optional and can be revoked normally. Without it, automatic restart can reconnect in a connection-only foreground service and reports GPS paused; open Bungee and resume GPS from the visible screen. A blocked foreground-service start posts an attention notification when notifications are allowed. No identity or GPS access is promised before first unlock. Physical GrapheneOS cold-boot/lock/Doze acceptance is still open; see [the review follow-up](REVIEW-2026-10.md).
 
 ## Command consent and failed persistence (alpha.10)
 

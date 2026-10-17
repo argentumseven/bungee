@@ -67,9 +67,10 @@ class TelemetryService : Service() {
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (LocalSafety.isStopped(this) || ManagementAgent.isOwner(this)) { stopSelf(); return START_NOT_STICKY }
-        if (intent == null && !LocalSafety.isRestartAllowed(this)) { stopSelf(); return START_NOT_STICKY }
+        if (intent == null && !LocalSafety.isConnectionRestartAllowed(this)) { stopSelf(); return START_NOT_STICKY }
         if (intent?.action == "STOP") {
-            runCatching { LocalSafety.setStopped(this, true) }.onFailure { android.widget.Toast.makeText(this, "Stop could not be saved. Force-stop Bungee in Android Settings.", android.widget.Toast.LENGTH_LONG).show() }; stopSelf(); return START_NOT_STICKY
+            runCatching { LocalSafety.setStopped(this, true) }.onFailure { android.widget.Toast.makeText(this, "Stop could not be saved. Force-stop Bungee in Android Settings.", android.widget.Toast.LENGTH_LONG).show() }
+            runCatching { ArmedCameraService.disarm(this) }; stopSelf(); return START_NOT_STICKY
         }
         if (intent?.action == "STOP_RING") { stopRinging(); return START_NOT_STICKY }
         if (!identity.enrolled) { stopSelf(); return START_NOT_STICKY }
@@ -88,7 +89,7 @@ class TelemetryService : Service() {
             stopSelf(); return START_NOT_STICKY
         }
         updateLocationStatus()
-        if (worker?.isActive == true) return if (LocalSafety.isRestartAllowed(this)) START_STICKY else START_NOT_STICKY
+        if (worker?.isActive == true) return if (LocalSafety.isConnectionRestartAllowed(this)) START_STICKY else START_NOT_STICKY
         status.value = status.value.copy(running = true, connected = false, text = "Connecting to your household", nextRetryAt = null)
         // Sampling is independent: a long network timeout/backoff cannot suspend the GPS trail.
         sampler = scope.launch {
@@ -177,7 +178,7 @@ class TelemetryService : Service() {
                 }
             }
         }
-        return if (LocalSafety.isRestartAllowed(this)) START_STICKY else START_NOT_STICKY
+        return if (LocalSafety.isConnectionRestartAllowed(this)) START_STICKY else START_NOT_STICKY
     }
     private fun notification(): Notification {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
@@ -186,7 +187,8 @@ class TelemetryService : Service() {
         return NotificationCompat.Builder(this, "sharing").setSmallIcon(R.drawable.ic_bungee).setContentTitle("Bungee sharing is active")
             .setContentText(if (locationForeground) "GPS fixes queue locally until home is reachable" else "Connection active · open Bungee to resume GPS")
             .setContentIntent(open).setOngoing(true).setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-            .addAction(0, "Stop sharing", pause).addAction(0, "Stop sound", hush).build()
+            .addAction(NotificationCompat.Action.Builder(0, "Stop sharing", pause).setAuthenticationRequired(true).build())
+            .addAction(0, "Stop sound", hush).build()
     }
     private fun disclosureAllowed(epoch: String, command: Boolean) = canSample() && identity.gpsEpoch == epoch &&
         !LocalSafety.isStopped(this) && (!command || identity.allowCommands)
@@ -238,7 +240,7 @@ class TelemetryService : Service() {
         val data = JSONObject().put("battery", (level * 100 / scale.coerceAtLeast(1)).coerceIn(0, 100))
             .put("charging", battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0).put("device_owner", false)
             .put("capabilities", JSONArray(capabilities(this, identity))).put("photo_epoch", epoch).put("recovery_photo", photo)
-        val allowed = { ArmedCameraService.currentSession() == session && identity.enrolled && identity.allowCommands && identity.photoEpoch == epoch && !LocalSafety.isStopped(this) && elapsed() < deadline }
+        val allowed = { ArmedCameraService.currentSession() == session && LocalSafety.isCameraEnabled(this) && identity.enrolled && identity.allowCommands && identity.photoEpoch == epoch && !LocalSafety.isStopped(this) && elapsed() < deadline }
         val result = withContext(Dispatchers.IO) {
             DisclosureRequest(PrivacySends.fence, { Transport.reserveRequest() }, { Transport.cancelRequest(it) })
                 .exchange(stamp, allowed, { deadline - elapsed() }) { reservation, remaining ->
@@ -395,7 +397,9 @@ class TelemetryService : Service() {
         runCatching { player?.release() }
     }
     override fun onDestroy() {
-        runCatching { ArmedCameraService.disarm(this) }
+        // Unexpected connection-service teardown does not withdraw the camera's standing opt-in.
+        // A deliberate local stop still cancels capture and clears its queue independently.
+        if (LocalSafety.isStopped(this)) runCatching { ArmedCameraService.disarm(this) }
         if (watchingNetwork) runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(callback) }
         stopRinging(); scope.cancel()
         networkChanged.close()

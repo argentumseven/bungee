@@ -22,8 +22,11 @@ class BungeeAdminReceiver : DeviceAdminReceiver() {
     }
     override fun onPasswordSucceeded(context: Context, intent: Intent, user: UserHandle) {
         if (user != Process.myUserHandle() || LocalSafety.isStopped(context)) return
-        runCatching { val identity = Identity(context); val signals = identity.state("unlock"); signals.put("failed", 0); identity.saveState("unlock", signals) }
-        ArmedCameraService.passwordSucceeded()
+        runCatching {
+            val identity = Identity(context); val signals = identity.state("unlock")
+            signals.put("failed", 0); identity.saveState("unlock", signals)
+            ArmedCameraService.passwordSucceeded(context, identity)
+        }
     }
     override fun onDisabled(context: Context, intent: Intent) { runCatching { ArmedCameraService.disarm(context) } }
 }

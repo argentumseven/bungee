@@ -17,4 +17,18 @@ class LocalSafetyStateTest {
         assertThrows(IllegalArgumentException::class.java) { LocalSafetyState(stopped = true, restartAllowed = true) }
         assertThrows(IllegalStateException::class.java) { LocalSafetyState(stopped = true).allowRestart(true) }
     }
+    @Test fun cameraOptInKeepsItsConnectionRecoverableButStopWithdrawsBoth() {
+        val enabled = LocalSafetyState().allowCamera(true)
+        assertTrue(enabled.cameraEnabled); assertTrue(enabled.connectionRestartAllowed)
+        assertFalse(enabled.restartAllowed) // The independent sharing-only preference is unchanged.
+        val stopped = enabled.allowRestart(true).stop()
+        assertFalse(stopped.cameraEnabled); assertFalse(stopped.connectionRestartAllowed)
+        assertFalse(stopped.clearStop().cameraEnabled)
+        assertThrows(IllegalStateException::class.java) { stopped.allowCamera(true) }
+        assertThrows(IllegalArgumentException::class.java) { LocalSafetyState(stopped = true, cameraEnabled = true) }
+    }
+    @Test fun cameraDisarmDoesNotUndoAnIndependentSharingRestartChoice() {
+        assertFalse(LocalSafetyState().allowCamera(true).allowCamera(false).connectionRestartAllowed)
+        assertTrue(LocalSafetyState().allowRestart(true).allowCamera(true).allowCamera(false).connectionRestartAllowed)
+    }
 }

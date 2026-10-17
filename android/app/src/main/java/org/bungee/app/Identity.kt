@@ -93,6 +93,9 @@ class Identity(context: Context) {
                     check(!value || !LocalSafety.isStopped(appContext)) { "Use local recovery before enabling commands" }
                     commandPreference.write { prefs.edit().putBoolean(COMMAND_CONSENT, value).commit() }
                 }
+                // Close a concurrent local enable between the initial camera stop and
+                // the command-consent commit. A later enable now sees commands disabled.
+                if (!value && LocalSafety.isCameraEnabled(appContext)) ArmedCameraService.disarm(appContext)
                 cameraFailure?.let { throw it }
             }
             catch (e: Exception) {
@@ -119,7 +122,10 @@ class Identity(context: Context) {
             }
         } }
     }
-    fun beginPhotoSession(session: String) = synchronized(PhotoOutbox.lock) { saveState("armed_photos", PhotoOutbox.empty(session)) }
+    fun resumePhotoSession(session: String) = synchronized(PhotoOutbox.lock) {
+        val previous = state("armed_photos")
+        saveState("armed_photos", if (previous.length() == 0) PhotoOutbox.empty(session) else previous.put("session", session))
+    }
     fun queuePhoto(photo: JSONObject, session: String, epoch: String, stamp: DisclosureFence.Stamp, allowed: () -> Boolean) = PrivacySends.fence.checked(stamp, allowed) {
         synchronized(PhotoOutbox.lock) {
             check(photoEpoch == epoch)
@@ -133,9 +139,9 @@ class Identity(context: Context) {
         val state = state("armed_photos")
         if (state.optString("session") != session) null else state.optJSONArray("records")?.optJSONObject(0)
     }
-    fun photoQueueReport(session: String): Pair<Int, Long> = synchronized(PhotoOutbox.lock) {
+    fun photoQueueReport(session: String? = null): Pair<Int, Long> = synchronized(PhotoOutbox.lock) {
         val state = state("armed_photos")
-        if (state.optString("session") != session) 0 to 0L else (state.optJSONArray("records")?.length() ?: 0) to state.optLong("dropped")
+        if (session != null && state.optString("session") != session) 0 to 0L else (state.optJSONArray("records")?.length() ?: 0) to state.optLong("dropped")
     }
     fun acknowledgePhoto(id: String, session: String, stamp: DisclosureFence.Stamp, allowed: () -> Boolean) = PrivacySends.fence.checked(stamp, allowed) {
         synchronized(PhotoOutbox.lock) {
