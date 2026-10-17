@@ -103,9 +103,7 @@ const online = (d: Device) =>
 function Brand() {
   return (
     <div className="brand">
-      <span className="brand-mark">
-        <Radio size={23} strokeWidth={2.4} />
-      </span>
+      <img className="brand-mark" src="/bungee-mark.png" width="48" height="48" alt="" aria-hidden="true" />
       bungee<span className="brand-dot">.</span>
     </div>
   );
@@ -518,7 +516,7 @@ function App() {
                   label="Your data belongs to"
                   value="You."
                   note="No external map requests"
-                  color="purple"
+                  color="accent"
                 />
               </section>
               <div className="dashboard-grid">
@@ -1487,12 +1485,12 @@ function HistoryView({ device }: { device: Device }) {
             role="img"
             aria-label="Saved GPS trail, longitude horizontally and latitude vertically"
           >
-            <rect width="700" height="260" rx="12" fill="#f2f0f8" />
+            <rect width="700" height="260" rx="12" fill="var(--soft)" />
             {[1, 2, 3, 4].map((n) => (
               <path
                 key={n}
                 d={`M${n * 140} 20V240 M20 ${n * 50}H680`}
-                stroke="#ded7ec"
+                stroke="var(--border)"
                 strokeWidth="0.6"
               />
             ))}
@@ -1500,18 +1498,18 @@ function HistoryView({ device }: { device: Device }) {
               x="350"
               y="253"
               textAnchor="middle"
-              fill="#8e7da7"
+              fill="var(--muted)"
               fontSize="8"
             >
               LONGITUDE →
             </text>
-            <text x="16" y="18" fill="#8e7da7" fontSize="8">
+            <text x="16" y="18" fill="var(--muted)" fontSize="8">
               LATITUDE ↑
             </text>
             <polyline
               points={points.map(xy).join(" ")}
               fill="none"
-              stroke="#8771bd"
+              stroke="var(--accent)"
               strokeWidth="2"
             />
             {points.map((p) => {
@@ -1525,8 +1523,8 @@ function HistoryView({ device }: { device: Device }) {
                   className={chosen?.observed_at === p.observed_at ? "selected" : undefined}
                   fill={
                     chosen?.observed_at === p.observed_at
-                      ? "#47316d"
-                      : "#a18bc8"
+                      ? "var(--text)"
+                      : "var(--accent)"
                   }
                 >
                   <title>

@@ -53,7 +53,7 @@ Outside Docker, `BUNGEE_GEODATA_DIR` names the directory Rust reads. Missing fil
 
 ## Dashboard and erasure
 
-Overview shows the last GPS point and a separate **Connection address / Approximate IP location** card. Purple indicates GPS, amber indicates GeoIP. **Show IP estimate** focuses the approximate area without overwriting GPS. Pan/zoom uses only the home server. An unavailable tile displays local-coverage status and never triggers a public-provider request. Without a basemap, markers/coordinates remain available on a neutral background.
+Overview shows the last GPS point and a separate **Connection address / Approximate IP location** card. Rose indicates GPS, amber indicates GeoIP. **Show IP estimate** focuses the approximate area without overwriting GPS. Pan/zoom uses only the home server. An unavailable tile displays local-coverage status and never triggers a public-provider request. Without a basemap, markers/coordinates remain available on a neutral background.
 
 History retains the existing GPS recurrence controls and adds **IP observations & GeoIP**: from/to filters, every-N-minute or daily-at-time lookup, pagination, point selection, approximate-area map and CSV containing the original GeoIP snapshot. IP estimates never join the GPS trail. Lines between GPS samples still do not establish a continuous route.
 

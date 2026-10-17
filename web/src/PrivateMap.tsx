@@ -91,12 +91,12 @@ export function PrivateMap({
     const gps = points.map((p) => L.latLng(p.latitude, p.longitude));
     const trail = L.featureGroup().addTo(m);
     if (gps.length > 1)
-      L.polyline(gps, { color: "#7862ad", weight: 3 }).addTo(trail);
+      L.polyline(gps, { color: "#df2c65", weight: 3 }).addTo(trail);
     points.forEach((p) => {
       const isSelected = p.observed_at === selected?.observed_at;
       L.circleMarker([p.latitude, p.longitude], {
-        color: "#544078",
-        fillColor: "#9279c8",
+        color: "#89113f",
+        fillColor: "#fb3779",
         fillOpacity: 1,
         radius: isSelected ? 7 : 4,
         weight: 2,
@@ -111,7 +111,7 @@ export function PrivateMap({
     if (selected?.accuracy)
       L.circle([selected.latitude, selected.longitude], {
         radius: selected.accuracy,
-        color: "#7862ad",
+        color: "#df2c65",
         weight: 1,
         fillOpacity: 0.08,
       }).addTo(m);
@@ -162,7 +162,7 @@ export function PrivateMap({
         aria-label={label}
       />
       <div className="private-map-key">
-        <span>● GPS</span>
+        <span className="gps-key">● GPS</span>
         <span className="ip-key">◌ Approximate IP area</span>
         {network?.geoip?.latitude != null && (
           <button

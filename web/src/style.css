@@ -5,22 +5,22 @@
   font-synthesis: none;
   font-weight: 400;
   color-scheme: light;
-  --text: #252b35;
-  --background: #f7f8fa;
+  --text: #30222b;
+  --background: #fff8fa;
   --surface: #ffffff;
-  --soft: #f3f4f8;
-  --border: #e2e5ed;
-  --muted: #616b7b;
-  --subtle: #616b7b;
-  --secondary: #515b6c;
-  --purple: #6550c5;
-  --primary: #6550c5;
-  --primary-hover: #5742b7;
+  --soft: #faf0f4;
+  --border: #eadae2;
+  --muted: #6f5b68;
+  --subtle: #6f5b68;
+  --secondary: #5f4956;
+  --accent: #c51353;
+  --primary: #c51353;
+  --primary-hover: #ad1049;
   --on-primary: #ffffff;
-  --accent-soft: #eeebfb;
-  --accent-border: #dcd5f3;
-  --accent-hover: #f4f1fb;
-  --accent-selected: #eee9fb;
+  --accent-soft: #fde8ef;
+  --accent-border: #ecc2d1;
+  --accent-hover: #fceff4;
+  --accent-selected: #fbe3ec;
   --green: #347554;
   --success-soft: #edf5f0;
   --success-border: #d7e6dc;
@@ -34,36 +34,36 @@
   --danger: #9e4343;
   --danger-soft: #fff1ef;
   --danger-border: #efcfcb;
-  --field: #fdfdff;
-  --focus: #9680e2;
+  --field: #fffcfd;
+  --focus: #a61a4e;
   --map-background: #edf0e9;
   --map-muted: #5f705c;
   --glass: #ffffffd9;
-  --avatar: #e7e0d9;
-  --avatar-text: #775f51;
-  --story: #edeaf5;
-  --story-line: #d8d2e9;
-  --story-ring: #e8e4f0;
-  --story-text: #3f3658;
+  --avatar: #f1dce5;
+  --avatar-text: #805267;
+  --story: #fbe6ef;
+  --story-line: #e7bcca;
+  --story-ring: #f6dde7;
+  --story-text: #482433;
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --text: #e7e9f2;
-  --background: #10141e;
-  --surface: #191f2c;
-  --soft: #212938;
-  --border: #303a4e;
-  --muted: #a5afc3;
-  --subtle: #98a3ba;
-  --secondary: #c1c6d6;
-  --purple: #baa7ff;
-  --primary: #b8a4ff;
-  --primary-hover: #c8b8ff;
-  --on-primary: #211839;
-  --accent-soft: #2c2742;
-  --accent-border: #4c4068;
-  --accent-hover: #29263e;
-  --accent-selected: #312b49;
+  --text: #f5edf2;
+  --background: #141216;
+  --surface: #1e1a20;
+  --soft: #282229;
+  --border: #40323d;
+  --muted: #b9a9b5;
+  --subtle: #b3a2b0;
+  --secondary: #d5c5cf;
+  --accent: #ff92b6;
+  --primary: #ff8db3;
+  --primary-hover: #ffa7c5;
+  --on-primary: #35111f;
+  --accent-soft: #3b2431;
+  --accent-border: #6c3b50;
+  --accent-hover: #35232c;
+  --accent-selected: #462735;
   --green: #92d0ae;
   --success-soft: #1d302b;
   --success-border: #345248;
@@ -77,37 +77,37 @@
   --danger: #ffaca5;
   --danger-soft: #39272d;
   --danger-border: #70434a;
-  --field: #131a26;
-  --focus: #c5b4ff;
+  --field: #171318;
+  --focus: #ffaac9;
   --map-background: #1c2830;
   --map-muted: #a7b8ae;
-  --glass: #191f2ce8;
-  --avatar: #3c3540;
-  --avatar-text: #e5c9b8;
-  --story: #1b192c;
-  --story-line: #3a3252;
-  --story-ring: #211e35;
-  --story-text: #eeebfa;
+  --glass: #1e1a20e8;
+  --avatar: #45313c;
+  --avatar-text: #ffd2dc;
+  --story: #21151d;
+  --story-line: #4d2a3c;
+  --story-ring: #2b1b25;
+  --story-text: #fff0f6;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     color-scheme: dark;
-    --text: #e7e9f2;
-    --background: #10141e;
-    --surface: #191f2c;
-    --soft: #212938;
-    --border: #303a4e;
-    --muted: #a5afc3;
-    --subtle: #98a3ba;
-    --secondary: #c1c6d6;
-    --purple: #baa7ff;
-    --primary: #b8a4ff;
-    --primary-hover: #c8b8ff;
-    --on-primary: #211839;
-    --accent-soft: #2c2742;
-    --accent-border: #4c4068;
-    --accent-hover: #29263e;
-    --accent-selected: #312b49;
+    --text: #f5edf2;
+    --background: #141216;
+    --surface: #1e1a20;
+    --soft: #282229;
+    --border: #40323d;
+    --muted: #b9a9b5;
+    --subtle: #b3a2b0;
+    --secondary: #d5c5cf;
+    --accent: #ff92b6;
+    --primary: #ff8db3;
+    --primary-hover: #ffa7c5;
+    --on-primary: #35111f;
+    --accent-soft: #3b2431;
+    --accent-border: #6c3b50;
+    --accent-hover: #35232c;
+    --accent-selected: #462735;
     --green: #92d0ae;
     --success-soft: #1d302b;
     --success-border: #345248;
@@ -121,17 +121,17 @@
     --danger: #ffaca5;
     --danger-soft: #39272d;
     --danger-border: #70434a;
-    --field: #131a26;
-    --focus: #c5b4ff;
+    --field: #171318;
+    --focus: #ffaac9;
     --map-background: #1c2830;
     --map-muted: #a7b8ae;
-    --glass: #191f2ce8;
-    --avatar: #3c3540;
-    --avatar-text: #e5c9b8;
-    --story: #1b192c;
-    --story-line: #3a3252;
-    --story-ring: #211e35;
-    --story-text: #eeebfa;
+    --glass: #1e1a20e8;
+    --avatar: #45313c;
+    --avatar-text: #ffd2dc;
+    --story: #21151d;
+    --story-line: #4d2a3c;
+    --story-ring: #2b1b25;
+    --story-text: #fff0f6;
   }
 }
 * {
@@ -162,7 +162,7 @@ textarea {
 button {
   transition: transform 0.15s;
 }
-a { color: var(--purple); }
+a { color: var(--accent); }
 button:not(:disabled):active {
   transform: translateY(1px);
 }
@@ -215,16 +215,14 @@ small {
   gap: 9px;
 }
 .brand-mark {
-  display: grid;
-  place-items: center;
-  width: 35px;
-  height: 35px;
-  background: var(--primary);
-  color: var(--on-primary);
-  border-radius: 11px;
+  display: block;
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  flex-shrink: 0;
 }
 .brand-dot {
-  color: var(--purple);
+  color: var(--accent);
   margin-left: -9px;
 }
 .sidebar > .brand {
@@ -245,7 +243,7 @@ small {
   height: 32px;
   background: var(--accent-soft);
   border-radius: 8px;
-  color: var(--purple);
+  color: var(--accent);
   display: grid;
   place-items: center;
 }
@@ -260,7 +258,7 @@ small {
 }
 .household > svg {
   margin-left: auto;
-  color: var(--purple);
+  color: var(--accent);
 }
 .nav-label,
 .subtle {
@@ -288,7 +286,7 @@ small {
 }
 .nav-item.active {
   background: var(--accent-soft);
-  color: var(--purple);
+  color: var(--accent);
   font-weight: 650;
 }
 .nav-item:hover {
@@ -463,7 +461,7 @@ small {
 .eyebrow {
   font-size: 9px;
   letter-spacing: 1.8px;
-  color: var(--purple);
+  color: var(--accent);
   font-weight: 650;
   margin-bottom: 12px;
 }
@@ -489,7 +487,7 @@ h1 {
   gap: 8px;
   font-weight: 550;
   font-size: 11px;
-  box-shadow: 0 3px 5px #6a57d517;
+  box-shadow: 0 3px 5px #c5135318;
   white-space: nowrap;
 }
 .primary:hover {
@@ -531,9 +529,9 @@ h1 {
   background: var(--success-soft);
   color: var(--green);
 }
-.stat-icon.purple {
+.stat-icon.accent {
   background: var(--accent-soft);
-  color: var(--purple);
+  color: var(--accent);
 }
 .stat-label {
   font-size: 11px;
@@ -576,7 +574,7 @@ h1 {
   white-space: nowrap;
 }
 .panel-heading h2 > svg {
-  color: var(--purple);
+  color: var(--accent);
 }
 .panel-heading > svg {
   color: var(--subtle);
@@ -620,7 +618,7 @@ h1 {
   height: 45px;
   border-radius: 8px;
   background: var(--accent-soft);
-  color: var(--purple);
+  color: var(--accent);
 }
 .device-text {
   min-width: 0;
@@ -668,7 +666,7 @@ h1 {
   width: 65px;
   height: 67px;
   margin: 0 auto 14px;
-  color: var(--purple);
+  color: var(--accent);
 }
 .phone-illustration > span {
   position: absolute;
@@ -698,7 +696,7 @@ h1 {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  color: var(--purple);
+  color: var(--accent);
   background: none;
   font-size: 10px;
   font-weight: 550;
@@ -790,7 +788,7 @@ h1 {
   padding: 10px 13px;
   font-size: 11px;
   max-width: 90%;
-  color: var(--purple);
+  color: var(--accent);
 }
 .map-pin {
   display: grid;
@@ -801,7 +799,7 @@ h1 {
   border: 1px solid var(--surface);
   border-radius: 50%;
   margin-top: 15px;
-  color: var(--purple);
+  color: var(--accent);
   box-shadow: 0 0 0 18px #9882db18;
 }
 .coordinates {
@@ -854,7 +852,7 @@ h1 {
   height: 48px;
   background: var(--accent-soft);
   border-radius: 13px;
-  color: var(--purple);
+  color: var(--accent);
   display: grid;
   place-items: center;
   flex-shrink: 0;
@@ -864,7 +862,7 @@ h1 {
   height: 32px;
   border-radius: 8px;
   background: var(--soft);
-  color: var(--purple);
+  color: var(--accent);
 }
 .lower-grid {
   display: grid;
@@ -896,7 +894,7 @@ h1 {
   width: 32px;
   height: 32px;
   background: var(--accent-soft);
-  color: var(--purple);
+  color: var(--accent);
   border-radius: 8px;
   margin-bottom: 13px;
 }
@@ -946,7 +944,7 @@ h1 {
   place-items: center;
   border-radius: 8px;
   background: var(--accent-soft);
-  color: var(--purple);
+  color: var(--accent);
 }
 .receipt.success {
   background: var(--success-soft);
@@ -1199,7 +1197,7 @@ textarea::placeholder {
   padding: 28px;
 }
 .settings-card > svg {
-  color: var(--purple);
+  color: var(--accent);
   margin-bottom: 20px;
 }
 .settings-card h2 {
@@ -1221,7 +1219,7 @@ textarea::placeholder {
   margin: 20px 0;
 }
 .settings-card code {
-  color: var(--purple);
+  color: var(--accent);
   font-size: 11px;
 }
 .notice {
@@ -1324,7 +1322,7 @@ textarea::placeholder {
 }
 .login-story h1 em {
   font-style: normal;
-  color: var(--purple);
+  color: var(--accent);
 }
 .login-story p {
   color: var(--muted);
@@ -1717,8 +1715,8 @@ textarea::placeholder {
     font-size: 23px;
   }
   .login-story > .brand .brand-mark {
-    width: 29px;
-    height: 29px;
+    width: 38px;
+    height: 38px;
   }
   .login-story h1 {
     font-size: 29px;
@@ -1951,7 +1949,7 @@ select {
   flex: 0 0 19px;
   width: 19px;
   height: 19px;
-  accent-color: var(--purple);
+  accent-color: var(--accent);
   padding: 0;
   margin: 0;
 }
@@ -2091,6 +2089,7 @@ select {
 .private-map .leaflet-tooltip-right:before { border-right-color: var(--border); }
 .private-map-key, .private-map-status, .map-attribution { display: flex; flex-wrap: wrap; gap: 12px; padding: 8px 14px; font-size: 10px; color: var(--secondary); line-height: 1.6; }
 .private-map-key { background: var(--soft); align-items: center; }
+.private-map-key .gps-key { color: var(--accent); }
 .private-map-key .ip-key { color: var(--warning); }
 .private-map-key button { margin-left: auto; border: 1px solid var(--warning-border); border-radius: 6px; padding: 4px 8px; background: var(--warning-soft); color: var(--warning); font-size: 10px; cursor: pointer; }
 .private-map-status { color: var(--success-muted); }
@@ -2110,8 +2109,8 @@ select {
 .history-trail > rect { fill: var(--soft); }
 .history-trail > path { stroke: var(--border); }
 .history-trail > text { fill: var(--muted); }
-.history-trail > polyline { stroke: var(--purple); }
-.history-trail > circle { fill: var(--purple); }
+.history-trail > polyline { stroke: var(--accent); }
+.history-trail > circle { fill: var(--accent); }
 .history-trail > circle.selected { fill: var(--text); }
 @media (max-width: 600px) {
   .appearance-control { margin-right: 4px; padding-left: 8px; }

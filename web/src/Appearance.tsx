@@ -19,7 +19,7 @@ function applyAppearance(appearance: Appearance) {
     : appearance;
   document.documentElement.dataset.theme = resolved;
   document.querySelector('meta[name="theme-color"]')
-    ?.setAttribute("content", resolved === "dark" ? "#10141e" : "#f7f8fa");
+    ?.setAttribute("content", resolved === "dark" ? "#141216" : "#fff8fa");
 }
 // Apply a saved choice before React renders either the sign-in or dashboard.
 applyAppearance(readAppearance());

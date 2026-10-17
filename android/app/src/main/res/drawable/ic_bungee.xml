@@ -1,1 +1,7 @@
-<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="48dp" android:height="48dp" android:viewportWidth="48" android:viewportHeight="48"><path android:fillColor="#6A57D5" android:pathData="M12,0h24a12,12 0,0 1,12 12v24a12,12 0,0 1,-12 12h-24a12,12 0,0 1,-12 -12v-24a12,12 0,0 1,12 -12"/><path android:strokeColor="#FFFFFF" android:strokeWidth="2.5" android:strokeLineCap="round" android:fillColor="#00000000" android:pathData="M17,15a13,13 0,0 0,0 18M31,15a13,13 0,0 1,0 18M20,19a7,7 0,0 0,0 10M28,19a7,7 0,0 1,0 10"/><path android:fillColor="#FFFFFF" android:pathData="M24,21a3,3 0,1 0,0 6a3,3 0,0 0,0 -6"/></vector>
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android notification icons use the mark's alpha silhouette, without a colored tile. -->
+<bitmap xmlns:android="http://schemas.android.com/apk/res/android"
+    android:src="@drawable/bungee_mark"
+    android:filter="true"
+    android:gravity="fill"
+    android:tint="#FFFFFFFF" />

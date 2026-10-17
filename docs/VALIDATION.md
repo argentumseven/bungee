@@ -1,6 +1,6 @@
 # Validation of installation, updates and reversibility
 
-This record separates automated results, fixture scope and physical-device checks. The exact supported-mode contract and excluded actions are in [SAFETY.md](SAFETY.md). Version 1.0.1 adds appearance controls while preserving the alpha.11 transport and recovery behavior.
+This record separates automated results, fixture scope and physical-device checks. The exact supported-mode contract and excluded actions are in [SAFETY.md](SAFETY.md). Version 1.0.2 updates branding and themes while preserving the alpha.11 transport and recovery behavior.
 
 | Check | Evidence / result |
 | --- | --- |
@@ -10,7 +10,7 @@ This record separates automated results, fixture scope and physical-device check
 | Android debug | APK builds and lint passes with nonfatal warnings. 38 JUnit tests pass: backlog behavior, forbidden policy rejection, cleanup continuation/order when a policy action or local-stop persistence fails, stop/restart-consent transitions including stale opt-in invalidation; jitter/backoff/batch bounds; conservative elapsed-time deadlines; bounded persistent receipt reservations/settlement; future-fix filtering |
 | Android optimized release | R8-minified unsigned release compiles and release lint passes. No production signing key is configured; this artifact is not a published installable production release |
 | APK manifest | Merged APK inspected: separate recovery launcher present; both owner-provisioning activities disabled; unused library VpnService absent. Ordinary administration requests force-lock/watch-login only |
-| APK integrity | Debug APK signature and ZIP 16-KiB alignment checked. Rebuilt ARM64/x86_64 Go ELF PT_LOAD alignment checked at 16 KiB; package version 1.0.1/code 13; optional background-location permission present |
+| APK integrity | Debug APK signature and ZIP 16-KiB alignment checked. Rebuilt ARM64/x86_64 Go ELF PT_LOAD alignment checked at 16 KiB; package version 1.0.2/code 14; optional background-location permission present |
 | Native WireGuard | Alpha.11 native code/AAR rebuilt: 2 real loopback peer/protocol/boundary tests with 3 additional reservation/deadline subcases pass under Go race detection, including wrong-PSK failure, cancellation before/during send, a short deadline and peer stop. This does not prove Android routing, background behavior or coexistence |
 | Container boundary | All three current images build. Actual isolated Docker network test passes: default new egress and Docker DNS blocked, only a selected legacy private resolver IP/port allowed, trusted hybrid HTTPS reaches non-root/zero-capability/read-only Rust |
 | Caddy TLS | Unchanged pinned issuer/group configuration previously passed local-CA/hybrid TLS checks and rejection of classical/TLS1.2. Current container-boundary test also establishes trusted hybrid HTTPS |
@@ -82,3 +82,10 @@ The dashboard and Android app now offer System, Light and Dark. The browser suit
 TypeScript/Vite and the locked Rust build pass. Android debug and optimized release builds, both lint checks and all 38 existing JVM tests pass; lint reports no errors and retains nonfatal warnings. The signed debug APK reports 1.0.1/code 13 and passes signature and 16-KiB ZIP alignment checks. All 24 host tests pass. No native transport, API, ownership, permission or recovery policy changed. Android recovery reads only the separate cosmetic preference and platform resources before constructing its existing offline controls. Native Android appearance, OS transitions and accessibility still need physical-device verification.
 
 Earlier container/network/TLS/rollback evidence above remains historical; those checks were not repeated for this appearance update. No stable release tag or update-channel promotion is created by this source change.
+
+
+## Version 1.0.2 branding verification
+
+The supplied pink home/location artwork is prepared as a transparent local asset and used by the dashboard, favicon and Android header/launcher. Android 12 uses the full-color adaptive icon; Android 13+ also supplies its alpha silhouette for launcher-selected themed colors. Notifications use the same silhouette tinted by Android. The foreground inset keeps the opaque artwork inside the circular launcher mask by a pixel-geometry check; this is not an on-device rendering test. Both palettes use rose accents with blush light surfaces or warm charcoal dark surfaces. GPS markers/trails are rose; IP estimates remain amber and status/error colors remain distinct.
+
+All nine dark dashboard screenshots are refreshed with the new artwork. TypeScript/Vite and locked Rust builds, 16 browser checks (including both palettes' tested text contrast, theme persistence and no provider requests), 24 host tests and 38 Android JVM tests pass. Android debug/optimized release builds and both lint checks pass with nonfatal warnings. The monochrome-icon warning concerns the Android 12 fallback resource; the API-33 override with a monochrome layer is verified in the APK. The debug APK reports 1.0.2/code 14, retains the prior debug signing certificate and passes signature/16-KiB ZIP alignment checks. The static brand files are readable by the non-root server. The earlier container/network/TLS evidence is unchanged; no stable tag or update-channel promotion is created. Physical GrapheneOS launcher, notification and appearance acceptance remains to be performed.
