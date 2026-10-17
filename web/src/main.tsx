@@ -43,6 +43,7 @@ import {
 } from "./PrivateMap";
 import { DeviceCare } from "./DeviceCare";
 import { AppearanceControl, useAppearance } from "./Appearance";
+import { RecoveryMessagePreview } from "./RecoveryMessagePreview";
 
 type Location = {
   latitude: number;
@@ -643,8 +644,8 @@ function App() {
                       },
                       {
                         kind: "ring",
-                        name: "Play a sound",
-                        desc: "Make it easier to find",
+                        name: "Sound alarm",
+                        desc: "Up to 30 sec · alarm volume",
                         icon: BellRing,
                       },
                       {
@@ -681,6 +682,12 @@ function App() {
                       </button>
                     ))}
                   </div>
+                  <p className="alarm-note">Alarm loudness follows the phone’s alarm volume and interruption settings. Stop it here or from Bungee’s phone notification.</p>
+                  <details className="alarm-preview">
+                    <summary>Preview alarm sound</summary>
+                    <audio controls preload="none" src="/recovery-siren.wav" aria-label="Two-second siren preview" />
+                    <p>Your browser plays one two-second cycle. The phone repeats it for up to 30 seconds at its own alarm volume. Older APKs use the earlier alarm tone.</p>
+                  </details>
                   {device && (
                     <div className="secondary-actions">
                       <button
@@ -954,7 +961,7 @@ function App() {
       {modal && (
         <div className="modal-backdrop" onClick={close}>
           <section
-            className="modal"
+            className={modal === "message" ? "modal message-modal" : "modal"}
             role="dialog"
             aria-modal="true"
             aria-labelledby="modal-title"
@@ -1019,8 +1026,8 @@ function App() {
             {modal === "enroll" && bundle && (
               <>
                 <p>
-                  Scan this with Bungee on the phone, approve the VPN, then
-                  confirm enrollment. This invitation expires in 10 minutes. It
+                  Scan this with Bungee on the phone, review the sharing
+                  consent and choose Agree &amp; pair. This invitation expires in 10 minutes. It
                   contains a long-lived preshared key. Use a trusted local
                   administrator connection and keep the QR private.
                 </p>
@@ -1065,15 +1072,17 @@ function App() {
             )}
             {modal === "message" && (
               <form
+                className="message-composer"
                 onSubmit={(e) => {
                   e.preventDefault();
                   void send("message", message);
                 }}
               >
+                <div className="message-editor">
                 <p>
-                  A visible notification for {device?.name}. It leaves the
-                  phone’s unlock controls accessible. Android’s lock-screen
-                  privacy settings still apply.
+                  A high-priority notification for {device?.name}. It can appear
+                  as a heads-up banner or on the lock screen when Android allows it.
+                  Unlock controls stay available.
                 </p>
                 <label htmlFor="recovery-message">Recovery message</label>
                 <textarea
@@ -1090,6 +1099,9 @@ function App() {
                   <MessageSquare size={17} />
                   Queue message
                 </button>
+                <p className="fine">Up to 240 characters. You can clear the message remotely; the phone can dismiss it after local unlock. Notification permission and privacy settings still apply.</p>
+                </div>
+                <RecoveryMessagePreview message={message} />
               </form>
             )}
             {modal === "clear_location" && (

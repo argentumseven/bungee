@@ -13,8 +13,8 @@ import org.bungee.transport.Transport
 import android.location.LocationManager
 import android.net.ConnectivityManager
 import android.net.Network
-import android.media.AudioManager
-import android.media.ToneGenerator
+import android.media.AudioAttributes
+import android.media.MediaPlayer
 import android.os.*
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -31,7 +31,7 @@ class TelemetryService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private lateinit var identity: Identity
     private var worker: Job? = null
-    private var tone: ToneGenerator? = null
+    private var alarm: MediaPlayer? = null
     private var ringJob: Job? = null
     private var sampler: Job? = null
     private data class Observation(val point: JSONObject, val epoch: String, val stamp: DisclosureFence.Stamp)
@@ -294,7 +294,26 @@ class TelemetryService : Service() {
                         upload(api, fix, commandId = id, deadline = deadline, expires = expires)
                         "Fresh GPS accepted by home; expiry checked at commit"
                     }
-                    "ring" -> { identity.ifCommandsAllowed { LocalSafety.ifAllowed(this) { startRinging() } }; "Sound started for up to 30 seconds" }
+                    "ring" -> {
+                        // Preparing local audio does not hold the consent/stop locks or start playback.
+                        var prepared: MediaPlayer? = null
+                        try {
+                            // Assignment inside the block also permits cleanup on prompt coroutine cancellation.
+                            withContext(Dispatchers.IO) {
+                                prepared = MediaPlayer.create(this@TelemetryService, R.raw.recovery_siren,
+                                    AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM)
+                                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build(), 0)
+                                    ?: error("Alarm audio could not be prepared")
+                            }
+                            val ready = checkNotNull(prepared)
+                            identity.ifCommandsAllowed { LocalSafety.ifAllowed(this) {
+                                check(elapsed() < deadline && api.clock.upperNow(elapsed()) < expires) { "Alarm request expired" }
+                                startRinging(ready)
+                            } }
+                            prepared = null // Playback/service cleanup now owns the resource.
+                        } finally { runCatching { prepared?.release() } }
+                        "Siren started for up to 30 seconds at the phone's alarm volume"
+                    }
                     "stop_ringing" -> { identity.ifCommandsAllowed { stopRinging() }; "Sound stopped" }
                     "message" -> identity.ifCommandsAllowed {
                         val text = command.getJSONObject("payload").getString("message").take(240)
@@ -318,18 +337,27 @@ class TelemetryService : Service() {
         withContext(Dispatchers.IO) { identity.saveResult(id, receipt, expires) }
         sendReceipt(api, receipt)
     }
-    private fun startRinging() {
+    private fun startRinging(prepared: MediaPlayer) {
         stopRinging()
-        tone = ToneGenerator(AudioManager.STREAM_ALARM, 100)
+        alarm = prepared
+        prepared.setOnErrorListener { failed, _, _ -> if (alarm === failed) stopRinging(); true }
+        prepared.setOnCompletionListener { completed -> if (alarm === completed) stopRinging() }
+        // The file itself ends at 30 seconds; an app-side timer is not the sole bound.
+        try { prepared.isLooping = false; prepared.start() }
+        catch (e: Exception) { stopRinging(); throw e }
         ringJob = scope.launch {
             repeat(30) {
                 if (!identity.allowCommands || LocalSafety.isStopped(this@TelemetryService)) { stopRinging(); return@launch }
-                tone?.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 700); delay(1000)
+                delay(1000)
             }
             stopRinging()
         }
     }
-    private fun stopRinging() { ringJob?.cancel(); ringJob = null; tone?.release(); tone = null }
+    private fun stopRinging() {
+        ringJob?.cancel(); ringJob = null
+        val player = alarm; alarm = null
+        runCatching { player?.release() }
+    }
     override fun onDestroy() {
         if (watchingNetwork) runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(callback) }
         stopRinging(); scope.cancel()

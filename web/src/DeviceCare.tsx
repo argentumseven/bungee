@@ -8,6 +8,7 @@ import {
   Globe,
 } from "lucide-react";
 import { api } from "./api";
+import { RecoveryMessagePreview } from "./RecoveryMessagePreview";
 
 type Policy = {
   managed_dns: boolean;
@@ -232,6 +233,10 @@ export function DeviceCare({
                 Android permissions still apply. Sirens remain short-lived
                 commands.
               </p>
+              <details className="message-preview-details">
+                <summary>Preview recovery message</summary>
+                <RecoveryMessagePreview message={draft.recovery_message} lost />
+              </details>
               <div className="notice">
                 Device-owner enrollment and persistent controls are disabled.
                 This build cannot enforce DNS/always-on, suspend apps, prevent

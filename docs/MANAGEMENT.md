@@ -6,6 +6,8 @@ Current builds enforce the [reversibility contract](SAFETY.md). Device-owner enr
 
 GPS/check-in history, recurring history lookup/export, bounded encrypted GPS backlog, sound/stop sound, recovery notifications, lost-mode contact intent and optional ordinary device-admin locking remain. Failed-credential reports depend on Android eligibility and do not count every biometric failure. App lock uses the phone's existing credential. Bungee changes no credentials or lock complexity.
 
+The updated finder alarm uses a bounded 30-second siren at the phone's alarm volume. Recovery messages remain Android notifications, with illustrative previews in the web message/lost-mode editors. Automatic failed-unlock photos are not implemented; an armed camera foreground-service design needs separate physical GrapheneOS verification. See [recovery behavior, camera limits and feasible additions](RECOVERY_CONTROLS.md).
+
 The separate **Bungee recovery** launcher works offline without pairing keys. Authenticate locally, stop controls, review cleanup results and use Android app/security settings if needed. The saved local stop survives process/boot/update and prevents automatic reconnect. Clearing it starts no sharing; a manual start is still required. Personal installs remain removable through normal Android administration deactivation and uninstall.
 
 Managed system DNS/always-on, selected-app suspension, uninstall prevention, forced lock requirements, settings restrictions and remote reboot are unavailable. Their API policy fields are rejected by server and phone. There is no root, wipe, credential reset, kiosk mode, USB/ADB block, bootloader modification or silent OS enrollment.

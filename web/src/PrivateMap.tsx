@@ -91,12 +91,12 @@ export function PrivateMap({
     const gps = points.map((p) => L.latLng(p.latitude, p.longitude));
     const trail = L.featureGroup().addTo(m);
     if (gps.length > 1)
-      L.polyline(gps, { color: "#df2c65", weight: 3 }).addTo(trail);
+      L.polyline(gps, { color: "#4d8797", weight: 3 }).addTo(trail);
     points.forEach((p) => {
       const isSelected = p.observed_at === selected?.observed_at;
       L.circleMarker([p.latitude, p.longitude], {
-        color: "#89113f",
-        fillColor: "#fb3779",
+        color: "#234d60",
+        fillColor: "#79b5c0",
         fillOpacity: 1,
         radius: isSelected ? 7 : 4,
         weight: 2,
@@ -111,7 +111,7 @@ export function PrivateMap({
     if (selected?.accuracy)
       L.circle([selected.latitude, selected.longitude], {
         radius: selected.accuracy,
-        color: "#df2c65",
+        color: "#4d8797",
         weight: 1,
         fillOpacity: 0.08,
       }).addTo(m);

@@ -413,6 +413,32 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await assertTheme("dark");
   });
   await screenshot("dashboard");
+  await t.test("message previews stay local and show both Android notification placements", async () => {
+    const commandsBefore = await page.evaluate(async () => (await (await fetch("/api/devices")).json()).commands.map((c) => c.id));
+    await page.getByRole("button", { name: /Leave a message/ }).click();
+    const preview = page.getByRole("figure", { name: "Illustrative recovery notification preview" });
+    const message = page.getByLabel("Recovery message", { exact: true });
+    const markup = '<img src="https://example.invalid/photo" onerror="alert(1)">';
+    await message.fill(markup);
+    await preview.getByText(markup, { exact: true }).waitFor();
+    assert.equal(await preview.locator("img").count(), 1, "message content must remain plain text");
+    await message.fill("This phone is lost. Please call +1 202 555 0142 to arrange its safe return. Thank you.");
+    await preview.getByRole("button", { name: "Heads-up", exact: true }).click();
+    await preview.getByText("Your app stays open", { exact: true }).waitFor();
+    await preview.getByRole("button", { name: "Lock screen", exact: true }).click();
+    await preview.getByText("Unlock as usual", { exact: true }).waitFor();
+    await assertTheme("dark");
+    await page.getByRole("dialog").screenshot({ path: "docs/screenshots/message-preview.png", animations: "disabled" });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await preview.scrollIntoViewIfNeeded();
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await preview.screenshot({ path: "docs/screenshots/notification-preview.png", animations: "disabled" });
+    const commandsAfter = await page.evaluate(async () => (await (await fetch("/api/devices")).json()).commands.map((c) => c.id));
+    assert.deepEqual(commandsAfter, commandsBefore, "preview controls must not queue a phone command");
+    await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+    await page.setViewportSize({ width: 1440, height: 1050 });
+    await page.evaluate(() => scrollTo(0, 0));
+  });
   await t.test(
     "device care exposes reversible recovery and no persistent management or reboot controls",
     async () => {
@@ -514,7 +540,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
   await t.test(
     "offered commands are not labeled as confirmed delivery",
     async () => {
-      await page.getByRole("button", { name: /Play a sound/ }).click();
+      await page.getByRole("button", { name: /Sound alarm/ }).click();
       const offered = await phoneRequest("/v1/commands", {});
       assert.equal(offered.commands[0].kind, "ring");
       await page.getByText("Offered · awaiting receipt", {exact:true}).waitFor();
