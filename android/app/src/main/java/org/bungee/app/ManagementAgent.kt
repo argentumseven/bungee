@@ -15,10 +15,15 @@ import org.json.JSONObject
 
 /** This build cannot create owner restrictions. The only owner mutations below remove legacy policy. */
 object ManagementAgent {
-    fun isOwner(context: Context) = context.getSystemService(DevicePolicyManager::class.java).isDeviceOwnerApp(context.packageName)
+    fun role(context: Context) = ManagementRole.inspect(
+        { context.getSystemService(DevicePolicyManager::class.java).isDeviceOwnerApp(context.packageName) },
+        { context.getSystemService(DevicePolicyManager::class.java).isProfileOwnerApp(context.packageName) }
+    )
+    fun blocksPersonalOperation(context: Context) = role(context).blocksOperation
     private fun admin(context: Context) = ComponentName(context, BungeeAdminReceiver::class.java)
     @Synchronized fun report(context: Context, identity: Identity): JSONObject {
         val dpm = context.getSystemService(DevicePolicyManager::class.java)
+        val role = role(context)
         val state = identity.state("management")
         val signals = identity.state("unlock")
         val attempts = if (identity.allowCommands) runCatching { dpm.currentFailedPasswordAttempts }.getOrNull() else null
@@ -30,12 +35,12 @@ object ManagementAgent {
             JSONObject().put("armed", camera.armed).put("pending", queue.first).put("dropped", queue.second)
                 .put("status", camera.detail.take(80)).put("reported_at", System.currentTimeMillis()/1000)
         }.getOrDefault(JSONObject.NULL) // A broken photo queue must not block ordinary reporting.
-        return JSONObject().put("owner", isOwner(context)).put("consent", false)
+        return JSONObject().put("owner", role == ManagementRole.DEVICE_OWNER || role == ManagementRole.PROFILE_OWNER).put("consent", false)
             .put("camera", cameraReport)
             .put("delivery", identity.backlogReport().put("reported_at", System.currentTimeMillis()/1000).put("gps_access", TelemetryService.status.value.gpsAccess))
             .put("recovery_consent", identity.allowCommands && !LocalSafety.isStopped(context)).put("revision", state.optLong("revision", 0))
-            .put("dns_active", false).put("always_on", isOwner(context) && runCatching { dpm.getAlwaysOnVpnPackage(admin(context)) == context.packageName }.getOrDefault(false))
-            .put("uninstall_blocked", isOwner(context) && runCatching { dpm.isUninstallBlocked(admin(context), context.packageName) }.getOrDefault(false))
+            .put("dns_active", false).put("always_on", role == ManagementRole.DEVICE_OWNER && runCatching { dpm.getAlwaysOnVpnPackage(admin(context)) == context.packageName }.getOrDefault(false))
+            .put("uninstall_blocked", role == ManagementRole.DEVICE_OWNER && runCatching { dpm.isUninstallBlocked(admin(context), context.packageName) }.getOrDefault(false))
             .put("protection_active", false).put("strong_lock_required", false).put("blocked_apps", JSONArray())
             .put("lost_mode_active", state.optBoolean("lost_mode_active") && identity.allowCommands)
             .put("errors", state.optJSONArray("errors") ?: JSONArray())
@@ -46,7 +51,7 @@ object ManagementAgent {
             .put("failed_unlocks", attempts?.coerceAtLeast(0) ?: 0).put("last_failed_at", if (identity.allowCommands) signals.opt("last_failed_at") ?: JSONObject.NULL else JSONObject.NULL)
     }
     @Synchronized fun apply(context: Context, identity: Identity, revision: Long, json: JSONObject) {
-        check(!LocalSafety.isStopped(context) && !isOwner(context)) { "Local recovery is required before sharing" }
+        check(!LocalSafety.isStopped(context) && !blocksPersonalOperation(context)) { "Local recovery is required before sharing" }
         require(revision >= 0)
         val policy = DevicePolicy.parse(json)
         val dpm = context.getSystemService(DevicePolicyManager::class.java)
@@ -89,7 +94,9 @@ object ManagementAgent {
         val dpm = context.getSystemService(DevicePolicyManager::class.java)
         val component = admin(context)
         val actions = mutableListOf<Pair<String, () -> Unit>>()
-        if (isOwner(context)) {
+        val role = role(context)
+        if (role == ManagementRole.PROFILE_OWNER || role == ManagementRole.UNKNOWN) return listOf(checkNotNull(role.removalNotice))
+        if (role == ManagementRole.DEVICE_OWNER) {
             actions += "Old always-on policy could not be cleared." to { if (dpm.getAlwaysOnVpnPackage(component) == context.packageName) dpm.setAlwaysOnVpnPackage(component, null, false) }
             actions += "Old uninstall protection could not be cleared." to { dpm.setUninstallBlocked(component, context.packageName, false) }
             actions += "Old password-complexity requirement could not be cleared. The actual PIN is never changed." to { dpm.requiredPasswordComplexity = DevicePolicyManager.PASSWORD_COMPLEXITY_NONE }
@@ -109,13 +116,17 @@ object ManagementAgent {
                 actions += "Old app records could not be read. Preserve the original identity/signing key for recovery." to { error("Existing recovery records unavailable") }
             }
         } else {
-            actions += "Device administration could not be deactivated. Deactivate Bungee in Android Settings." to { if (dpm.isAdminActive(component)) dpm.removeActiveAdmin(component) }
+            actions += "Device administration is still active or deactivation is pending. Wait, check administration status, or deactivate Bungee in Android Settings." to {
+                check(AdminDeactivation.request({ dpm.isAdminActive(component) }, { dpm.removeActiveAdmin(component) }))
+            }
         }
         // Quarantine was persisted by local recovery first. This sequence only removes known policy.
         return RecoveryCoordinator.run({}, actions)
     }
     @Synchronized fun release(context: Context) {
+        check(!blocksPersonalOperation(context)) { "Device/profile ownership must be resolved before unpairing" }
         val errors = releaseLegacy(context)
         check(errors.isEmpty()) { errors.joinToString("; ") }
+        check(!blocksPersonalOperation(context)) { "Management status changed; preserve the identity" }
     }
 }

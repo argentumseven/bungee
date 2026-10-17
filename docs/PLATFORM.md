@@ -14,7 +14,7 @@ Bungee installs as a removable personal app. Optional ordinary device administra
 | Boot camera recovery | Separate opt-in and Display over other apps grant; visible startup activity after first unlock | One launch attempt per boot/app version; force-stop can require manual launch. See [setup](RECOVERY_CONTROLS.md) |
 | App lock | Existing Android strong biometric/device credential, FLAG_SECURE | Sharing continues in the background; recovery has a separate entry |
 | Local recovery | Android-view launcher, saved stop, independent cleanup and Settings links | Works without pairing keys; cannot remove legacy Android ownership reliably or repair OS/hardware faults |
-| Device-owner MDM | Disabled | Provisioning cancels; the client refuses owner operation |
+| Device/profile-owner MDM | Disabled | Provisioning cancels; both owner roles and failed role queries block normal operation |
 | Persistent DNS, always-on VPN, app suspension and settings restrictions | Disabled on server/client | Earlier DNS summaries remain readable/erasable; new enforcement is rejected |
 | Airplane-mode cycle | Unavailable through official app/MDM grants | Direct two-way changes need protected system networking authority. See [API analysis](AIRPLANE_MODE.md) |
 | Reboot, power-off, wipe, credential reset and kiosk | Unavailable | Old queued reboots are rejected; no firmware/root/bootloader changes |

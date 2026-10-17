@@ -29,18 +29,22 @@ object HomeTunnel {
         require(psk.matches(Regex("[A-Za-z0-9+/]{43}=")) && Base64.decode(psk, Base64.NO_WRAP).any { it != 0.toByte() }) { "A unique 256-bit preshared key is required" }
         require(wg.getString("server_public_key").matches(Regex("[A-Za-z0-9+/]{43}="))) { "Invalid server key" }
         check(!LocalSafety.isStopped(context)) { "Bungee is stopped locally" }
-        check(!ManagementAgent.isOwner(context)) { "Release legacy device ownership before using Bungee" }
+        check(!ManagementAgent.blocksPersonalOperation(context)) { "Open Bungee recovery. Device/profile ownership is unsupported" }
         val parameters = wg.toString()
         if (state == Tunnel.State.UP && appContained && activeParameters == parameters) { activeOwner = owner; return }
         disconnect()
-        Transport.configure(JSONObject().put("address", wg.getString("address")).put("endpoint", endpoint)
-            .put("private_key", identity.wgPrivate).put("public_key", wg.getString("server_public_key"))
-            .put("preshared_key", psk).toString())
-        appContained = true; state = Tunnel.State.UP; activeParameters = parameters; activeOwner = owner
+        RecoveryConnection.current.open(
+            { !LocalSafety.isStopped(context) && !ManagementAgent.blocksPersonalOperation(context) },
+            { Transport.configure(JSONObject().put("address", wg.getString("address")).put("endpoint", endpoint)
+                .put("private_key", identity.wgPrivate).put("public_key", wg.getString("server_public_key"))
+                .put("preshared_key", psk).toString()) },
+            { disconnect() },
+            { appContained = true; state = Tunnel.State.UP; activeParameters = parameters; activeOwner = owner }
+        )
     }
     @Synchronized fun disconnectOwned(owner: Any) { if (activeOwner === owner) disconnect() }
     @Synchronized fun disconnect() {
         try { Transport.stop() }
-        finally { appContained = false; state = Tunnel.State.DOWN; activeParameters = null; activeOwner = null }
+        finally { RecoveryConnection.current.clear(); appContained = false; state = Tunnel.State.DOWN; activeParameters = null; activeOwner = null }
     }
 }

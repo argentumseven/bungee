@@ -78,7 +78,7 @@ class MainActivity : FragmentActivity() {
         appearance = AppearancePreference.read(this)
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        if (LocalSafety.isStopped(this) || ManagementAgent.isOwner(this)) {
+        if (LocalSafety.isStopped(this) || ManagementAgent.blocksPersonalOperation(this)) {
             startActivity(Intent(this, LocalRecoveryActivity::class.java)); finish(); return
         }
         try { identity = Identity(this); identity.recoveryMessage } catch (_: Exception) {
@@ -101,7 +101,7 @@ class MainActivity : FragmentActivity() {
             .onFailure { error = "Open Android Settings → Apps → Special app access → Display over other apps → Bungee." }
     }
     private fun resumeCameraIfEnabled() {
-        if (!::identity.isInitialized || !LocalSafety.isCameraEnabled(this) || LocalSafety.isStopped(this) || ManagementAgent.isOwner(this)) return
+        if (!::identity.isInitialized || !LocalSafety.isCameraEnabled(this) || LocalSafety.isStopped(this) || ManagementAgent.blocksPersonalOperation(this)) return
         if (!identity.enrolled || !identity.allowCommands || getSystemService(KeyguardManager::class.java).isDeviceLocked) return
         if (cameraResumeJob?.isActive == true) return
         cameraResumeJob = scope.launch {
@@ -132,7 +132,7 @@ class MainActivity : FragmentActivity() {
     }
     private fun pair(text: String) {
         try {
-            check(!LocalSafety.isStopped(this) && !ManagementAgent.isOwner(this)) { "Open Bungee recovery before pairing" }
+            check(!LocalSafety.isStopped(this) && !ManagementAgent.blocksPersonalOperation(this)) { "Open Bungee recovery before pairing" }
             require(text.length <= 8192) { "Invitation is too large" }
             val bundle = JSONObject(text)
             require(bundle.getLong("expires") > 0) { "Invalid invitation expiry" }
@@ -168,7 +168,7 @@ class MainActivity : FragmentActivity() {
         }
     }
     private fun startSharing() {
-        if (LocalSafety.isStopped(this) || ManagementAgent.isOwner(this)) { error = "Open Bungee recovery before restarting. Device-owner operation is not supported."; return }
+        if (LocalSafety.isStopped(this) || ManagementAgent.blocksPersonalOperation(this)) { error = "Open Bungee recovery before restarting. Device/profile ownership is not supported."; return }
         val needed = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
         if (Build.VERSION.SDK_INT >= 33) needed.add(Manifest.permission.POST_NOTIFICATIONS)
         permissions.launch(needed.toTypedArray())
@@ -242,7 +242,7 @@ class MainActivity : FragmentActivity() {
                         status.nextRetryAt?.let { Text("Next retry around ${java.text.DateFormat.getTimeInstance().format(java.util.Date(it))}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp) }
                         status.lastSent?.let { Text("Last check-in · ${java.text.DateFormat.getTimeInstance().format(java.util.Date(it))}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, modifier = Modifier.padding(top = 16.dp)) }
                         Button(onClick = {
-                            if (status.running) { runCatching { LocalSafety.setStopped(this@MainActivity, true) }.onFailure { error = "Stop could not be saved. Force-stop Bungee in Android Settings." }; locallyStopped = LocalSafety.isStopped(this@MainActivity); resume = false; cameraEnabled = false
+                            if (status.running) { runCatching { LocalSafety.setStopped(this@MainActivity, true) }.onFailure { error = "Stop could not be saved. Deactivate Bungee administration, then force-stop it in Android Settings." }; locallyStopped = LocalSafety.isStopped(this@MainActivity); resume = false; cameraEnabled = false
                                 runCatching { ArmedCameraService.disarm(this@MainActivity) }.onFailure { error = "Camera cleanup failed; use local recovery or Android Settings." }
                                 stopService(Intent(this@MainActivity, TelemetryService::class.java)) }
                             else if (LocalSafety.isStopped(this@MainActivity)) startActivity(Intent(this@MainActivity, LocalRecoveryActivity::class.java))
@@ -273,7 +273,7 @@ class MainActivity : FragmentActivity() {
                                 } catch (e: Exception) {
                                     if (e is CancellationException) throw e
                                     commands = identity.allowCommands
-                                    error = "Command consent or message cleanup failed. Force-stop Bungee in Android Settings before restarting."
+                                    error = "Command consent or message cleanup failed. Deactivate Bungee administration, then force-stop it in Android Settings before restarting."
                                 }
                             }
                         }
@@ -316,7 +316,7 @@ class MainActivity : FragmentActivity() {
                         if (camera.armed || cameraEnabled) {
                             if (camera.armed) Text("Encrypted pending photos: ${camera.pending}/3 · discarded at capacity: ${camera.dropped}", fontSize = 10.sp, modifier = Modifier.padding(top = 10.dp))
                             else Text("Retained photos will be counted here when protection resumes.", fontSize = 10.sp, modifier = Modifier.padding(top = 10.dp))
-                            Button(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { ArmedCameraService.disarm(this@MainActivity) }; cameraEnabled = LocalSafety.isCameraEnabled(this@MainActivity) }.onFailure { error = "Camera disarmed; pending-photo cleanup failed. Use Android Settings to force-stop or clear Bungee storage." } } }, modifier = Modifier.padding(top = 12.dp)) { Text("Disarm camera") }
+                            Button(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { ArmedCameraService.disarm(this@MainActivity) }; cameraEnabled = LocalSafety.isCameraEnabled(this@MainActivity) }.onFailure { error = "Camera disarmed; pending-photo cleanup failed. Use Bungee recovery or Android security settings to finish cleanup." } } }, modifier = Modifier.padding(top = 12.dp)) { Text("Disarm camera") }
                             TextButton(enabled = camera.armed, onClick = { unlock { locked = false; runCatching { ArmedCameraService.test(this@MainActivity) }.onFailure { error = it.message } } }) { Text("Take a labelled test photo") }
                             if (!camera.armed) TextButton(onClick = { resumeCameraIfEnabled() }) { Text("Resume protection") }
                             Text("Test photos go to your server and share the five-minute/six-per-hour limit.", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -375,7 +375,7 @@ class MainActivity : FragmentActivity() {
                     catch (e: Exception) {
                         if (e is CancellationException) throw e
                         commands = identity.allowCommands
-                        error = "Command consent was not saved. Sharing was asked to stop; use Android force-stop before restarting."
+                        error = "Command consent was not saved. Sharing was asked to stop; deactivate Bungee administration, then force-stop it in Android Settings before restarting."
                     }
                 }
             }
@@ -409,14 +409,14 @@ class MainActivity : FragmentActivity() {
             Column { Text("Pairing connects this phone to the selected server. When sharing is active, location and battery reports go to that server. GPS history stays there until erased or the device is revoked. Up to 10,080 unsent GPS fixes are encrypted on this phone. Recovery commands stay off until you approve them separately.", fontSize = 12.sp, lineHeight = 20.sp); OutlinedTextField(value = pairingText, onValueChange = { pairingText = it }, label = { Text("Enrollment invitation") }, modifier = Modifier.fillMaxWidth().padding(top = 16.dp), minLines = 4); error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 11.sp) } }
         }, confirmButton = { TextButton(onClick = { pair(pairingText) }, enabled = !busy) { Text("Agree & pair") } }, dismissButton = { TextButton(onClick = { showPairing = false }, enabled = !busy) { Text("Cancel") } })
         if (confirmReset) AlertDialog(onDismissRequest = { confirmReset = false }, title = { Text("Unpair this phone?") }, text = { Text("This erases local keys and stops sharing. Also revoke this device on the server to erase its location history and remove the peer.") }, confirmButton = { TextButton(onClick = { unlock {
-            if (ManagementAgent.isOwner(this@MainActivity)) { error = "Use Bungee recovery first. Do not discard the identity while device ownership remains."; return@unlock }
+            if (ManagementAgent.blocksPersonalOperation(this@MainActivity)) { error = "Use Bungee recovery first. Do not discard the identity while device ownership remains."; return@unlock }
             scope.launch {
                 try {
                     val stopped = runCatching { LocalSafety.setStopped(this@MainActivity, true) }
                     stopService(Intent(this@MainActivity, TelemetryService::class.java))
                     ArmedCameraService.disarm(this@MainActivity)
                     stopped.getOrThrow()
-                    withContext(Dispatchers.IO) { ManagementAgent.release(this@MainActivity); HomeTunnel.disconnect() }
+                    withContext(Dispatchers.IO) { ManagementAgent.release(this@MainActivity); RecoveryConnection.current.stop() }
                     identity.reset(); identity = Identity(this@MainActivity)
                     LocalSafety.setStopped(this@MainActivity, false)
                     resume = false; cameraEnabled = false; enrolled = false; confirmReset = false

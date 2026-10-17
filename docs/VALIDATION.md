@@ -2,26 +2,29 @@
 
 This record covers automated checks and their limits. Physical GrapheneOS testing and an independent security audit are pending. The [device procedure](RECOVERY_CONTROLS.md#physical-device-checks) covers camera/boot acceptance; [SAFETY.md](SAFETY.md) covers local recovery and removal.
 
-## Version 1.1.3
+## Version 1.1.4
 
-This version edits app/dashboard text and documentation, corrects stale camera/enrollment descriptions, fixes sign-in text wrapping and refreshes dark-mode screenshots. Permissions, protocols and device-control behavior are unchanged.
+This version closes the ownership/removal and pairing-stop gaps in [REMOVAL_AUDIT.md](REMOVAL_AUDIT.md). Android permission declarations, native transport code and server protocols are unchanged. The app checks device/profile ownership and failed role queries, confirms asynchronous administration removal, cancels control requests during local stop, closes pairing-only peers and expires stale camera-start approvals.
 
 | Check | Result |
 | --- | --- |
-| Rust | Formatting, Clippy for all targets with warnings denied, locked build and 13 unit tests pass |
-| API | 99 reported tests pass, no failures/skips. Covers signatures/replay, enrollment, privacy/erasure, legacy DNS, geography, exports, source identity, command outcomes and photos |
-| Web | TypeScript/Vite build and 18 reported browser tests pass, no failures/skips. Updated accessible-label assertions retain login, recovery, history, gallery, session and mobile checks |
-| Android | Debug and R8-minified unsigned release build; both lint checks pass with nonfatal warnings and no errors. 62 JVM tests pass without failures/errors/skips |
-| Host helpers | 24 tests pass: ports/prefixes, no-write/no-network plan, release metadata, update constraints, download/storage failures, recovery ordering and dataset/endpoint behavior |
-| APK | Version 1.1.3/code 19; debug signature continuity and 16-KiB ZIP alignment checked. Manifest permissions/components match 1.1.2 |
-| Screenshots | Thirteen refreshed dark-mode browser screenshots. No browser runtime errors or third-party requests observed. Map/photo/DNS fixtures are synthetic; notification previews are illustrations |
-| Containers | All three images build. The Rust image runs as UID 10001 with read-only root, no capabilities, no new privileges and no external network; health/version, session, protected photo routes and matching dashboard/assets checked |
+| Rust | Formatting, all-target Clippy with warnings denied, locked build and 13 unit tests pass |
+| API | 99 reported tests pass, no failures/skips |
+| Web | TypeScript/Vite build and 18 reported browser tests pass, no failures/skips. Thirteen dark browser screenshots regenerated |
+| Android | Debug and R8-minified unsigned release build; both lint checks pass with nonfatal warnings and no errors. 76 JVM tests pass without failures/errors/skips |
+| New regression coverage | Fourteen cases: owner roles/query failure, asynchronous/silent-refusal deactivation, interrupted cleanup, pairing-only peer stop, stop/re-enable during connection creation, close/publication failures and camera approval expiry/replacement/replay |
+| Native | Real loopback request/peer cancellation and protocol tests rerun under Go race detection |
+| Host helpers | 24 tests pass |
+| APK | Version 1.1.4/code 20; debug signature continuity, 16-KiB ZIP alignment and unchanged manifest permissions/components checked |
+| Containers | All three images build using a verified offline Cargo cache after the cloud proxy denied a crate download. Isolated UID-10001/read-only/zero-capability/no-new-privileges/no-network Rust smoke checks health/version, session, photo authorization and matching dashboard/assets |
+
+Version 1.1.3 rewrote interface copy and documentation, corrected stale camera/enrollment descriptions and fixed sign-in text wrapping. Its API/browser/host/Rust checks also passed; Android had 62 JVM tests. The 1.1.4 suite retains those checks.
 
 The debug APK is installable with its development signer. The optimized release artifact is unsigned; no production key is configured. CI debug signers can differ from the persistent local development signer.
 
 ## Android policy coverage
 
-The 62 JVM tests exercise production policy/coordinator code, including:
+The 76 JVM tests exercise production policy/coordinator code, including:
 
 - GPS backlog bounds, future-point filtering, transactional journal insert/acknowledgement/deduplication and migration failure handling. Journal tests use real host SQLite through JDBC; they do not exercise Android flash or Keystore hardware.
 - Consent write/read failures, process vetoes, app-lock persistence, forbidden-policy rejection and independent cleanup after exceptions.
@@ -39,7 +42,7 @@ These tests do not establish camera availability while locked, actual Android se
 
 ## Earlier network and update checks
 
-The following implementations are unchanged in 1.1.3. Results are from earlier runs and were not repeated for this copy edit.
+Except for the native race tests rerun above, the following evidence is from earlier network/update runs. Those implementations are unchanged in 1.1.4.
 
 | Area | Earlier evidence |
 | --- | --- |
@@ -85,3 +88,9 @@ Physical GrapheneOS work includes locked/background camera capture, real credent
 The development host cannot create a kernel WireGuard interface or complete a real deployment. Full systemd boot/power-loss recovery, ARM64 execution, physical roaming and home routing remain unverified. Old device-owner removal is neither guaranteed nor phone-tested; new owner creation/operation is disabled.
 
 No real household data or physical device is used in automated fixtures. No stable release tag or automatic-update promotion is created by this source change.
+
+## Verification interruptions in 1.1.4
+
+The first full API run stalled in the CSV erasure check: it registered its close listener after awaiting erasure, so an already-closed paused stream could leave the test waiting forever. Cancellation listeners now register before logout/erase, preserve the incomplete-stream assertions and have a five-second failure timeout. The focused export checks and complete suite were rerun.
+
+The normal container build received HTTP 403 for a locked crate from the development proxy. A temporary build stage was seeded with 204 cached crate archives verified against Cargo.lock SHA-256 checksums and compiled offline. TLS/checksum checks and dependencies were unchanged; the repository Dockerfile was not modified. The runtime container smoke uses that resulting binary and current dashboard.

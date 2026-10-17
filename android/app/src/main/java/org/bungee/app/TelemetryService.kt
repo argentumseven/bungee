@@ -44,7 +44,7 @@ class TelemetryService : Service() {
         }
     }
     private var locationForeground = false
-    private fun canSample() = identity.allowLocate && hasLocation(this) && locationForeground
+    private fun canSample() = identity.allowLocate && hasLocation(this) && locationForeground && !ManagementAgent.blocksPersonalOperation(this)
     private fun updateLocationStatus() {
         status.value = status.value.copy(gpsAccess = LocationAccess.describe(hasLocation(this), hasBackgroundLocation(this), identity.allowLocate, locationForeground))
     }
@@ -62,7 +62,7 @@ class TelemetryService : Service() {
     override fun onBind(intent: Intent?) = null
     override fun onCreate() {
         super.onCreate()
-        if (LocalSafety.isStopped(this) || ManagementAgent.isOwner(this)) { stopSelf(); return }
+        if (LocalSafety.isStopped(this) || ManagementAgent.blocksPersonalOperation(this)) { stopSelf(); return }
         identity = Identity(this)
         val cm = getSystemService(ConnectivityManager::class.java)
         network = runCatching { cm.activeNetwork }.getOrNull()
@@ -77,10 +77,10 @@ class TelemetryService : Service() {
         CameraBootRecovery.resumePending(this)
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (LocalSafety.isStopped(this) || ManagementAgent.isOwner(this)) { stopSelf(); return START_NOT_STICKY }
+        if (LocalSafety.isStopped(this) || ManagementAgent.blocksPersonalOperation(this)) { stopSelf(); return START_NOT_STICKY }
         if (intent == null && !LocalSafety.isConnectionRestartAllowed(this)) { stopSelf(); return START_NOT_STICKY }
         if (intent?.action == "STOP") {
-            runCatching { LocalSafety.setStopped(this, true) }.onFailure { android.widget.Toast.makeText(this, "Stop could not be saved. Force-stop Bungee in Android Settings.", android.widget.Toast.LENGTH_LONG).show() }
+            runCatching { LocalSafety.setStopped(this, true) }.onFailure { android.widget.Toast.makeText(this, "Stop could not be saved. Deactivate Bungee administration, then force-stop it in Android Settings.", android.widget.Toast.LENGTH_LONG).show() }
             runCatching { ArmedCameraService.disarm(this) }; stopSelf(); return START_NOT_STICKY
         }
         if (intent?.action == "STOP_RING") { stopRinging(); return START_NOT_STICKY }
@@ -104,7 +104,7 @@ class TelemetryService : Service() {
         status.value = status.value.copy(running = true, connected = false, text = "Connecting to your household", nextRetryAt = null)
         // Sampling is independent: a long network timeout/backoff cannot suspend the GPS trail.
         sampler = scope.launch {
-            while (isActive && !LocalSafety.isStopped(this@TelemetryService)) {
+            while (isActive && !LocalSafety.isStopped(this@TelemetryService) && !ManagementAgent.blocksPersonalOperation(this@TelemetryService)) {
                 val nextSample = elapsed() + 60_000
                 try {
                     updateLocationStatus()
@@ -121,7 +121,7 @@ class TelemetryService : Service() {
             var nextTelemetry = 0L
             var nextPhotoAttempt = 0L
             while (isActive) {
-                if (LocalSafety.isStopped(this@TelemetryService)) { stopSelf(); break }
+                if (LocalSafety.isStopped(this@TelemetryService) || ManagementAgent.blocksPersonalOperation(this@TelemetryService)) { stopSelf(); break }
                 if (networkChanged.tryReceive().isSuccess) {
                     withContext(Dispatchers.IO) { HomeTunnel.disconnectOwned(tunnelOwner) }
                     retry.networkChanged(elapsed())
@@ -319,7 +319,7 @@ class TelemetryService : Service() {
         if (ReceiptOutbox.confirmed(response)) withContext(Dispatchers.IO) { identity.settleReceipt(receipt.getString("id")) }
     }
     private suspend fun execute(api: HomeApi, command: JSONObject, deadline: Long) {
-        if (LocalSafety.isStopped(this) || ManagementAgent.isOwner(this)) return
+        if (LocalSafety.isStopped(this) || ManagementAgent.blocksPersonalOperation(this)) return
         val id = command.getString("id")
         val old = identity.result(id)
         if (old != null) { sendReceipt(api, old); return }
@@ -415,7 +415,10 @@ class TelemetryService : Service() {
         if (watchingUnlock) runCatching { unregisterReceiver(unlockReceiver) }
         stopRinging(); scope.cancel()
         networkChanged.close()
-        Thread { runCatching { HomeTunnel.disconnectOwned(tunnelOwner) } }.start()
+        val stopped = LocalSafety.isStopped(this)
+        Thread { runCatching {
+            if (stopped) RecoveryConnection.current.stop() else HomeTunnel.disconnectOwned(tunnelOwner)
+        } }.start()
         status.value = SharingStatus(); super.onDestroy()
     }
     companion object {
@@ -423,7 +426,7 @@ class TelemetryService : Service() {
         fun hasLocation(context: Context) = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         fun hasBackgroundLocation(context: Context) = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
         fun capabilities(context: Context, identity: Identity): List<String> = buildList {
-            if (LocalSafety.isStopped(context) || ManagementAgent.isOwner(context)) return@buildList
+            if (LocalSafety.isStopped(context) || ManagementAgent.blocksPersonalOperation(context)) return@buildList
             if (identity.allowCommands) {
                 if (identity.allowLocate && hasLocation(context) && status.value.gpsAccess in listOf("foreground", "background")) add("locate")
                 addAll(listOf("ring", "stop_ringing"))

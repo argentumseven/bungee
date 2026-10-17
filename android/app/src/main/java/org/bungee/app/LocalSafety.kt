@@ -24,6 +24,7 @@ object LocalSafety {
     fun isConnectionRestartAllowed(context: Context) = read(context).connectionRestartAllowed
     @Synchronized fun <T> ifAllowed(context: Context, action: () -> T): T {
         check(!isStopped(context)) { "Bungee is stopped locally" }
+        check(!ManagementAgent.blocksPersonalOperation(context)) { "Device/profile ownership is unsupported or unavailable" }
         return action()
     }
     fun setStopped(context: Context, stopped: Boolean) = PrivacySends.fence.change { synchronized(this) {

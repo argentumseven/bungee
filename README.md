@@ -6,7 +6,7 @@ Bungee is a self-hosted device finder for Android 12+ and GrapheneOS. Pair house
 
 The Kotlin app connects through an app-contained WireGuard tunnel to a Rust server and web dashboard. Only Bungee traffic uses that tunnel; Android's VPN slot remains available. Phone records stay on your server until you erase them or revoke the device.
 
-**Version 1.1.3.** Physical GrapheneOS testing and an independent security audit are pending. See the [validation record](docs/VALIDATION.md) for completed checks and [security design](docs/SECURITY.md) for the trust model.
+**Version 1.1.4.** Physical GrapheneOS testing and an independent security audit are pending. See the [validation record](docs/VALIDATION.md) for completed checks and [security design](docs/SECURITY.md) for the trust model.
 
 ![Bungee dashboard in dark mode](docs/screenshots/dashboard.png)
 
@@ -39,7 +39,7 @@ The Kotlin app connects through an app-contained WireGuard tunnel to a Rust serv
 | VPN coexistence | Userspace WireGuard/TCP carries the fixed home API without OS routes, root or VpnService. Other VPNs can route or filter the outer UDP socket |
 | Device status | Desired/applied policy revision and errors, Android/security-patch version, screen-lock state, eligible failed-credential counts, lost mode and dated queue/camera reports |
 | Legacy DNS summaries | Read/erase earlier managed-DNS data: site groups, query types/results, five-minute rollups and folded ten-second activity windows. Raw subdomains, answer IPs and payloads are not retained. New managed-DNS enrollment is disabled |
-| Recovery safeguards | Server/client reject persistent policy fields and remote reboot; owner provisioning disabled; no app suspension, uninstall blocks, forced credentials, kiosk or recovery-settings restrictions |
+| Recovery safeguards | Server/client reject persistent policy fields and remote reboot; device/profile ownership blocks operation; owner provisioning disabled; no app suspension, uninstall blocks, forced credentials, kiosk or recovery-settings restrictions |
 | Pairing | Phone-generated identity, one-use ten-minute invitation bound to its public key, safe unpaired-invitation reissue, P-256 proof/signatures, replay protection and unique random 256-bit WireGuard PSK |
 | Network setup | Operator-chosen numeric endpoint and UDP port; 51820 rejected; only `10.77.0.1/32` routed inside Bungee; no default internet route |
 | Administrator access | Argon2id password verification, bounded login work, HttpOnly/SameSite sessions, exact-origin mutation checks, separate admin/device listeners and rate budgets, source-prefix restrictions, security audit events and same-origin CSP |
@@ -68,7 +68,7 @@ See [installation and updates](docs/INSTALL.md) for the wizard, network rules an
 
 ## Install and pair a phone
 
-Build the **1.1.3** APK from this checkout or download the matching **bungee-android-debug** artifact from [GitHub Actions](https://github.com/argentumseven/bungee/actions). Published tags provide **bungee-debug.apk** and a SHA-256 checksum in [GitHub Releases](https://github.com/argentumseven/bungee/releases). The installer, server, dashboard and APK use the version in `release.json`.
+Build the **1.1.4** APK from this checkout or download the matching **bungee-android-debug** artifact from [GitHub Actions](https://github.com/argentumseven/bungee/actions). Published tags provide **bungee-debug.apk** and a SHA-256 checksum in [GitHub Releases](https://github.com/argentumseven/bungee/releases). The installer, server, dashboard and APK use the version in `release.json`.
 
 The CI APK is a signed **debug build**. CI signing keys can change between runs; a different signer requires uninstalling and pairing again. Use [your own stable signing key](docs/MANAGEMENT.md#stable-signing-and-updates) for in-place updates. APKs and private signing keys are kept outside the source tree. Install Bungee as an ordinary personal app; **do not enroll it as device owner**.
 
@@ -94,7 +94,9 @@ For restoration after reboot or an app update, separately enable **Automatic rec
 
 ![Recovery gallery with a synthetic test image](docs/screenshots/recovery-photos.png)
 
-**Bungee recovery** is a separate offline launcher for stopping the app. A saved stop prevents automatic resume across reboot/update. To resume, authenticate there, choose **Allow a manual restart**, then start sharing in the main app. Clearing a stop does not restore old camera/restart consent.
+**Bungee recovery** is a separate offline launcher for stopping the app. A saved stop prevents automatic resume across reboot/update and cancels pairing requests as well as telemetry. Recovery confirms ordinary administration is inactive before reporting complete cleanup. To resume, authenticate there, choose **Allow a manual restart**, then start sharing in the main app. Clearing a stop does not restore old camera/restart consent.
+
+See the [removal audit](docs/REMOVAL_AUDIT.md) for ownership, partial-pairing, update and failed-cleanup scenarios.
 
 ## History and data handling
 

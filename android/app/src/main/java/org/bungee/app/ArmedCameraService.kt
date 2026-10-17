@@ -38,10 +38,7 @@ class ArmedCameraService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "DISARM") { runCatching { disarm(this) }; stopSelf(); return START_NOT_STICKY }
         if (active === this) return if (LocalSafety.isCameraEnabled(this)) START_STICKY else START_NOT_STICKY
-        val approval = pendingApproval
-        pendingApproval = null
-        val visibleStart = approval != null && intent?.getStringExtra("approval") == approval.first &&
-            SystemClock.elapsedRealtime() - approval.second in 0..5000
+        val visibleStart = approvals.consume(intent?.getStringExtra("approval"), SystemClock.elapsedRealtime())
         val systemRestart = intent == null || flags and START_FLAG_RETRY != 0
         if ((!visibleStart && !systemRestart) || !LocalSafety.isCameraEnabled(this)) {
             stopSelf(); return START_NOT_STICKY
@@ -99,7 +96,7 @@ class ArmedCameraService : Service() {
         }
         return START_STICKY
     }
-    private fun enabled() = LocalSafety.isCameraEnabled(this) && !LocalSafety.isStopped(this) && identity.enrolled && identity.allowCommands
+    private fun enabled() = LocalSafety.isCameraEnabled(this) && !LocalSafety.isStopped(this) && !ManagementAgent.blocksPersonalOperation(this) && identity.enrolled && identity.allowCommands
     private fun notification(ready: Boolean): Notification {
         val stop = PendingIntent.getService(this, 10, Intent(this, ArmedCameraService::class.java).setAction("DISARM"), PendingIntent.FLAG_IMMUTABLE)
         val open = PendingIntent.getActivity(this, 11, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
@@ -163,7 +160,7 @@ class ArmedCameraService : Service() {
     companion object {
         val status = MutableStateFlow(ArmedCameraStatus())
         @Volatile private var active: ArmedCameraService? = null
-        @Volatile private var pendingApproval: Pair<String, Long>? = null
+        private val approvals = CameraStartApproval()
         private val controlLock = Any()
         fun currentSession(): String? = active?.session
         fun enable(activity: FragmentActivity) = synchronized(controlLock) {
@@ -184,15 +181,14 @@ class ArmedCameraService : Service() {
         fun resume(activity: FragmentActivity): Unit = synchronized(controlLock) {
             check(activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) { "Keep Bungee visible while arming" }
             check(LocalSafety.isCameraEnabled(activity)) { "Enable theft photos locally first" }
-            if (active != null || pendingApproval != null) return
+            if (active != null) return
             prerequisites(activity, requireUnlocked = true)
-            val token = UUID.randomUUID().toString()
-            pendingApproval = token to SystemClock.elapsedRealtime()
+            val token = approvals.issue(SystemClock.elapsedRealtime()) ?: return
             try { ContextCompat.startForegroundService(activity, Intent(activity, ArmedCameraService::class.java).putExtra("approval", token)) }
-            catch (e: Exception) { pendingApproval = null; refreshReadiness(activity, e.message); throw e }
+            catch (e: Exception) { approvals.cancel(); refreshReadiness(activity, e.message); throw e }
         }
         private fun prerequisites(context: Context, requireUnlocked: Boolean) {
-            check(!LocalSafety.isStopped(context) && !ManagementAgent.isOwner(context)) { "Use local recovery first" }
+            check(!LocalSafety.isStopped(context) && !ManagementAgent.blocksPersonalOperation(context)) { "Use local recovery first" }
             val kg = context.getSystemService(KeyguardManager::class.java)
             check(kg.isDeviceSecure && (!requireUnlocked || !kg.isDeviceLocked)) { "Set a secure screen lock and unlock the phone" }
             check(context.getSystemService(DevicePolicyManager::class.java).isAdminActive(ComponentName(context, BungeeAdminReceiver::class.java))) { "Enable removable device administration for credential callbacks" }
@@ -204,7 +200,7 @@ class ArmedCameraService : Service() {
         }
         private fun invalidate(expected: ArmedCameraService? = null) = PrivacySends.fence.change {
             if (expected != null && active !== expected) return@change
-            pendingApproval = null
+            approvals.cancel()
             active?.let { it.session = null; it.captureJob?.cancel() }
             active = null
             status.value = ArmedCameraStatus()
@@ -228,7 +224,7 @@ class ArmedCameraService : Service() {
             }
         }
         fun discardPending(context: Context) = synchronized(PhotoOutbox.lock) {
-            check(context.getSharedPreferences("identity", Context.MODE_PRIVATE).edit().remove("state_armed_photos").commit()) { "Pending photo cleanup failed; use Android Settings to clear Bungee storage" }
+            check(context.getSharedPreferences("identity", Context.MODE_PRIVATE).edit().remove("state_armed_photos").commit()) { "Pending photo cleanup failed; use Bungee recovery or Android security settings" }
         }
         private fun clearLease(context: Context) {
             check(context.getSharedPreferences("identity", Context.MODE_PRIVATE).edit().remove("state_camera_lease").commit()) { "Camera checkpoint cleanup failed" }

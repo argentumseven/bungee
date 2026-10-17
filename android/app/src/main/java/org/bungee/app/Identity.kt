@@ -49,6 +49,7 @@ class Identity(context: Context) {
                 check(prefs.edit().putString("wg_public", derived).commit()) { "Could not repair the public key from its existing private key" }
         }
     } }
+    fun requestsAllowed() = !LocalSafety.isStopped(appContext) && !ManagementAgent.blocksPersonalOperation(appContext)
     val wgPublic: String get() = prefs.getString("wg_public", "")!!
     val wgPrivate: String get() = secret("wg_private")!!
     val publicKey: String get() = encode(keys.getCertificate("bungee-signing").publicKey.encoded)
@@ -100,7 +101,7 @@ class Identity(context: Context) {
             }
             catch (e: Exception) {
                 // Independent, best-effort durable stop. If storage prevents that too,
-                // the UI explicitly directs the owner to Android force-stop.
+                // the UI directs the user to deactivate administration and force-stop in Android Settings.
                 runCatching { LocalSafety.setStopped(appContext, true) }
                 runCatching { appContext.stopService(Intent(appContext, TelemetryService::class.java)) }
                 throw e
@@ -193,6 +194,7 @@ class Identity(context: Context) {
         initSign(keys.getKey("bungee-signing", null) as java.security.PrivateKey); update(text.toByteArray(Charsets.UTF_8)); encode(sign())
     }
     fun reset() = PrivacySends.fence.change { synchronized(identityInitialization) { synchronized(GpsStorage.lock) {
+        check(!ManagementAgent.blocksPersonalOperation(appContext)) { "Preserve the identity while management ownership is present or unavailable" }
         newJournal().clear()
         check(prefs.edit().clear().commit()) { "Could not erase local identity" }
         keys.deleteEntry("bungee-signing"); keys.deleteEntry("bungee-storage")

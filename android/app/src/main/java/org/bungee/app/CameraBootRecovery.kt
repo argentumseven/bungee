@@ -21,7 +21,7 @@ object CameraBootRecovery {
     fun hasStartupAccess(context: Context) = runCatching { Settings.canDrawOverlays(context) }.getOrDefault(false)
     fun allowed(context: Context): Boolean = runCatching {
         !LocalSafety.isStopped(context) && LocalSafety.isCameraEnabled(context) && LocalSafety.isCameraRestartAllowed(context) &&
-            hasStartupAccess(context) && !ManagementAgent.isOwner(context)
+            hasStartupAccess(context) && !ManagementAgent.blocksPersonalOperation(context)
     }.getOrDefault(false)
     @Synchronized fun request(context: Context): Boolean = runCatching {
         if (!allowed(context)) return false

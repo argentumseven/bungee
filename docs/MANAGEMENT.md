@@ -51,3 +51,5 @@ The historical helper name `build-owner-apk.sh` refers to an operator-owned sign
 - [AOSP VpnService](https://github.com/aosp-mirror/platform_frameworks_base/blob/master/core/java/android/net/VpnService.java): system VPN authority and routing.
 - [Official WireGuard netstack](https://github.com/WireGuard/wireguard-go/blob/2631ce99a06f27120d581611cf125d68bc6aa565/tun/netstack/tun.go): pinned app-contained transport.
 - [GrapheneOS auto reboot](https://grapheneos.org/features#auto-reboot) and [USB protection](https://grapheneos.org/features#usb-c-port-and-pogo-pins-control): native OS settings, not Bungee-managed policies.
+
+For device/profile ownership, pending administration removal and partial-pairing recovery, see [the removal audit](REMOVAL_AUDIT.md). **Check administration status** in local recovery distinguishes ownership from ordinary administration.

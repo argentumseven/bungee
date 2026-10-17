@@ -6,7 +6,7 @@ A Bungee fault, unavailable server, lost app key or failed update must leave loc
 
 ## Supported installation and authority
 
-Bungee is an ordinary user-installed app. It does not enroll as Android device owner or profile owner. Provisioning activities are disabled and return cancellation if invoked. The client refuses pairing, sharing, automatic restart, connecting and command execution if Android nevertheless identifies Bungee as device owner. Do not assign the role through ADB or another provisioning tool; that is unsupported and invalidates the removability assumption.
+Bungee is an ordinary user-installed app. It does not enroll as Android device owner or profile owner. Provisioning activities are disabled and return cancellation if invoked. The client refuses pairing, sharing, automatic restart, connecting and command execution if Android identifies Bungee as device owner or profile owner, or the role queries fail. Do not assign the role through ADB or another provisioning tool; that is unsupported and invalidates the removability assumption.
 
 Optional ordinary device administration requests only force-lock and watch-login. It cannot prevent the user from deactivating Bungee administration in Android Settings. Bungee supplies no deactivation-veto UI or policy that blocks access to Settings or Safe Mode. Enabling optional remote-lock administration requires proving the existing primary device credential locally. Remote locking can require that PIN/password afterward and uses the phone's existing credential; Bungee never chooses, changes, resets or learns that credential. Forgotten OS credentials remain an Android recovery problem; Bungee does not offer a credential bypass.
 
@@ -33,10 +33,10 @@ A separate **Bungee recovery** launcher entry opens `LocalRecoveryActivity`. It 
 **Stop Bungee and release old policies**:
 
 1. First attempts to persist a non-secret local-stop flag in a separate preference file.
-2. Independently disarms/stops the camera, attempts pending-photo cleanup, stops sharing and cancels Bungee notifications.
+2. Independently closes an existing home connection, including pairing-only peers, disarms/stops the camera, attempts pending-photo cleanup, stops sharing and cancels Bungee notifications.
 3. Independently attempts removal of known old Bungee restrictions; one failure cannot skip subsequent independent cleanup.
-4. On a personal installation, requests removal of ordinary device administration.
-5. Displays every reported cleanup failure. If saving the stop flag fails, it does not claim the stop will survive restart; the user is directed to Android force-stop/deactivation.
+4. On a personal installation, requests removal of ordinary device administration and checks for completion. A pending removal is reported; the status button can recheck it.
+5. Displays every reported cleanup failure. If saving the stop flag fails, it does not claim the stop will survive restart; the user is directed to Android administration deactivation followed by force-stop.
 
 The saved stop is checked before service/boot identity loading, network connection and command execution. It is not cleared by a server response, boot or app update. Stopping also atomically withdraws permission to resume after boot/update. **Allow a manual restart** requires fresh local authentication/confirmation, clears the stop, and starts no service. It never restores an earlier restart opt-in; that requires a separate fresh choice in the main app. Sharing still requires an explicit start. Normal pause uses the same stop state, so pausing does not unexpectedly resume at the next boot.
 
@@ -88,3 +88,7 @@ Household commands, including remote fresh-location requests, are off until sepa
 ## Cancellation and restart
 
 Stop sharing persists the independent local stop. The stopped screen says **Open local recovery to resume**: authenticate there, allow a manual restart, then explicitly start sharing. No server response can clear this stop. GPS/command withdrawal and local stop invalidate earlier capture/send stamps and cancel active reservations; bytes already sent may still reach home. A local-safety write failure keeps a process veto and surfaces Android force-stop guidance. Persistent storage failure still prevents guarantees after process death. GPS erasure uses a transactional server generation rather than a handset timestamp cutoff. See [the adversarial review record](REVIEW-2026-10-ADVERSARIAL.md) for the precise limits and required physical tests.
+
+## Removal audit
+
+[REMOVAL_AUDIT.md](REMOVAL_AUDIT.md) records ownership, asynchronous deactivation, pairing cancellation, service/permission failures and OS removal paths. A foreground-service task-manager Stop ends current execution; use Bungee local stop for a saved opt-out across boot/update. Android can require ordinary administration deactivation before offering force-stop or uninstall.

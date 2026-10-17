@@ -1,6 +1,6 @@
 # Security design
 
-Bungee installs as a removable personal app with optional ordinary device administration. Device ownership and persistent MDM controls are disabled. DNS forwarding is retained for legacy compatibility; new enrollment cannot enable it. See [recovery requirements](SAFETY.md).
+Bungee installs as a removable personal app with optional ordinary device administration. Device/profile ownership and persistent MDM controls are disabled. DNS forwarding is retained for legacy compatibility; new enrollment cannot enable it. See [recovery requirements](SAFETY.md).
 
 ## Intended trust model
 
@@ -8,16 +8,15 @@ Protect a consenting household’s device telemetry against internet observers, 
 
 The [validation record](VALIDATION.md) identifies tested behavior and outstanding verification. The trust boundaries below apply to the supported personal-device configuration.
 
-```mermaid
-flowchart LR
-    Browser[Administrator browser] -->|TLS 1.3 hybrid key exchange| Caddy
-    Caddy -->|loopback| Admin[Rust administrator API :8080]
-    App[Kotlin Bungee app] -->|WireGuard custom UDP + PSK| Gateway[Isolated WireGuard gateway]
-    Gateway -->|10.77.0.1/32 only| Device[Rust signed device API :8081]
-    Admin --> DB[(Private SQLite volume)]
-    Device --> DB
-    Other[Other phone traffic] --> Internet[Normal internet route]
-```
+[![Bungee security architecture: administrator browser through Caddy to the Rust administrator API; Android app through WireGuard to the Rust device API; both APIs use private SQLite storage. Other phone apps keep their existing network route.](images/security-architecture.png)](images/security-architecture.png)
+
+Open the image for full-size labels. The paths are:
+
+- **Administrator browser → Caddy HTTPS reverse proxy → Rust administrator API.** The operator chooses the public web port and allowed administrator prefixes. Caddy requires TLS 1.3 with X25519MLKEM768 and reaches the administrator listener only at `127.0.0.1:8080`.
+- **Bungee Android app → isolated WireGuard gateway → Rust device API.** The operator chooses the UDP port. Each phone has a separate 256-bit preshared secret and signs device requests to `10.77.0.1:8081`. Only `10.77.0.1/32` exists as a destination inside Bungee's private network stack.
+- **Other phone apps → their existing network route.** Bungee installs no Android VPN, system route or system DNS setting. Another VPN can still carry or filter Bungee's outer UDP traffic.
+
+The two API listeners belong to one Rust process and share private SQLite storage. Caddy and WireGuard run in separate containers; the three containers share the gateway's network namespace. The illustration omits the optional legacy DNS path, disabled for new enrollment. The detailed container and storage controls below also apply.
 
 ## Enrollment protocol
 
@@ -114,3 +113,7 @@ Requests remain signed, timestamped and nonce-protected within a two-minute repl
 ## Review records
 
 The [first review](REVIEW-2026-10.md), [second review](REVIEW-2026-10-SECOND.md) and [adversarial review](REVIEW-2026-10-ADVERSARIAL.md) record historical findings, fixes and regression checks. Current enrollment, erasure, cancellation and resource limits are described above and in the linked guides. Publisher-signature enforcement, application-encrypted archives and physical GrapheneOS acceptance remain open.
+
+## Removal and ownership failures
+
+[REMOVAL_AUDIT.md](REMOVAL_AUDIT.md) records the role guards, asynchronous administration removal, pairing cancellation and recovery limits. Android Settings disables force-stop while administration remains active. Deactivate ordinary administration first; owner roles have separate OS removal rules.

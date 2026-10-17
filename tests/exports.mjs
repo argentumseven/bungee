@@ -69,14 +69,25 @@ test("streamed history export: large data, filters, cancellation and authorizati
     } finally {first.res.destroy();first.req.destroy();second.res.destroy();second.req.destroy();}
     await pause(100);
   });
+  const observeClose=res=>{
+    let ended=false,failed=false;
+    const closed=new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>reject(new Error("Export did not close after cancellation")),5000);
+      timer.unref();
+      res.once("error",()=>{failed=true;});res.once("end",()=>{ended=true;});
+      res.once("close",()=>{clearTimeout(timer);resolve({ended,failed});});
+    });
+    // Observe before the mutation: cancellation can close a paused response before its reply arrives.
+    closed.catch(()=>{});
+    return closed;
+  };
   await t.test("administrator logout cancels an existing export",async()=>{
     const active=await hold();
     try {
       assert.equal(active.res.statusCode,200);
+      const closed=observeClose(active.res);
       assert.equal((await f.admin("/api/session","DELETE")).status,204);
-      let ended=false,failed=false;
-      active.res.on("error",()=>{failed=true;});active.res.on("end",()=>{ended=true;});
-      const closed=new Promise(r=>active.res.once("close",r));active.res.resume();await closed;
+      active.res.resume();const {ended,failed}=await closed;
       assert.ok(failed || !ended,"An unauthorized snapshot must not finish successfully");
       await f.login();
     } finally {active.res.destroy();active.req.destroy();}
@@ -85,12 +96,9 @@ test("streamed history export: large data, filters, cancellation and authorizati
     const active=await hold();
     try {
       assert.equal(active.res.statusCode,200);
+      const closed=observeClose(active.res);
       assert.equal((await f.admin(`/api/devices/${id}/location`,"DELETE")).status,200);
-      let ended=false,failed=false;
-      active.res.on("error",()=>{failed=true;});
-      active.res.on("end",()=>{ended=true;});
-      const closed=new Promise(r=>active.res.once("close",r));
-      active.res.resume();await closed;
+      active.res.resume();const {ended,failed}=await closed;
       assert.ok(failed || !ended,"A cancelled snapshot must not report a successful complete CSV");
       assert.equal(await rowCount(await f.admin(path)),0);
     } finally {active.res.destroy();active.req.destroy();}

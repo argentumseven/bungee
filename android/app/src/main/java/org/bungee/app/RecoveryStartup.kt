@@ -29,7 +29,7 @@ object RecoveryStartup {
     }
     fun startIfApproved(context: Context) {
         runCatching {
-            if (!LocalSafety.isConnectionRestartAllowed(context) || ManagementAgent.isOwner(context)) return
+            if (!LocalSafety.isConnectionRestartAllowed(context) || ManagementAgent.blocksPersonalOperation(context)) return
             val identity = Identity(context)
             if (identity.enrolled) {
                 ContextCompat.startForegroundService(context, Intent(context, TelemetryService::class.java).setAction("AUTO_START"))
