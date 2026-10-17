@@ -29,7 +29,7 @@ export function RecoveryPhotos({ deviceId }: { deviceId: string }) {
     <div className="panel-heading"><h2><Camera size={18} />Recovery photos</h2>
       <button type="button" className="text-button" aria-expanded={open} onClick={() => setOpen(v => !v)}>{open ? "Hide saved photos" : "View saved photos"}</button>
     </div>
-    <p className="fine">Only a phone owner can arm the visible camera service locally. Three new failed credential entries can trigger one attempt; Android may refuse access. No remote camera or airplane-mode control is provided.</p>
+    <p className="fine">Enable theft photos on the phone before it is lost. While ready, three new failed PIN/password entries trigger one front-camera attempt. Android camera restrictions still apply.</p>
     {open && <>
       <div className="photo-tools"><button type="button" className="text-button" onClick={() => setReload(n => n + 1)}><RefreshCw size={14} /> Refresh photos</button>
         <button type="button" className="danger-button" onClick={() => setConfirm(true)} disabled={busy}><Trash2 size={14} /> Erase all recovery photos</button></div>

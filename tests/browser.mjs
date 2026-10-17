@@ -82,7 +82,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       external.push(r.url());
   });
   await page.goto(origin);
-  await page.getByRole("heading", { name: "Welcome home." }).waitFor();
+  await page.getByRole("heading", { name: "Sign in to Bungee" }).waitFor();
   async function assertTheme(theme) {
     await page.waitForFunction((expected) => document.documentElement.dataset.theme === expected, theme);
     assert.equal(await page.locator("html").evaluate((el) => getComputedStyle(el).colorScheme), theme);
@@ -162,19 +162,19 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       await restricted.getByRole("status").filter({ hasText: "Browser storage is unavailable" }).waitFor();
       await restricted.reload();
       await restricted.waitForFunction(() => document.documentElement.dataset.theme === "dark");
-      await restricted.getByRole("heading", { name: "Welcome home." }).waitFor();
+      await restricted.getByRole("heading", { name: "Sign in to Bungee" }).waitFor();
     } finally { await isolated.close(); }
   });
   await mkdir("docs/screenshots", { recursive: true });
   await page.evaluate(() => scrollTo(0, 0));
   await screenshot("sign-in");
   await page.getByLabel("Server administrator password").fill(password);
-  await page.getByRole("button", { name: "Unlock your household" }).click();
+  await page.getByRole("button", { name: "Sign in" }).click();
   await page
-    .getByRole("heading", { name: "A little peace of mind." })
+    .getByRole("heading", { name: "Overview" })
     .waitFor();
   await page
-    .getByRole("heading", { name: "It starts with one phone." })
+    .getByRole("heading", { name: "No paired phones" })
     .waitFor();
   await page.evaluate(() => scrollTo(0, 0));
   await screenshot("dashboard");
@@ -469,7 +469,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       await page.getByRole("button", { name: "Save device care" }).click();
       await page
         .getByRole("status")
-        .filter({ hasText: "Saved at home" })
+        .filter({ hasText: "Saved. Wait for the phone to report the new revision and check for errors." })
         .waitFor();
       const desired = await phoneRequest("/v1/sync", {
         report: {
@@ -772,22 +772,22 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     async () => {
       await context.clearCookies();
       await page
-        .getByRole("heading", { name: "Welcome home." })
+        .getByRole("heading", { name: "Sign in to Bungee" })
         .waitFor({ timeout: 10000 });
       assert.equal(
         await page.getByText("Browser test phone", { exact: true }).count(),
         0,
       );
       await page.getByLabel("Server administrator password").fill(password);
-      await page.getByRole("button", { name: "Unlock your household" }).click();
+      await page.getByRole("button", { name: "Sign in" }).click();
       await page
-        .getByRole("heading", { name: "A little peace of mind." })
+        .getByRole("heading", { name: "Overview" })
         .waitFor();
     },
   );
   await t.test("locking the dashboard returns to sign-in", async () => {
     await page.setViewportSize({ width: 1440, height: 1050 });
     await page.getByRole("button", { name: "Lock dashboard" }).click();
-    await page.getByRole("heading", { name: "Welcome home." }).waitFor();
+    await page.getByRole("heading", { name: "Sign in to Bungee" }).waitFor();
   });
 });

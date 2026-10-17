@@ -2,91 +2,129 @@
 
 <img src="web/public/bungee-mark.png" width="96" alt="Bungee home and location icon">
 
-**A private way home for your household’s phones.** A self-hosted, open-source device finder for modern Android and GrapheneOS.
+Bungee is a self-hosted device finder for Android 12+ and GrapheneOS. Pair household phones with your server to save location history, send recovery commands and view optional theft photos.
 
-**Version 1.1.2.** Bungee combines an Android app, an app-contained WireGuard connection, a Rust server and a web dashboard. GPS, connection-IP and check-in history stay on the operator's server until explicitly erased. The app remains removable through ordinary Android controls.
+The Kotlin app connects through an app-contained WireGuard tunnel to a Rust server and web dashboard. Only Bungee traffic uses that tunnel; Android's VPN slot remains available. Phone records stay on your server until you erase them or revoke the device.
 
-See the [feature checklist](#feature-checklist), [security design](docs/SECURITY.md), [recovery contract](docs/SAFETY.md) and [validation record](docs/VALIDATION.md) for implemented behavior, test evidence and remaining verification work.
+**Version 1.1.3.** Physical GrapheneOS testing and an independent security audit are pending. See the [validation record](docs/VALIDATION.md) for completed checks and [security design](docs/SECURITY.md) for the trust model.
 
-![Bungee dashboard](docs/screenshots/dashboard.png)
+![Bungee dashboard in dark mode](docs/screenshots/dashboard.png)
 
-## Android APK
+<a id="feature-checklist"></a>
 
-Build version **1.1.2** from this checkout or use its matching **bungee-android-debug** artifact in [GitHub Actions](https://github.com/argentumseven/bungee/actions). Published tags also provide **bungee-debug.apk** and its SHA-256 checksum in [GitHub Releases](https://github.com/argentumseven/bungee/releases). The host installer, server, dashboard and APK share the version in `release.json`. Earlier APKs with device-owner controls do not meet the current recovery contract.
+## Features
 
-The CI APK is a signed **debug build** for Android 12+. CI generates development signing keys; a later test build may require uninstalling the previous one and pairing again. **Do not enroll Bungee as device owner.** Use a stable signer for in-place personal-app updates; see [stable signing](docs/MANAGEMENT.md#stable-signing-and-updates). APK binaries and private signing keys are not committed into the source tree.
-
-## Feature checklist
-
-The source implements the features listed below. The validation record distinguishes automated checks from unperformed physical GrapheneOS checks. Controls show permissions, pending delivery and phone-reported errors rather than assuming success.
-
-| Area | Included features |
+| Area | Features |
 | --- | --- |
-| Household dashboard | Multiple named phones; enrollment/online/offline state; battery and charging; last check-in; last-known GPS with observation time and accuracy; responsive desktop/mobile layout; manual refresh; administrator sign-out |
-| Location history | Durable GPS observations and device check-in logs; inclusive from/to lookup; per-phone pagination; private coordinate trail and point selection; local OpenStreetMap raster basemap with pan/zoom; server-streamed CSV with browser cancellation, resource/time limits and authorization rechecks; no external map/geocoding requests |
-| IP address & GeoIP | Gateway-observed authenticated WireGuard endpoint; IPv4/IPv6; offline City MMDB lookup with approximate area/radius and database age; separate durable IP history, time/recurrence filters and CSV; no public-IP service, forwarded-header trust or GPS replacement |
-| Local geodata | Optional operator-supplied OpenStreetMap PNG/JPEG MBTiles and City MMDB; session-protected same-origin tiles; explicit validated imports with rollback; no public tile fallback, provider account in app or runtime downloads |
-| Recurring history lookup | Every saved record; newest record per **5 minutes**, **hour**, or custom **1–1,440 minutes**; nearest record **every day at HH:MM** in an IANA timezone with ±0–120 minute tolerance; interval ranges up to 366 days / 10,000 buckets; daily ranges up to 366 days; explicit DST/gap rules; matching filtered CSV; originals remain saved |
-| DDIL resilience | Network-aware exponential backoff/jitter; independent offline GPS sampling; adaptive 1–100-point uploads; command/policy priority; encrypted receipt outbox; late receipt reconciliation; expired/unconfirmed status; dated queue/capacity-loss metrics; independent contact/telemetry age. [Details and limits](docs/DDIL.md) |
-| Offline recovery | Independent last-known point survives missing fixes, outages and server restart; old backfills cannot replace newer locations; incremental SQLite journal with individually AES-GCM encrypted fixes, up to **10,080** unique unsent points; transactional migration, bounded batches/retry/deduplication |
-| Finding commands | Fresh GPS with current GPS/command consent, cancelable capture/upload, server commit-admission expiry and exact accepted-point acknowledgment; bounded rising/falling siren for up to 30 seconds at the phone’s alarm volume; local two-second audio preview; stop sound; post/clear recovery notification; remote screen lock with Android device administration |
-| Lost mode | Persistent desired state survives outages; attempt a lock once per revision when permitted; recovery contact notification; increased check-in frequency; unlock entry stays accessible |
-| Local offline recovery | Separate Bungee recovery launcher; independent of pairing/server/Compose/native transport; authenticated local stop; separate persisted stop flag; independent cleanup attempts with errors surfaced; direct links to Android app/security settings; no automatic resume after a local stop |
-| Automatic theft photos | One-time local opt-in using official Camera2 foreground-service authority; one front-camera attempt after three new eligible failed credential entries per streak while ready; system sticky restart with encrypted same-boot failure/throttle checkpoints; encrypted three-photo queue retained across recovery; visible notification/disarm action; labelled local test; five-minute/six-per-hour attempt limits; EXIF stripped; ≤12-KiB JPEGs; signed WireGuard uploads; authenticated paginated gallery and separate erasure generation. Optional automatic boot recovery uses a separately approved, revocable Android special access and a brief startup screen after first unlock; no manual Bungee opening or tap. Force-stop still requires a manual launch. Physical GrapheneOS capture/restart acceptance remains unverified |
-| Message preview | Live illustrative lock-screen / heads-up notification previews in the message composer and lost-mode editor; up to 240 characters, no full-screen overlay; preview controls never queue a phone command |
-| Phone controls | QR scan or pasted invitation; visible sharing notification; durable stop and explicit local-recovery/manual restart; separate GPS consent and commands off until explicit local approval; checked consent/app-lock persistence with visible failures; optional restart after first unlock; explicit optional background-location grant for automatic GPS restart; paused-GPS state and manual resume; authenticated local unpair; notification/local sound stop; authenticated message dismissal |
-| App privacy | Biometric/device-credential app lock; screen capture and OS backup disabled; Keystore signing key; AES-GCM encrypted local secrets, policy state, command receipts and GPS queue; no Play services, analytics, crash-report provider or push account |
-| Appearance | Pink home/location icon with complementary slate, charcoal and muted teal palettes; dashboard and Android app support System, Light and Dark themes; System follows OS changes, manual choices stay on that browser/phone; dark dialogs, history, map controls and independent Android recovery; no provider requests for themes |
-| VPN coexistence | Default **app-contained WireGuard + userspace TCP** carries only Bungee's fixed home API, creates no OS routes and leaves Android's VPN slot free. Another VPN may carry/filter its outer UDP traffic. No root required |
-| DNS compatibility | New managed DNS enrollment is disabled; server legacy forwarding and saved rollup read/erase remain for earlier-version compatibility and tests. Current app changes no system DNS or VPN settings |
-| DNS overview | Per-phone, time-ranged top site groups; bundled public-suffix grouping; random subdomains and A/AAAA/HTTPS/retries folded into 10-second activity windows; known OS probes combined; query counts/types/results/last seen; five-minute rollups; refresh and separate erase; no retained raw subdomains, answer IPs or payloads |
-| Reversibility enforcement | Server and phone refuse persistent policy fields; owner provisioning disabled; client refuses owner operation; remote reboot refused and old queued reboot commands withheld; no Safe Mode/reset/uninstall/credential/install/USB restrictions, app suspension or kiosk mode |
-| Management visibility | Local consent before policies; desired/applied revision and errors; legacy owner status; Android version/security patch; secure/locked state; available failed-credential count and last event; read-only legacy policy state; lost-mode state; authenticated local stop and best-effort old-policy release |
-| Release consistency | Shared release manifest for host installer, server health and APK; tagged release/manifest consistency check |
-| Updates | Operator-owned stable APK signing helper and update instructions; owner enrollment is unsupported. CI debug signer changes can require uninstall/re-pair of the personal app |
-| Pairing and transport | Phone-generated WireGuard identity; one-use 10-minute invitation bound to phone public key; transactional creation and safe never-enrolled reissue with token/PSK rotation; P-256 proof/signatures and replay protection; unique random 256-bit peer PSK; required chosen UDP port (**51820 rejected**); numeric endpoint; only `10.77.0.1/32`, no internet default route |
-| Administrator security | Argon2id password hashing with bounded concurrent verification; HttpOnly/SameSite cookies; exact-origin mutation checks; separate administrator/device listeners and limiter budgets; administrator HTTP listener restricted to loopback; device listener rejects unsafe binds; proxy-verified source identity; capability-gated commands; five-minute command expiry; offered/confirmed status and explicit receipt reconciliation; bounded security audit; same-origin CSP |
-| Data ownership | GPS, IP/GeoIP observations, check-in history, last-known point and DNS summaries retained until erased/revoked; separate GPS/full-history/DNS erase; transactional generation rotation rejects erased GPS backlog regardless of handset time; revocation deletes device data/policies/commands, invalidates identity and removes peer; local-only SQLite |
-| Deployment | Docker Compose; non-root, zero-capability, read-only Rust server; isolated WireGuard gateway; Caddy local CA; TLS 1.3 X25519MLKEM768 key exchange; no public ACME/port 80/HTTP3; runtime new egress denied except the explicitly selected private home DNS IP/port |
-| Guided setup | Wizard asks for both ports, endpoint/bind address and mandatory administrator hosts/prefixes; bare hosts become /32 or /128; validated review plan; exact HTTPS URL and local-CA fingerprint; refuses existing installations |
-| Administrator network boundary | Gateway firewall and Caddy both enforce explicit source prefixes; forwarded-IP headers cannot bypass the web check; local-console configuration repair |
-| Container updates | Host timer/Compose; stable default and explicit preview choice; immutable three-image bundle; staged downloads; closed admission during health checks; coherent five-volume snapshots and failed-trial recovery; newest three local snapshots; no app Docker socket |
-| Builds and checks | ARM64 and x86_64 Android 12+ APK; tagged CI test releases and checksums; Rust/API/browser/Android/native-WireGuard/container tests; stable operator signing option; source and test fixtures available |
+| Dashboard | Multiple named phones, enrollment state, last contact, battery/charging, dated last-known GPS and accuracy, manual refresh, mobile layout, sign-out |
+| GPS history | Saved observations and check-in logs; inclusive time ranges; pagination; point selection and coordinate trail; CSV downloads with cancellation and server resource limits |
+| Recurring lookups | All records, newest per 5 minutes/hour/custom 1–1,440 minutes, or nearest to a daily time in an IANA timezone; configurable ±0–120 minute tolerance; matching CSV; originals preserved. Interval ranges: 366 days/10,000 buckets; daily ranges: 366 days |
+| Maps | Local OpenStreetMap PNG/JPEG MBTiles, authenticated same-origin tiles, pan/zoom, coordinates when coverage is missing; no public tile fallback |
+| IP history | Authenticated WireGuard endpoint observations, IPv4/IPv6, offline City MMDB estimates with radius/database age, separate time/recurrence lookup and CSV; IP estimates stay separate from GPS |
+| Dataset imports | Validated local map/GeoIP imports, read-only files, rollback on failed trials, explicit removal; no runtime provider downloads or accounts |
+| Offline GPS | Independent sampling, individually AES-GCM encrypted SQLite records, up to 10,080 unique unsent fixes, bounded uploads, deduplication, transactional legacy-queue migration and capacity-loss counts |
+| Poor connectivity | Network-aware exponential backoff/jitter, adaptive 1–100-point catch-up, command priority, encrypted receipt retries, late receipt reconciliation and separate contact/telemetry ages. [DDIL details](docs/DDIL.md) |
+| Last-known location | Retained through outages, missing fixes and server restarts; older backfills cannot replace a newer point |
+| Recovery commands | Fresh GPS request, alarm/stop sound, post/clear recovery message and screen lock with removable Android device administration; five-minute expiry and phone-reported outcomes |
+| Alarm | Bundled rising/falling siren, at most 30 seconds, phone alarm volume and interruption settings, local stop controls, two-second browser preview |
+| Messages | Up to 240 characters in Android recovery notifications; lock-screen and heads-up illustrations in the dashboard; normal credential entry remains accessible |
+| Lost mode | Saved state survives outages, one lock attempt per revision when permitted, contact notification and more frequent check-ins |
+| Theft photos | One-time local approval, visible Camera2 foreground service, one front-camera attempt after three new eligible failed PIN/password entries while ready, five-minute/six-per-hour attempt limits, labelled test photos, EXIF removal and JPEGs up to 12 KiB |
+| Photo recovery | Encrypted three-photo queue, same-boot process recovery preserves failure counts/rate limits; optional boot/update restoration after first Android unlock through a brief startup screen and separately granted special access |
+| Photo gallery | Signed uploads, authenticated paginated gallery, capture/receipt times, local-test labels and separate photo erasure; old erased generations cannot upload again |
+| Phone consent | QR or pasted invitation, separate GPS/command consent, commands off by default, visible sharing notification, optional restart after first unlock, background-location grant for automatic GPS recovery, authenticated unpairing |
+| Local recovery | Separate offline launcher independent of pairing keys, Compose and native transport; authenticated stop, saved stop across reboot/update, cleanup results, Android Settings links and explicit manual restart |
+| App privacy | Biometric/device-credential app lock, screen capture/OS backup disabled, Keystore signing key, AES-GCM local secret/queue storage; no Play services, analytics, crash-upload or push provider |
+| Appearance | System/Light/Dark themes on web and Android, saved local choices, slate/charcoal/teal palettes and pink home/location icon |
+| VPN coexistence | Userspace WireGuard/TCP carries the fixed home API without OS routes, root or VpnService. Other VPNs can route or filter the outer UDP socket |
+| Device status | Desired/applied policy revision and errors, Android/security-patch version, screen-lock state, eligible failed-credential counts, lost mode and dated queue/camera reports |
+| Legacy DNS summaries | Read/erase earlier managed-DNS data: site groups, query types/results, five-minute rollups and folded ten-second activity windows. Raw subdomains, answer IPs and payloads are not retained. New managed-DNS enrollment is disabled |
+| Recovery safeguards | Server/client reject persistent policy fields and remote reboot; owner provisioning disabled; no app suspension, uninstall blocks, forced credentials, kiosk or recovery-settings restrictions |
+| Pairing | Phone-generated identity, one-use ten-minute invitation bound to its public key, safe unpaired-invitation reissue, P-256 proof/signatures, replay protection and unique random 256-bit WireGuard PSK |
+| Network setup | Operator-chosen numeric endpoint and UDP port; 51820 rejected; only `10.77.0.1/32` routed inside Bungee; no default internet route |
+| Administrator access | Argon2id password verification, bounded login work, HttpOnly/SameSite sessions, exact-origin mutation checks, separate admin/device listeners and rate budgets, source-prefix restrictions, security audit events and same-origin CSP |
+| Retention and erasure | GPS/IP/check-in/photo/DNS records retained until erased/revoked; separate location/history/photo/DNS erasure; transactional GPS/photo generations reject erased backlog; revocation deletes device data and tunnel access |
+| Containers | Non-root Rust service, zero capabilities and read-only root; isolated WireGuard gateway; local Caddy CA; TLS 1.3 X25519MLKEM768; runtime egress denied except an explicitly selected legacy private DNS resolver |
+| Installation | Prompted WireGuard/web ports, endpoint/bind address and mandatory administrator hosts/prefixes; bare hosts become /32 or /128; no-write plan, exact HTTPS URL and CA fingerprint; existing installations refused |
+| Server updates | Host systemd timer with Compose image replacement, immutable three-image bundles, staged downloads, admission closed during trials, coherent five-volume snapshots, failed-trial recovery and three retained snapshots |
+| Builds | ARM64/x86_64 APK, coordinated `release.json`, CI checks and checksums, operator-owned stable signing option, source and synthetic test fixtures |
 
-**Absent:** automatic airplane-mode cycling, scheduled radio/tunnel windows, bundled global street-map/production GeoIP datasets, vector-tile rendering, online geocoding/provider lookups, unarmed/silent/remote camera activation, hidden launcher, lock-screen overlays, power-off, remote reboot, device-owner enrollment, managed DNS/always-on, app suspension, uninstall protection, forced lock requirements, recovery-settings restrictions, remote wipe, arbitrary shell/scripts, remote credential reset, software deployment, work-profile management, activation/firmware lock, powered-off finding, crowdsourced offline finding, relay/NAT traversal, multi-user household roles/MFA, attestation and a security audit. Failed-credential events do not promise to count biometric failures. Android device ownership requires eligible provisioning; it cannot be granted by a normal permission dialog.
+Bungee does not support device-owner/work-profile management, forced system DNS, app suspension, hidden launchers, lock-screen overlays, airplane-mode cycling, radio schedules, power-off/reboot/wipe, credential reset, arbitrary scripts or software deployment. Powered-off finding, a crowdsourced offline network, relay/NAT traversal, household roles/MFA and hardware attestation are also unavailable. Street-map and production GeoIP datasets are supplied separately.
 
-**Coverage limits:** Bungee uses app-contained WireGuard for its own API and leaves Android's VPN slot free. It does not redirect other apps' DNS or enforce restrictions. No claim of universal DNS coverage is made. Post-quantum PSK/hybrid key exchange does not make classical certificate/device/APK signatures quantum-proof. Physical GrapheneOS validation is still required.
+## Install the server
 
-The requested scheduled airplane-mode-off/report/airplane-mode-on cycle is unavailable with official app/MDM permissions alone. An eligible MDM restriction can force airplane mode off, but clearing it does not restore it on. No shell/ADB bridge is included. See the [airplane-mode API analysis and primary sources](docs/AIRPLANE_MODE.md).
+Use a Linux host with Python 3, Docker Engine, Compose 2.24+, systemd and kernel WireGuard support. Start with the guided installer:
 
-There are no live phones, sample coordinates or hard-coded credentials in the normal dashboard. Screenshots show dark mode using isolated synthetic fixtures. The dashboard appearance selector is available before sign-in and in the top bar; the Android choice is under **Appearance**. Raster basemaps keep the colors of the locally imported dataset. See [management and DNS setup](docs/MANAGEMENT.md).
+```sh
+bash scripts/install.sh --plan   # validate answers without writes or network calls
+sudo bash scripts/install.sh    # configure and start the stack
+```
 
-## Recovery controls at a glance
+The wizard asks for ports and mandatory administrator source hosts/prefixes. It configures source restrictions in both the gateway firewall and Caddy. Verify the printed local-CA fingerprint and trust the public root certificate on administrator devices before signing in. Keep persistent data and backups on encrypted storage.
 
-**Sound alarm** plays a local rising/falling siren for up to 30 seconds on the updated phone app. Android's alarm volume, audio routing and interruption settings apply; Bungee does not force maximum volume or bypass Do Not Disturb. **Preview alarm sound** plays a two-second sample only in your browser. **Stop sound**, the phone's notification, local recovery and disabling command consent remain available.
+For phones away from home, the selected WireGuard UDP endpoint must be reachable. Public IPv4 normally requires forwarding that UDP port on your router; CGNAT needs another reachable path. The dashboard can stay on your LAN/VPN. WireGuard provides encryption; it does not create inbound reachability. No relay is included.
 
-Messages are high-priority Android notifications, with heads-up/lock-screen appearance controlled by Android and the user's notification settings. They do not open a full-screen overlay or cover credential entry. The preview below is an illustration rendered by the dashboard, not an Android screenshot.
+See [installation and updates](docs/INSTALL.md) for the wizard, network rules and recovery commands, or [manual Compose deployment](docs/DEPLOYMENT.md). [Map and GeoIP setup](docs/GEOGRAPHY.md) covers local datasets, imports and licenses.
 
-![Illustrative recovery notification preview](docs/screenshots/notification-preview.png)
+## Install and pair a phone
 
-**Automatic theft photos:** enable this **before the phone is lost**. Start sharing, approve household commands, enable removable device administration, grant camera/notification permission and choose **Enable theft photos**, then authenticate once. While **Ready**, three new eligible failed PIN/password entries trigger one front-camera attempt. Android system process recovery retains the encrypted queue, failure streak and capture limits. To resume after reboot **without opening Bungee yourself**, enable **Automatic recovery after reboot** once and grant Android's **Display over other apps** special access. After Android's first normal unlock, Bungee briefly shows a real startup screen, restores the existing camera consent and closes automatically. It draws no overlay and does not cover the lock screen. Both grants are optional and reversible; ordinary sharing works without them. Force-stop, revoked permissions or an OS refusal can still require manual attention. Before first unlock the pairing keys and photos remain credential-encrypted. No root, bridge or device owner is used. Physical GrapheneOS boot/camera acceptance remains unverified. See [setup, lifecycle limits and test procedure](docs/RECOVERY_CONTROLS.md).
+Build the **1.1.3** APK from this checkout or download the matching **bungee-android-debug** artifact from [GitHub Actions](https://github.com/argentumseven/bungee/actions). Published tags provide **bungee-debug.apk** and a SHA-256 checksum in [GitHub Releases](https://github.com/argentumseven/bungee/releases). The installer, server, dashboard and APK use the version in `release.json`.
 
-![Recovery gallery using a synthetic checkerboard, not a person or phone capture](docs/screenshots/recovery-photos.png)
+The CI APK is a signed **debug build**. CI signing keys can change between runs; a different signer requires uninstalling and pairing again. Use [your own stable signing key](docs/MANAGEMENT.md#stable-signing-and-updates) for in-place updates. APKs and private signing keys are kept outside the source tree. Install Bungee as an ordinary personal app; **do not enroll it as device owner**.
 
-## Start development
+1. Open Bungee on the phone and copy its WireGuard public key.
+2. In the trusted dashboard, choose **Add a device**, enter a name and paste that key.
+3. Scan the invitation with Bungee, or paste its enrollment text. Review sharing consent and choose **Agree & pair**. Invitations expire after ten minutes and contain a long-lived secret; keep them out of photos, messages and synchronized clipboards.
+4. Grant precise GPS permission and start sharing. Recovery commands need separate approval on the phone. Screen locking also needs removable device administration.
+5. If pairing was interrupted, use **Retry saved pairing**. Reissue an expired, never-enrolled invitation from Settings using the same public key. Reissue rotates the token and PSK; an already paired signing identity cannot be rebound.
 
-Prerequisites: Node 24, Rust 1.90.0, a JDK (not a JRE), Android SDK 36 / Build Tools 35.0.0 / NDK 28.2.13676358, Go 1.26.9, and Chromium for browser checks. The optional cloud setup script installs verified tool downloads in `/workspace/.cache/bungee`.
+Revoking a device erases its saved records and removes tunnel access. Keep a missing phone enrolled if you want it to report again.
+
+## Recovery controls
+
+**Sound alarm** plays for up to 30 seconds at Android's alarm volume. Do Not Disturb, routing and interruption settings can affect audibility. Stop it from the dashboard, the phone notification or local recovery. **Preview alarm sound** plays only in the browser.
+
+Recovery messages use Android notifications. Android controls heads-up and lock-screen visibility; Bungee leaves credential entry accessible. The dashboard preview is an illustration:
+
+![Recovery notification illustration](docs/screenshots/notification-preview.png)
+
+Enable **Automatic theft photos** on the phone before it is lost. Start sharing, approve commands, enable removable administration and grant camera/notification access. Choose **Enable theft photos** and authenticate once. While **Ready**, three new eligible failed PIN/password entries trigger one capture attempt. Biometric failures may not produce callbacks.
+
+For restoration after reboot or an app update, separately enable **Automatic recovery after reboot** and grant Android's **Display over other apps** access. After the first Android unlock, a brief startup screen restores the approved service and closes automatically. Keys and photos remain credential-encrypted until that first unlock. Force-stop, revoked permissions and OS restrictions can require manual attention. See [camera setup, limits and device checks](docs/RECOVERY_CONTROLS.md).
+
+![Recovery gallery with a synthetic test image](docs/screenshots/recovery-photos.png)
+
+**Bungee recovery** is a separate offline launcher for stopping the app. A saved stop prevents automatic resume across reboot/update. To resume, authenticate there, choose **Allow a manual restart**, then start sharing in the main app. Clearing a stop does not restore old camera/restart consent.
+
+## History and data handling
+
+**History** searches GPS, IP observations and check-ins by time range, interval or daily recurrence. CSV exports use the same filters and stream to the browser's Downloads panel, where they can be cancelled. Exports are plaintext sensitive records; store them on encrypted media. Lines between GPS samples show their order, not a measured continuous route.
+
+![Daily history lookup](docs/screenshots/history-daily.png)
+
+![Separate IP history with synthetic map tiles and test GeoIP data](docs/screenshots/history-ip.png)
+
+The latest check-in, last authenticated contact and last GPS observation have separate timestamps. A fresh battery report does not make an old location current. Server history has no automatic expiry or size-based eviction; monitor disk capacity and back up coherently.
+
+**Settings → Erase saved history** removes GPS, IP/GeoIP, photos, check-ins and the last-known location while preserving pairing. Separate photo/DNS and GPS-only erasure are also available. Erasure rotates generations so old queued or in-flight data cannot restore erased GPS/photos. On reconciliation, the phone discards the entire old-generation queue, including observations made before it learned of the erase. New observations can arrive while sharing remains enabled. Deletion does not scrub filesystem blocks or existing backups.
+
+Turning off GPS cancels pending work and clears unsent GPS. Stopping sharing preserves the encrypted GPS backlog, disarms the camera and attempts unsent-photo cleanup. Neither removes records already saved on the server. Bytes already sent cannot be recalled.
+
+The administrator can read device locations and uploaded photos. Runtime app/server components use no analytics, public map/GeoIP service, FCM, external fonts or provider account. Dependency downloads and optional host updates expose download metadata to their registries. Android/GNSS assistance, browser sync, DNS and any proxy you add have their own configuration and trust requirements. WireGuard PSKs and hybrid TLS protect confidentiality; certificate, device and APK signatures still use classical cryptography. See [security and cryptographic limits](docs/SECURITY.md).
+
+## Build and check
+
+Run the development setup once:
 
 ```sh
 bash scripts/setup-cloud.sh
-source scripts/dev-env.sh
-bash scripts/dev-server.sh
 ```
 
-The server uses administrator port 8080 and a separate local device-test port 8081. Its generated administrator password is in `.state/admin-password` (mode 0600). Read it locally; never commit it or paste it into an issue. Local development uses HTTP bound to loopback. Non-loopback dashboards require an HTTPS public origin.
+Then build and test:
 
 ```sh
 source scripts/dev-env.sh
+npm --prefix web run build
 cargo build --locked --manifest-path server/Cargo.toml
 npm test
 python3 -m unittest discover -s tests -p 'test_*.py'
@@ -97,65 +135,10 @@ bash scripts/build-transport.sh
 bash scripts/android.sh :app:assembleDebug :app:lintDebug :app:testDebugUnitTest
 ```
 
-The installable **development-only** APK is `android/app/build/outputs/apk/debug/app-debug.apk`. It uses a debug signing key. Operator signing keys, update continuity, and a security review are required before shipping. `bash scripts/build-owner-apk.sh` supports your existing stable keystore; never share its password in chat or commit it. `assembleRelease` produces an unsigned release artifact until you configure signing outside source control.
+The development APK is `android/app/build/outputs/apk/debug/app-debug.apk`. `assembleRelease` is unsigned until you configure a signer outside source control. `scripts/build-owner-apk.sh` uses an operator-owned signing key; its historical name does not enable Android ownership.
 
-For web hot reload, run the Rust server with `BUNGEE_PUBLIC_ORIGIN=http://127.0.0.1:5173` and start `npm run dev --prefix web`. Use that exact origin for the browser session; the server intentionally rejects mutations from another origin.
+The server's administrator HTTP listener binds loopback on port 8080; device tests use 8081. Its generated password is `.state/admin-password`, mode 0600. For web hot reload, start Rust with `BUNGEE_PUBLIC_ORIGIN=http://127.0.0.1:5173` and run `npm run dev --prefix web`; use that exact browser origin.
 
-## Deploy on your own server
-
-Use [the guided installer](docs/INSTALL.md): `bash scripts/install.sh --plan` validates without changes; `sudo bash scripts/install.sh` applies it on a supported Linux/Docker/systemd host. The manual Compose alternative below does not install the update timer.
-
-Use a Linux host with Docker Compose and kernel WireGuard support. Docker Desktop and restricted cloud sandboxes are not the target. The gateway never forwards general internet traffic.
-
-1. Copy `.env.example` to `.env`. Choose an unused **custom UDP port** in `BUNGEE_WG_PORT` (no default; 51820 is rejected). Set `BUNGEE_WG_ENDPOINT` to the literal reachable `IP:chosen-port`, or `[IPv6]:chosen-port`. Provider DNS is disabled for the tunnel.
-2. Set `BUNGEE_ADMIN_PORT`, the exact `BUNGEE_PUBLIC_ORIGIN` including a nonstandard port, and mandatory `BUNGEE_ADMIN_SUBNETS`. Set `BUNGEE_DOMAIN` to the dashboard's IP or a name resolved locally. Set `BUNGEE_ADMIN_ADDRESS` to the server's LAN address for LAN access; the default binds HTTPS to loopback for an SSH tunnel. Forward only your chosen UDP port for remote phones. CGNAT still needs an independently reachable endpoint; no relay is implemented.
-3. Caddy configuration is bundled in the web image. Run `docker compose up --build -d` and check `docker compose ps` / `docker compose logs`.
-4. Caddy creates a **local CA** and never requests a public ACME certificate. Retrieve its **public** root certificate locally with `docker compose exec -T web cat /data/caddy/pki/authorities/local/root.crt > bungee-root.crt`, verify its SHA-256 fingerprint over a trusted channel, and trust it on administrator devices. Never copy the CA private key or bypass certificate verification. Use a current browser supporting X25519MLKEM768; classical-only TLS clients fail closed. Read the generated administrator password locally with `docker compose exec server cat /state/admin-password` and sign in over trusted HTTPS.
-5. Install the new APK, copy its public key into **Add a device**, and scan the invitation from the trusted administrator display. The QR contains a long-lived preshared secret; keep it private and avoid cloud clipboard/photo synchronization. Approve precise GPS permission, then start sharing visibly on the phone.
-
-Gateway peers refresh within about three seconds. Invitations expire in ten minutes. If the enrollment response is lost, use **Retry saved pairing**: the app can confirm that the server already bound the same signing identity. Reissue an expired never-enrolled invitation from server Settings using the same phone public key. Revocation erases saved device data and invalidates access; do not use it as a routine pairing retry or reuse invitations/keys from a revoked paired phone.
-
-Only the configured dashboard bind address on your chosen HTTPS TCP port and your chosen WireGuard UDP port are published. There is no HTTP port 80, HTTP/3 listener, public certificate issuance, cloud push, analytics, geocoding, or map provider. Newly initiated external traffic is denied except an explicitly configured private home DNS IP/port; inbound connection replies remain allowed. The administrator and device APIs are not published separately. The private device API uses HTTP **inside the authenticated WireGuard channel**; exposing port 8081 directly would break the transport assumption. See [deployment details](docs/DEPLOYMENT.md).
-
-## Platform boundaries
-
-- **The supported personal mode leaves Android's VPN slot free.** Bungee creates its own userspace WireGuard/TCP stack and ordinary UDP socket. This can travel through another VPN subject to that VPN's routing and filtering. Bungee installs no Android VPN or DNS policy. Managed mode is disabled because it can leave OS state behind if the app fails.
-- Sharing is visible, with nominal 15-second command polling and GPS sampling about once a minute. DDIL retries back off with jitter (up to five minutes; longer for authentication failures), while GPS collection continues independently when Android permits it. Lost mode checks in about every 30 seconds; it does not guarantee a new GPS fix at that cadence. Only Android's GPS provider is requested, with no Google Play/network-location dependency. Precise permission, GNSS availability, battery controls, doze, networking and Android scheduling affect operation. Approximate-only permission may leave GPS unavailable.
-- Restart resume is a local opt-in after first unlock, subject to Android rules. Stop sharing withdraws that opt-in. The independent local stop takes priority over boot, update, connect and commands; clearing it does not start sharing. Force-stop and OS restrictions can prevent background operation.
-- Recovery uses ordinary notifications. Notification permissions/privacy settings still apply; PIN/password entry is never covered. A local notification dismissal does not cancel the server's lost-mode policy.
-- Device-owner enrollment/operation is unsupported. Old-owner cleanup is best effort and cannot guarantee role removal without reset. Install only as a personal app. See [local recovery and updates](docs/MANAGEMENT.md).
-- Camera capture requires a separately enabled, user-visible official camera foreground service. One local opt-in persists; system sticky restart restores an existing same-boot checkpoint. With separate local approval and Android special access, a boot/update receiver can request a bounded, visible startup activity after first unlock; that activity restores the camera while actually resumed. The receiver never starts the camera service directly. Server instructions and failed-password callbacks cannot activate it. Force-stop still requires a manual app launch. No root, shell bridge or owner exemption is used. Launcher hiding remains absent. Physical GrapheneOS camera acceptance remains unverified.
-
-See [capability research](docs/PLATFORM.md), [security design](docs/SECURITY.md), and the [implementation roadmap](docs/ROADMAP.md).
-
-## Privacy and trust
-
-The server keeps the latest device state and an independently timestamped **last-known location until you explicitly erase it or revoke the device**. Going offline, rebooting the server, or missing a GPS fix does not erase that checkpoint. Older fixes cannot replace newer ones. The dashboard shows when the phone last checked in and when its location was actually observed; a fresh battery update does not make an old location current. A correctly signed report can carry an old queued fix from the same GPS generation after an outage.
-
-Each accepted GPS observation is also stored in durable history, with coordinates, horizontal accuracy in metres, original observation time, and server receipt time. Device check-ins separately record battery, charging, and management mode. Authenticated contact time remains distinct from the age of the last accepted telemetry. **History → choose a phone → from/to → recurrence** queries an inclusive time slice, shows a local OpenStreetMap basemap plus coordinate trail/table, and exports CSV. Map tiles are requested only from your own server; no external provider or geocoder receives positions. IP observations have a separate history selector, approximate-area view and CSV. Lines connect samples; they do not establish a continuous route. The historical log starts when this version receives observations; an upgrade cannot recover overwritten older data.
-
-![Daily recurring history using an isolated synthetic test fixture](docs/screenshots/history-daily.png)
-
-![Reversible device care and saved legacy DNS summaries using an isolated synthetic test fixture](docs/screenshots/device-care.png)
-
-Server history has **no automatic expiry or size-based eviction**. Monitor free disk space and back it up with encryption. **Settings → Erase saved history** clears GPS history, IP/GeoIP observations, recovery photos, check-in logs, and the latest location without unpairing. Erasure rotates independent GPS and recovery-photo generations transactionally, so earlier queued/in-flight generations cannot repopulate history or the checkpoint, including future-dated fixes. On reconnect the phone clears that entire old-generation queue, including fixes captured while it had not learned of the erase. New observations can appear while sharing continues. Turning off GPS cancels pending capture/upload work and clears the unsent queue; a send already handed to transport may still reach home. Stopping sharing retains its encrypted GPS queue and requires local recovery before manual restart. It also disarms camera mode and attempts to discard unsent photos; any cleanup failure needs local recovery or Android Settings. Neither action erases records already saved at home. DNS summaries also remain until explicitly erased or revoked. Only site-group rollups are retained by Bungee; the operator-controlled home resolver receives the original DNS question and controls its own caching/logging/upstreams. Revocation erases GPS/IP history, recovery photos, DNS summaries, policies, current telemetry and commands, invalidates device access, and removes the peer. Command content expires after 24 hours; the separate security audit is bounded to 10,000 events and never contains coordinates, invitation tokens, or preshared keys. SQLite deletion is logical; old blocks and backups require encrypted storage and a backup expiry policy.
-
-The gateway also records each enrolled phone's authenticated connection IP and enriches it with an optional local City MMDB. This remains separate from GPS: carrier/VPN/NAT exits can be far from the phone. The map uses teal for GPS and amber for approximate IP areas, with kilometre-scale database radius/unknown-radius and dataset build date. **No production geodata is bundled.** Import properly licensed free/local raster OpenStreetMap MBTiles and DB-IP Lite/GeoLite2 City files using [private map and GeoIP setup](docs/GEOGRAPHY.md). A neutral coordinate view remains without tiles. No remote tile/GeoIP fallback or public-IP lookup is made.
-
-![Separate IP history using a synthetic raster grid and artificial GeoIP database](docs/screenshots/history-ip.png)
-
-Existing databases migrate the saved last-known point into history. **Legacy identities without a preshared key are blocked from the tunnel after upgrading**; their saved data stays available. Re-pair with a new phone identity and version-2 invitation. Revoking a legacy identity erases its saved data, so export anything you need first. Old APKs do not provide the new offline queue or GPS-only collection policy. See [security boundaries](docs/SECURITY.md#post-quantum-protection-and-limits).
-
-Bungee has no runtime service-provider integration. Build/install tools download dependencies; the optional host updater downloads image artifacts and exposes normal server-IP/artifact metadata to the registry (see [update privacy](docs/INSTALL.md#publication-trust-and-privacy)); the running app sends its payloads only to the enrolled home server. The OS, GNSS assistance, browser/clipboard synchronization, DNS configuration, ISP and any reverse proxy you add remain outside that application boundary. Configure GrapheneOS's OS-level services to match your policy. Network operators can observe connection metadata even when payloads are encrypted. No claim of zero traffic from the entire phone or compromised host is made.
-
-The administrator and home server are trusted and can read device locations and uploaded recovery photos. This is not end-to-end encryption against the administrator. Android Keystore uses the device’s available security implementation. Hardware-backed key verification and server-verified attestation are not implemented. The validation record identifies which tests have been run.
+See the [platform matrix](docs/PLATFORM.md), [management guide](docs/MANAGEMENT.md), [recovery requirements](docs/SAFETY.md), [remaining work](docs/ROADMAP.md) and [writing guide](docs/WRITING.md).
 
 AGPL-3.0-only. See [LICENSE](LICENSE).
-
-[DDIL behavior](docs/DDIL.md) documents denial/outages, limited-bandwidth catch-up, command uncertainty, queue limits and clock requirements. When upgrading from earlier versions, update the server before the APK. First reconciliation discards an older untagged phone backlog because its erase generation is unknown. The host updater keeps automatic updates within one major/minor train; crossing from 0.1 to 1.0 requires an operator-controlled upgrade. [The latest review follow-up](docs/REVIEW-2026-10-ADVERSARIAL.md) lists corrected defects, open security requirements and physical-device acceptance tests.
-
-Household commands are **off by default**, including after upgrading from the earlier implicit-consent setting. Pairing consents to telemetry; enable recovery commands separately on the phone after reading the explanation and unlocking it. Optional screen locking still needs removable Android administration. Failed consent writes show an error and veto current-process commands; if storage cannot persist the independent stop either, use Android Settings to force-stop Bungee before restarting.
-
-Expired or lost never-enrolled invitations can be reissued from Settings using the same phone public key. Reissue invalidates earlier tokens and rotates the tunnel PSK. Paired signing identities are never rebound. CSV exports stream to your browser Downloads panel, where they can be cancelled; two concurrent exports and a five-minute limit bound server work. Large interval exports can need temporary disk space. Downloads are plaintext sensitive records; keep them on encrypted storage.
-
-Version 1.1.2 adds optional automatic restoration after boot or APK replacement through a brief, visible startup activity and a revocable Android special access. It retains the persistent consent, encrypted photo queue and same-boot capture limits. Arming uses official Android APIs and introduces no persistent OS restriction or bridge. Physical GrapheneOS lifecycle testing has not been completed; the updater does not independently verify publisher signatures; its snapshot archives are plaintext and require encrypted storage. See [validation](docs/VALIDATION.md), [update trust](docs/INSTALL.md) and [backup confidentiality](docs/SECURITY.md) for the precise scope.

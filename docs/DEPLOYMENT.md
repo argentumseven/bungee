@@ -1,6 +1,6 @@
 # Deployment and enrollment
 
-Alpha.6 supports personal-app installation only. Device-owner enrollment/operation and persistent controls are disabled by the [safety contract](SAFETY.md). Do not use ADB or enterprise provisioning to assign ownership.
+Install Bungee as a removable personal app. Device-owner enrollment and persistent restrictions are disabled under the [recovery requirements](SAFETY.md). Do not assign ownership through ADB or enterprise provisioning.
 
 ## Host and network requirements
 
@@ -67,12 +67,12 @@ The server reads the password file at startup and keeps an Argon2id verifier in 
 
 See [MANAGEMENT.md](MANAGEMENT.md) for supported personal operation, local recovery, stable signing and legacy ownership limitations. Leave the legacy DNS upstream unset for new deployments; new managed-DNS policies are refused.
 
-## Proxy-aware image builds in Codex cloud
+## Image builds behind a TLS proxy
 
-Ordinary hosts can use the README’s unmodified Compose build. This cloud’s Docker daemon needs an explicit proxy hostname mapping and the authoritative environment CA for build-time HTTPS. `scripts/docker-build-cloud.sh` derives the proxy hostname/address without reading credential values, forwards existing proxy bindings using Docker’s predefined build arguments, and supplies the system CA bundle as a BuildKit secret. It never disables TLS/package signature checks and does not install the cloud CA into runtime images.
+Use the README's Compose build on an ordinary host. In a development environment with a TLS-inspecting proxy, Docker may need an explicit proxy hostname mapping and the environment's CA for build-time HTTPS. `scripts/docker-build-cloud.sh` derives the proxy hostname/address without reading credential values, forwards existing proxy bindings using Docker’s predefined build arguments, and supplies the system CA bundle as a BuildKit secret. It never disables TLS/package signature checks and does not install the cloud CA into runtime images.
 
 `scripts/docker-build-cloud.sh` builds all three local development image tags. It does not deploy or expose them. Live Caddy certificate issuance and the complete Compose stack still require the host prerequisites above.
 
 Local OpenStreetMap/GeoIP datasets and import/recovery/licensing instructions are in [GEOGRAPHY.md](GEOGRAPHY.md). These are read-only offline files; no external map or GeoIP lookup is permitted by the runtime egress policy.
 
-Alpha.8 must be installed server-first, then on the phone. See [DDIL.md](DDIL.md) for backoff, queue metrics, authenticated-contact versus telemetry time, clock requirements and delayed command-receipt reconciliation. No additional port or provider is required.
+For protocol upgrades, update the server before the phone app. See [DDIL.md](DDIL.md) for backoff, queue metrics, authenticated-contact versus telemetry time, clock requirements and delayed command-receipt reconciliation. No additional port or provider is required.

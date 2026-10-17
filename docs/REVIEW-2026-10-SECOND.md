@@ -1,8 +1,8 @@
-# Second independent review — alpha.10
+# Second source review: alpha.10
 
 **Historical record:** alpha.11 corrects later erasure/consent/deadline findings. Read [the adversarial follow-up](REVIEW-2026-10-ADVERSARIAL.md) for the current protocol and validation limits.
 
-The owner supplied another source review of alpha.9. Its new consent, invitation, listener, export and version findings are confirmed. This record describes source corrections and checks; physical GrapheneOS recovery is still unproven. The [first review record](REVIEW-2026-10.md) remains a historical account of alpha.9.
+The alpha.9 review identified consent, invitation, listener, export and version defects. This record preserves the alpha.10 fixes and checks. Physical GrapheneOS recovery testing is pending; see [current results](VALIDATION.md).
 
 ## Findings and corrections
 
@@ -37,7 +37,7 @@ These additional changes compile and pass lint; Android Keystore interruption, i
 - **Administrator authority/reachability:** MFA/roles, administrator recovery, dynamic numeric endpoint changes and provider-free relay/CGNAT recovery remain open. The two-minute signature clock window remains enforced.
 - **Accessibility/endurance:** screen readers, large fonts, contrast/touch targets, long exports over real home networks, battery/flash endurance and power-loss behavior still need testing.
 
-Indefinite server location history remains the owner's explicit policy. This review did not authorize automatic age-based deletion, provider fallbacks, device-owner enrollment or irreversible phone controls.
+Server location history retains its no-expiry policy. Runtime provider fallbacks, device ownership and irreversible phone controls remain excluded.
 
 ## Physical acceptance additions
 

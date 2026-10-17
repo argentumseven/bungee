@@ -1311,7 +1311,8 @@ textarea::placeholder {
   bottom: -260px;
   pointer-events: none;
 }
-.login-story .brand {
+.login-story > div {
+  position: relative;
   z-index: 1;
 }
 .login-story h1 {
@@ -1328,6 +1329,7 @@ textarea::placeholder {
   color: var(--accent);
 }
 .login-story p {
+  max-width: 44ch;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.9;

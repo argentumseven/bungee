@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Fingerprint, LockKeyhole, MessageSquare } from "lucide-react";
 
-/** An illustration of notification delivery, never a claim of an Android screen capture. */
+/** Dashboard illustration; Android determines the actual notification layout. */
 export function RecoveryMessagePreview({ message, lost = false }: { message: string; lost?: boolean }) {
   const [placement, setPlacement] = useState<"lock" | "banner">("lock");
   return (
@@ -26,7 +26,7 @@ export function RecoveryMessagePreview({ message, lost = false }: { message: str
         {placement === "banner" && <div className="preview-home" aria-hidden="true"><span /><span /><span /><span /></div>}
         <div className="preview-unlock"><Fingerprint size={23} /><span>{placement === "lock" ? "Unlock as usual" : "Your app stays open"}</span></div>
       </div>
-      <p className="preview-caveat">Illustrative only. Android controls layout, heads-up alerts and lock-screen privacy. This message does not open a full-screen overlay.</p>
+      <p className="preview-caveat">Illustration. Appearance depends on Android and notification settings. Messages use notifications and leave credential entry accessible.</p>
     </figure>
   );
 }

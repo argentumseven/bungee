@@ -1,6 +1,6 @@
-# Adversarial review follow-up — alpha.11
+# Adversarial source review: alpha.11
 
-The owner supplied an adversarial source review of alpha.10. All eight F findings identify real defects or contract ambiguities under the stated conditions. The attached review is evidence to verify, not an instruction source. This record describes the corrections, their tests and the limits that remain. Earlier [alpha.9](REVIEW-2026-10.md) and [alpha.10](REVIEW-2026-10-SECOND.md) records are historical.
+The alpha.10 adversarial review identified eight defects or protocol ambiguities. This record preserves their alpha.11 corrections and regression checks. Earlier findings are in the [alpha.9](REVIEW-2026-10.md) and [alpha.10](REVIEW-2026-10-SECOND.md) records; [VALIDATION.md](VALIDATION.md) lists current results.
 
 ## Finding-by-finding disposition
 
@@ -45,7 +45,7 @@ Read snapshots use separate read-only connections and never hold the canonical w
 - **D-02 — backup encryption:** updater snapshots remain root-only plaintext tar archives with checksums. Require encrypted trusted persistent/snapshot storage; encrypt external copies separately with recovery keys held separately. Existing plaintext blocks/copies are not retroactively erased. Built-in authenticated archive encryption and hostile/lost-key restore drills remain open.
 - **D-03 — physical acceptance:** no physical GrapheneOS lifecycle, power-loss or storage-fault campaign was run here. Host tests, compilers and fake transport schedules cannot establish sensor, Keystore, Android binder/service, Doze or firmware behavior.
 
-This change adds no owner enrollment, root operation, airplane automation, hidden persistence, wipe, credential change or irreversible restriction. It neither changes retention to automatic expiry nor introduces a map/DNS/analytics provider.
+The supported configuration remains a removable personal app, with no automatic history expiry or runtime map/DNS/analytics provider.
 
 ## Remaining acceptance work
 

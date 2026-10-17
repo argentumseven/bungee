@@ -1,8 +1,6 @@
 # Denied, disrupted, intermittent and limited connectivity
 
-Alpha.8 adds DDIL handling to the existing visible, removable personal app. It does not add airplane-mode automation, root, persistent network controls, another VPN, a relay or a public service. It cannot deliver packets through a radio blackout, blocked WireGuard UDP, a powered-off phone or a stopped app. Physical GrapheneOS behavior remains unverified.
-
-Alpha.9 corrects the independent review's permission/storage/reconciliation defects. See [the finding-by-finding assessment](REVIEW-2026-10.md).
+Bungee queues GPS during outages and retries its home connection with bounded backoff. Commands and receipts take priority over catch-up uploads. A radio blackout, blocked WireGuard UDP, a powered-off phone or a stopped app prevents contact. Physical GrapheneOS connectivity testing is pending.
 
 ## Behavior by condition
 
@@ -43,7 +41,7 @@ The server redelivers an unexpired, unconfirmed command using its original ID. S
 
 A delayed, freshly signed receipt may reconcile a command retained by the server when its recorded attempt time was within the original creation/expiry interval. The command must already have been delivered; terminal outcomes cannot be overwritten. This acceptance does not extend execution authority or redeliver an expired command. Receipt arrival time is recorded separately and the dashboard labels a late confirmation. The timestamp/outcome remains a phone-reported statement, not hardware attestation. Old clients without an attempt timestamp retain the original expiry behavior. Command content/results are still purged after 24 hours from command creation, so recovery is not guaranteed beyond that horizon.
 
-## Honest status
+## Status and acknowledgements
 
 - The app shows queued fixes, queue-capacity losses, last successful telemetry and approximate next retry.
 - Device care shows the phone's **last reported** GPS access, queue count, oldest queued timestamp, discarded-at-capacity count and pending receipts. It cannot know a disconnected phone's current queue or permissions. An older app reports no such metrics.
@@ -52,20 +50,22 @@ A delayed, freshly signed receipt may reconcile a command retained by the server
 
 Update the **server first, then the APK**. New phones report fields that older servers reject; the queue is retained if that mismatch occurs. Stable local APK signing is still required for reliable in-place updates. Physical DDIL/jamming trials and GrapheneOS background/sleep checks have not been run. See [VALIDATION.md](VALIDATION.md) for automated evidence and [SAFETY.md](SAFETY.md) for the recovery boundary.
 
-## Explicit command consent and invitation recovery (alpha.10)
+## Command consent and invitation recovery
 
 Pairing authorizes telemetry; household commands start off until separately approved on the phone with local unlock. Upgrade ignores the earlier implicit-consent key. The command guard is rechecked at actuation, and failed persistence vetoes commands in the current process while attempting an independent stop. No lasting stop can be promised if storage rejects every write; use Android force-stop as shown by the error. Lost-mode requests cannot override that consent.
 
 A never-enrolled invitation may be reissued after expiry, a lost response or gateway publication failure with the same phone key/address. Tokens and PSKs rotate; paired signing identities cannot be rebound. Transactional staging/publication and resource-bounded CSV are described in [the second review](REVIEW-2026-10-SECOND.md).
 
 
-## Erasure generations and capture cancellation (alpha.11)
+## Erasure and cancellation
 
 Home erasure rotates a random GPS generation in its write transaction. A reconnecting phone discards the full older-generation queue before adopting it, including points collected after erasure but before reconciliation. First upgrade also clears an untagged legacy queue. New sensor updates carry a local preparation stamp; a GPS/command withdrawal, local stop or generation change cancels old captures/reserved sends. Already-sent bytes can still be received by home; local withdrawal is not a remote erasure acknowledgment. Remote locate uses an exact-point acceptance response, a remaining transport budget and a server commit-admission expiry check. Read [the precise contract and tests](REVIEW-2026-10-ADVERSARIAL.md).
 
 
-## Recovery-photo queue and restart recovery (1.1.2)
+## Recovery photos
 
-Only a locally armed camera service can prepare or send photos. Up to three ≤12-KiB EXIF-stripped JPEGs are encrypted on the phone; capacity drops the oldest and reports the count. One photo is sent separately from GPS through the existing signed telemetry path. A photo failure gets a separate five-minute retry delay and does not hold up ordinary GPS telemetry or commands. The server separately caps new photo records at six/device/hour; exact retry acknowledgment does not spend another slot.
+The authorized camera service keeps up to three encrypted, EXIF-stripped JPEGs of at most 12 KiB each. At capacity it drops the oldest and reports the loss. Photos upload separately from GPS; a photo failure has a five-minute retry delay. The server admits at most six new photos/device/hour; exact retries do not spend another slot.
 
-Disarm/local stop/command withdrawal cancel capture and transport reservations, withdraw standing camera consent and clear pending state/checkpoints. System sticky restoration within the same boot retains the encrypted queue, failure streak and attempt budget; it cannot override an opt-out. After reboot/app replacement, a separately approved automatic-recovery option plus Android special access can launch a bounded real startup screen after first Android unlock, without the owner opening Bungee. Force-stop remains effective until manual launch; without optional startup access the manual fallback remains. Queued images can survive that visible resumption. A process without a live authorized camera service cannot upload images. The boot receiver never starts the camera service directly: a resumed, unlocked activity must establish the fresh camera session. Server reconnection cannot enable camera authority. Pending startup work is durably claimed once per boot/app version, so failure cannot create a relaunch loop. A disconnected sharing service does not itself withdraw consent or erase a useful offline photo. A separate opaque photo generation rotates on photo erasure/full history erasure; stale queued/in-flight generations cannot restore erased images. The gallery shows capture and receipt times separately. Physical locked-camera, Doze, radio-loss and process-loss acceptance is still unperformed; see [RECOVERY_CONTROLS.md](RECOVERY_CONTROLS.md).
+System sticky recovery retains the same-boot failure streak, rate budget and queue. Optional boot recovery uses separate local approval and Android special access to restore the service from a visible startup screen after first unlock. Force-stop requires manual launch. Disarm, local stop and command withdrawal cancel pending work and clear camera consent/checkpoints/unsent photos. A connection-service failure alone preserves authorized queued photos for recovery.
+
+Photo erasure rotates a separate generation so stale queued/in-flight uploads cannot restore erased images. The gallery shows capture and receipt times separately. See [camera setup and lifecycle limits](RECOVERY_CONTROLS.md); physical locked-camera, Doze, radio-loss and process-recovery checks are pending.

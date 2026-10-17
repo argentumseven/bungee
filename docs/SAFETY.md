@@ -1,8 +1,8 @@
-# Reversibility and recovery contract
+# Local recovery requirements
 
 Applies to the current release and to versions from alpha.6 onward. Earlier versions with device-owner controls do not meet this contract.
 
-The requirement is that a Bungee fault, lost server, lost app key or failed update must not create a new persistent restriction on the phone. Bungee must not depend on a working home server or decryptable pairing identity to let the user stop it locally. We cannot promise bug-free software or recovery from arbitrary Android, storage or hardware failures. This document specifies the narrower properties enforced in the supported personal-device mode and distinguishes tests from remaining validation.
+A Bungee fault, unavailable server, lost app key or failed update must leave local stop and ordinary Android removal available. The independent recovery entry works without the server or pairing identity. These requirements apply to Bungee controls; Android, storage and hardware faults can still prevent recovery.
 
 ## Supported installation and authority
 
@@ -50,13 +50,13 @@ New installations use the supported personal mode. The cleanup code is a best-ef
 
 Android device ownership is OS-managed. It can prevent ordinary uninstall and may require a factory reset to remove if the app/signing key or management path fails. Clearing known restrictions does not remove that role. Bungee does not call deprecated testing-only ownership removal, transfer ownership, reset the phone or discard its old pairing state as a supposed cure.
 
-If old ownership exists, preserve the original signing key and app data. Do not uninstall, clear app data or install an APK signed with a different key as a recovery strategy. Local cleanup attempts to remove Bungee's old always-on/uninstall/complexity/Settings restrictions and owner lock-screen text. Old suspended-app names are read with the existing storage key only; no replacement key is generated. A missing key or failed Android API is reported. Android ownership remains explicit in the recovery result; the new client refuses normal operation while it remains. No successful recovery claim is made for this unsupported state.
+If old ownership exists, preserve the original signing key and app data. Do not uninstall, clear app data or install an APK signed with a different key as a recovery strategy. Local cleanup attempts to remove Bungee's old always-on/uninstall/complexity/Settings restrictions and owner lock-screen text. Old suspended-app names are read with the existing storage key only; no replacement key is generated. A missing key or failed Android API is reported. Android ownership remains explicit in the recovery result; the new client refuses normal operation while it remains. Removal of legacy ownership remains unverified on a phone.
 
 ## Required verification before household use
 
 The API and Kotlin tests enforce forbidden-policy rejection and cleanup continuation on injected failures. Browser checks enforce the absence of dangerous controls and continued history/recovery workflows. Android emulator testing is recorded separately in VALIDATION.md when actually completed.
 
-Physical GrapheneOS checks remain required: personal installation and removal; ordinary admin activation/deactivation; local recovery online/offline and after boot; stale server policies; app lock; notifications; denied permissions; force-stop; storage pressure; unreadable app keys/state; killed process; update with the same signing key; server loss; and another VPN. Verify that Settings, unlocking, calls, keyboard, launcher and normal connectivity remain usable. Never claim these checks passed based on compilation or a mocked policy report.
+Physical GrapheneOS checks remain required: personal installation and removal; ordinary admin activation/deactivation; local recovery online/offline and after boot; stale server policies; app lock; notifications; denied permissions; force-stop; storage pressure; unreadable app keys/state; killed process; update with the same signing key; server loss; and another VPN. Verify that Settings, unlocking, calls, keyboard, launcher and normal connectivity remain usable. Record physical results separately from builds and fixture reports.
 
 Any future control that can outlive the app or remove a local recovery path must remain unavailable until its reversal, failure handling, update behavior and OS escape route are established. Short leases or a rollback timer alone are insufficient: an OS-persisted restriction can survive a broken app that never runs its timer.
 
@@ -70,9 +70,9 @@ Disarm, local stop, command withdrawal and ordinary-administration deactivation 
 
 ## Server updates
 
-Alpha.7 adds a host-only Compose updater. It stages downloads, closes outside admission, snapshots all five cold volumes, validates a candidate and restores failed trials before reopening. Acceptance is journaled for both success and rollback so subsequent recovery cannot replay a snapshot over newly admitted telemetry. This changes no phone ownership, credentials, permissions, firmware or APK. Local phone recovery remains independent of server health. Failed server restoration stays closed for console repair, with snapshots preserved; arbitrary disk/host failure is not guaranteed recoverable. See [the update contract](INSTALL.md).
+The host-only Compose updater replaces the three images as one bundle. It stages downloads, closes outside admission, snapshots all five cold volumes, validates a candidate and restores failed trials before reopening. Acceptance is journaled for both success and rollback so subsequent recovery cannot replay a snapshot over newly admitted telemetry. This changes no phone ownership, credentials, permissions, firmware or APK. Local phone recovery remains independent of server health. Failed server restoration stays closed for console repair, with snapshots preserved; arbitrary disk/host failure is not guaranteed recoverable. See [the update contract](INSTALL.md).
 
-## DDIL handling (alpha.8)
+## Connectivity failures
 
 Network callbacks, monotonic retries, independent GPS sampling and bounded uploads affect only Bungee's app-contained connection. No radio/airplane-mode setting or persistent OS policy is added. Local stop cancels the native peer's active requests; retry cannot clear the stop flag. Encrypted command reservations precede action; lost receipts are retried without re-executing a reserved command. A crash can leave an explicitly unknown outcome. Server acceptance of a dated late receipt does not reauthorize expired commands. Queue capacity is surfaced rather than hidden, and storage failure creates no fallback phone restriction. See [DDIL.md](DDIL.md).
 
@@ -80,11 +80,11 @@ Network callbacks, monotonic retries, independent GPS sampling and bounded uploa
 
 Automatic GPS recovery after first unlock requires precise and background location permission, explicitly granted through Android Settings, plus the sharing restart opt-in or standing theft-photo opt-in. The grant is optional and can be revoked normally. Without it, automatic restart can reconnect in a connection-only foreground service and reports GPS paused; open Bungee and resume GPS from the visible screen. A blocked foreground-service start posts an attention notification when notifications are allowed. No identity or GPS access is promised before first unlock. Physical GrapheneOS cold-boot/lock/Doze acceptance is still open; see [the review follow-up](REVIEW-2026-10.md).
 
-## Command consent and failed persistence (alpha.10)
+## Command consent and storage failure
 
-Household commands, including remote fresh-location requests, are off until separately explained/approved with local phone unlock. Old implicit command-consent preferences do not authorize the new build. Permission checks and a shared guard precede command/lost-mode actuation. Consent or app-lock writes must succeed before the UI reports success. A failed command write vetoes the current process and attempts independent local-stop persistence/service shutdown. If storage rejects that too, the UI directs the user to Android force-stop; restart persistence is not claimed. App-lock write failures keep the current session locked and expose an error. See [the second review](REVIEW-2026-10-SECOND.md) for physical fault tests still required.
+Household commands, including remote fresh-location requests, are off until separately explained/approved with local phone unlock. Old implicit command-consent preferences do not authorize the new build. Permission checks and a shared guard precede command/lost-mode actuation. Consent or app-lock writes must succeed before the UI reports success. A failed command write vetoes the current process and attempts independent local-stop persistence/service shutdown. If storage rejects that too, the UI directs the user to Android force-stop; the stop may not survive process death. App-lock write failures keep the current session locked and expose an error. See [the second review](REVIEW-2026-10-SECOND.md) for physical fault tests still required.
 
 
-## Consent cancellation and stop labels (alpha.11)
+## Cancellation and restart
 
 Stop sharing persists the independent local stop. The stopped screen says **Open local recovery to resume**: authenticate there, allow a manual restart, then explicitly start sharing. No server response can clear this stop. GPS/command withdrawal and local stop invalidate earlier capture/send stamps and cancel active reservations; bytes already sent may still reach home. A local-safety write failure keeps a process veto and surfaces Android force-stop guidance. Persistent storage failure still prevents guarantees after process death. GPS erasure uses a transactional server generation rather than a handset timestamp cutoff. See [the adversarial review record](REVIEW-2026-10-ADVERSARIAL.md) for the precise limits and required physical tests.

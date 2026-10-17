@@ -1,40 +1,26 @@
-# Implementation priorities
+# Remaining work
 
-The [reversibility contract](SAFETY.md) takes precedence over adding MDM features.
+The [feature list](../README.md#features) describes current behavior. New controls must preserve the [local recovery requirements](SAFETY.md).
 
-## Implemented features
+## Testing and security
 
-Personal Android finder, encrypted app-contained home tunnel, durable GPS/check-in history, recurring lookup/CSV, bounded encrypted offline queue, optional removable administration for screen locking, sound/contact notifications, consent/app lock, strict no-persistent-policy guards and an independent local recovery entry. Server/Docker hardening and legacy DNS-summary compatibility remain. Alpha.7 adds guided host installation, required source-prefix restrictions and a Compose updater with closed admission, coherent snapshots and failed-trial recovery (INSTALL.md), local OpenStreetMap raster basemaps and separate IP/GeoIP history (GEOGRAPHY.md).
+| Work | Completion criteria |
+| --- | --- |
+| Physical GrapheneOS testing | Record OS/build and results for GPS, notifications, failed-credential capture, boot/update recovery, Doze, network transitions, another VPN, permission revocation, local stop and removal. Follow [the device procedure](RECOVERY_CONTROLS.md#physical-device-checks) |
+| Independent security audit | Review the app, enrollment protocol, native transport, server and installer/updater; resolve findings with regression coverage |
+| Publisher-authenticated updates | Verify image publisher identity on the host, with key rotation, compromise recovery and offline operation defined |
+| Encrypted snapshot archives | Add authenticated encryption and test restore/key recovery. Current snapshots require encrypted host storage and separately encrypted exports |
+| Administrator access | Design passkeys/MFA, individual users, device-scoped roles and administrator recovery/rotation |
+| Endpoint changes | Authenticate numeric home-endpoint updates without losing identity/history or introducing a provider lookup |
+| Capacity and fault testing | Measure large histories, exports, low storage, power loss and snapshot recovery on supported hardware |
+| Accessibility | Test screen readers, large text, touch targets and keyboard use on both clients; add translations |
 
-Alpha.8 adds network-aware DDIL retries, independent GPS sampling, adaptive catch-up, encrypted receipt retries and explicit uncertainty/queue status (DDIL.md). Field validation remains outstanding.
+## Possible additions
 
-Device-owner enrollment/operation, managed system DNS/always-on, package suspension, uninstall prevention, forced credential complexity, blocked recovery settings and reboot have been disabled. No wipe, credential reset, kiosk, bootloader or firmware action exists.
+Low-battery and missed-check-in alerts can use existing reports without an external notification provider. Other candidates are geofence events from saved GPS, local readiness checks for notification/alarm settings, and time-limited faster location sampling. Each needs clear timestamps, offline handling and local consent.
 
-## Verification and hardening work
+Additional map formats must keep location requests on the home server. Any control affecting OS settings needs a documented recovery path that still works if Bungee or the server fails. Wipe, credential reset, hidden launchers, kiosk mode, owner provisioning and persistent restrictions remain excluded.
 
-1. Prove personal installation/removal, ordinary admin deactivation and independent offline recovery on physical GrapheneOS. Test app lock, bad app state/keys, process death, restart, denied permissions, full storage and server loss; verify normal phone functions and Android Settings remain accessible.
-2. Test the actual Docker gateway, direct and other-VPN transport, roaming/MTU/IPv6 and reconnect. Preserve the default app-contained route; do not restore a persistent network policy as a workaround.
-3. Validate stable APK signing and in-place update/recovery. Debug signer changes may require personal-app uninstall/re-pair; document the app-data consequence accurately.
-4. Add passkeys/MFA and household roles, stronger administrator recovery, immutable dependencies/images, independent security review, publisher-signature enforcement, full-host recovery and load/fault testing. Current classical certificate/device/APK signatures are not fully post-quantum authenticated.
-5. Field-test interrupted enrollment recovery and DDIL retry/backoff, and investigate encrypted direct/relay options for CGNAT without introducing service-provider access to payloads or a persistent phone restriction.
+## Review records
 
-## Suitable small additions
-
-Read-only app-version/security-patch/compliance reporting, clearer failed-command/permission state, local diagnostics with explicit export, accessibility/contrast improvements, translations and additional map coverage formats are candidates. The current local raster OpenStreetMap/City MMDB support labels IP estimates separately and never replaces GPS; future formats must retain those boundaries. They must preserve the ability to stop/uninstall Bungee without a server or Bungee encryption key.
-
-New OS-level controls must remain unavailable if their failure can leave a persistent restriction, close a recovery path, destroy phone data or require reset to remove management. No destructive fallback is acceptable. Do not add wipe/reset-on-failed-unlocks, forced installation restrictions, disabled ADB/USB, hidden launcher, kiosk, credential changes or owner provisioning as an incremental convenience feature.
-
-## Alpha.9 review follow-up
-
-The independent review confirmed defects in GPS restart permissions, full-blob offline storage, pre-authentication limiter allocation, receipt settlement, offered-command terminology, authentication cooldown and proxy login accounting. Source corrections and regression checks are described in [REVIEW-2026-10.md](REVIEW-2026-10.md). Physical GrapheneOS acceptance, publisher-signature enforcement, encrypted snapshot archives, endpoint-change recovery, scalable CSV streaming and accessibility validation remain open. Indefinite server history remains the explicitly requested policy.
-
-## Alpha.10 second-review follow-up
-
-Checked, explicit command consent; recoverable invitation lifecycle/peer publication; strict device API bind; bounded server-streamed CSV; and coordinated release metadata are implemented with regression evidence in [REVIEW-2026-10-SECOND.md](REVIEW-2026-10-SECOND.md). Streaming CSV is no longer an unbounded browser-array feature. Physical GrapheneOS, update publisher authentication, encrypted snapshot archives, administrator roles/MFA, endpoint changes and accessibility/endurance remain open.
-
-
-## Alpha.11 adversarial follow-up
-
-Implemented: transactional GPS erasure generations, cancellation of stale capture/upload reservations, continuous remote-locate consent checks, exact-point acknowledgment and commit-admission expiry, loopback-only admin HTTP, bounded separate JSON readers, interval span/bucket limits and accurate durable-stop labels. [Detailed evidence and limits](REVIEW-2026-10-ADVERSARIAL.md).
-
-Remaining work includes publisher-authenticated updates, authenticated encrypted archive recovery and physical GrapheneOS/storage/network testing. Local cancellation cannot recall bytes already delivered to the server.
+The October reviews and their corrections are retained in [the first review](REVIEW-2026-10.md), [second review](REVIEW-2026-10-SECOND.md) and [adversarial review](REVIEW-2026-10-ADVERSARIAL.md). Current test results are in [VALIDATION.md](VALIDATION.md).

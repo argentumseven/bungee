@@ -1,8 +1,8 @@
 # Airplane-mode control on GrapheneOS
 
-The requested cycle is: observe airplane mode, temporarily turn it off, report to the home server and receive permitted commands, then restore airplane mode. **Official app and MDM permissions do not provide that complete cycle on the checked Android/GrapheneOS implementations.** This is an OS authority boundary, separate from whether Bungee enables device-owner enrollment.
+Bungee cannot temporarily disable airplane mode, report home and restore airplane mode through official app/MDM permissions. Direct two-way control requires protected system networking authority. Device-owner enrollment and a foreground service do not grant it.
 
-The selected scope is official app/MDM permissions only. Bungee adds no shell/ADB bridge, Shizuku integration, root requirement, privileged installation or scheduled airplane-mode toggle. Ordinary pairing, sharing and consented recovery commands keep their existing permission requirements. A locally armed foreground service can continue an eligible camera operation under its camera permission, but foreground execution does not grant the protected networking permissions needed to change airplane mode. The armed camera feature does not change this boundary.
+The app uses no shell/ADB bridge, Shizuku, root or privileged installation. Pairing, sharing and recovery commands remain available under their ordinary permissions.
 
 ## Available authority
 
@@ -19,19 +19,17 @@ The selected scope is official app/MDM permissions only. Bungee adds no shell/AD
 
 `WRITE_SECURE_SETTINGS` is a different permission. Writing a database flag alone is not the supported airplane-mode transition: the checked connectivity implementation updates the setting and sends the protected `ACTION_AIRPLANE_MODE_CHANGED` broadcast. A settings-write recipe is not evidence that a normal app can reliably perform the complete radio transition.
 
-## Why a permission-gated switch is insufficient
+## Why Bungee leaves this unavailable
 
-An optional feature can and should leave lower-permission operation available. However, the elevation gate still needs an authority the operator can actually grant. A normal permission prompt, ordinary device administration, or device-owner enrollment does not provide the missing full-cycle API here. Bungee therefore does not present a usable C2 switch with an unavailable official grant path.
+An optional permission gate would need an authority the user can grant. A normal permission prompt, removable device administration and device ownership cannot supply the complete cycle. Applying `DISALLOW_AIRPLANE_MODE` forces airplane mode off, but clearing it does not restore the prior on state. Bungee also rejects this persistent restriction under its [recovery requirements](SAFETY.md).
 
-Applying `DISALLOW_AIRPLANE_MODE` and promising a later restoration would be incorrect: removing the policy does not turn airplane mode back on. It would also introduce a persistent management restriction that Bungee's recovery contract currently rejects. Bungee does not apply that workaround.
+The shell identity has different networking authority and an airplane-mode command; Bungee does not integrate that route. Writing `AIRPLANE_MODE_ON` alone also omits the checked connectivity transition and protected broadcast.
 
-ADB/shell identity is a technically different route. The checked Shell package requests `NETWORK_SETTINGS`, and the connectivity service exposes an airplane-mode shell command. A user-approved shell bridge can therefore be investigated separately from official app/MDM permissions. That route was explicitly excluded for this request and is not integrated or tested in Bungee. Root and platform customization are also outside the selected scope.
-
-Turning airplane mode off would restore networking for the phone generally, including other applications. Bungee's app-contained tunnel would not make that a Bungee-only connectivity window. Scheduling also would not create coverage, unlock a SIM, bypass another VPN's filtering, work while powered off, or guarantee exact wake times under Android power management.
+Turning airplane mode off would restore connectivity for other applications too. A Bungee tunnel cannot confine that radio window to its own traffic. Coverage, SIM state, another VPN and Android wake scheduling would still affect contact.
 
 ## Source evidence and verification scope
 
-The review inspected Android 16 source, matching the app's current target API, and the GrapheneOS Android 17 source below. It made no radio changes and used no real phone. This is source verification of the permission/policy boundary, not an on-device acceptance test.
+The sources below cover Android 16 (the target API) and GrapheneOS Android 17. They establish the permission checks in source. No radio changes or physical-device tests were performed.
 
 - [GrapheneOS framework permission declarations](https://github.com/GrapheneOS/platform_frameworks_base/blob/ef402132a86b78aa4627daa823766e79b1f601e1/core/res/AndroidManifest.xml): protected airplane-mode broadcast; networking, settings and policy permission protection levels.
 - [GrapheneOS connectivity implementation](https://github.com/GrapheneOS/platform_packages_modules_Connectivity/blob/6ab5be47d49a3f93d424f195958dfaadec8a906c/service/src/com/android/server/ConnectivityService.java): `enforceAirplaneModePermission`, `setAirplaneMode`, and the shell command handler.
@@ -41,4 +39,4 @@ The review inspected Android 16 source, matching the app's current target API, a
 - [GrapheneOS Shell permissions](https://github.com/GrapheneOS/platform_frameworks_base/blob/ef402132a86b78aa4627daa823766e79b1f601e1/packages/Shell/AndroidManifest.xml): the shell identity's networking authority differs from an enrolled app's authority.
 - [Android 16 framework permissions](https://github.com/aosp-mirror/platform_frameworks_base/blob/android16-release/core/res/AndroidManifest.xml) and [device-policy implementation](https://github.com/aosp-mirror/platform_frameworks_base/blob/android16-release/services/devicepolicy/java/com/android/server/devicepolicy/DevicePolicyManagerService.java): the corresponding permission protection and settings allowlist.
 
-If upstream introduces an official reversible API for both directions, this feature can be reassessed against that API and the local recovery contract. No such grant path was found in the inspected sources.
+Reassess this feature if Android adds a user-grantable, reversible API for both directions.

@@ -8,7 +8,7 @@ Use a dedicated **Linux server with Python 3, a local Docker Engine, Compose 2.2
 
 Use encrypted persistent storage and separately encrypted offline backups. Local snapshots contain history, pairing secrets and CA keys; private file permissions do not replace disk encryption. Leave room for images and an additional complete snapshot of all five volumes. Before downtime the updater estimates state size and requires snapshot space plus 20% and 1 GiB; this does not reserve disk or replace monitoring Docker storage. Primary history is never automatically trimmed.
 
-From the inspected checkout:
+From the source checkout:
 
 ```sh
 bash scripts/install.sh --plan    # prompts and validates; no writes or network calls
@@ -110,15 +110,15 @@ Read [REVIEW-2026-10.md](REVIEW-2026-10.md) before enabling unattended use. Regi
 
 Bundled Compose enables `BUNGEE_TRUST_LOOPBACK_PROXY=true` only with the Rust admin listener bound to loopback. Caddy overwrites `X-Bungee-Admin-IP` from the actual TCP peer. Rust does not trust `X-Forwarded-For` or that dedicated header from other peers/default standalone deployments. Do not place another proxy ahead of Caddy and expect its forwarded identity to be accepted. Login limits are five attempts/source/minute and 30 aggregate attempts/minute, with at most two Argon2 checks executing concurrently. Device, enrollment and legacy DNS budgets are separate. Existing allowed clients can still share an IP behind NAT.
 
-## Alpha.10 release and enrollment recovery
+## Release metadata and enrollment recovery
 
 `release.json` is copied beside the installed helper and supplies its coordinated release version/contract metadata. Keep it with `bungee-host.py` and `network_config.py` when installing/updating local tooling; do not remove the companion manifest. The server/API and APK derive their displayed release version from the same source; CI rejects mismatched release tags.
 
 The server permits only numeric loopback device-API binds or `10.77.0.1:8081`. Do not publish that private HTTP API. Reissue expired/lost never-enrolled invitations from dashboard Settings with the same phone public key; new token/PSK replace the old ones. If peer publication returns an error, repair server storage and retry that same key; no phone reset is required for an unpaired invitation. Paired/revoked signing identities are not rebound. Use one Rust server writer per state/peer volume. See [the latest review](REVIEW-2026-10-SECOND.md) for transaction, backup and physical-validation limits.
 
 
-## Alpha.11 privacy protocol upgrade
+## Upgrading older privacy protocols
 
-Update the server before the APK, using the same app signer. Old GPS uploads without a generation receive 409 and keep their local queue until upgrade. The first alpha.11 reconciliation deliberately discards the old untagged phone backlog; subsequent home erasure discards an entire unreconciled old generation. Existing home history and pairing are preserved. See [the adversarial follow-up](REVIEW-2026-10-ADVERSARIAL.md) for exact cancellation/deadline and backup/restore boundaries.
+Update the server before the APK, using the same app signer. Old GPS uploads without a generation receive 409 and keep their local queue until upgrade. When upgrading from before alpha.11, the first reconciliation discards the old untagged phone backlog; subsequent home erasure discards an entire unreconciled old generation. Existing home history and pairing are preserved. See [the adversarial follow-up](REVIEW-2026-10-ADVERSARIAL.md) for exact cancellation/deadline and backup/restore boundaries.
 
 The Rust administrator backend is plain HTTP and accepts **only loopback binds**, even with an HTTPS public origin. Remote HTTPS access goes through the source-restricted local Caddy gateway; an HTTPS origin string never supplies TLS on the Rust socket.

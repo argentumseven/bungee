@@ -127,7 +127,7 @@ class MainActivity : FragmentActivity() {
                 scope.launch { lifecycle.withResumed { onSuccess() } }
             }
             override fun onAuthenticationError(code: Int, text: CharSequence) { error = text.toString() }
-        }).authenticate(BiometricPrompt.PromptInfo.Builder().setTitle("Unlock Bungee").setSubtitle("Your household stays private")
+        }).authenticate(BiometricPrompt.PromptInfo.Builder().setTitle("Unlock Bungee").setSubtitle("Use your phone’s screen lock")
             .setAllowedAuthenticators(if (requireCredential) DEVICE_CREDENTIAL else BIOMETRIC_STRONG or DEVICE_CREDENTIAL).build())
     }
     private fun pair(text: String) {
@@ -176,8 +176,8 @@ class MainActivity : FragmentActivity() {
     @Composable private fun LockScreen() {
         Column(Modifier.fillMaxSize().padding(38.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(Icons.Outlined.Fingerprint, null, Modifier.size(65.dp), tint = MaterialTheme.colorScheme.primary)
-            Spacer(Modifier.height(26.dp)); Text("A private place.", fontSize = 29.sp, fontWeight = FontWeight.SemiBold)
-            Text("Unlock to see your household connection.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(vertical = 13.dp))
+            Spacer(Modifier.height(26.dp)); Text("Bungee is locked", fontSize = 29.sp, fontWeight = FontWeight.SemiBold)
+            Text("Unlock to view this phone’s Bungee settings.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(vertical = 13.dp))
             Button(onClick = { unlock() }, modifier = Modifier.fillMaxWidth().padding(top = 20.dp), shape = RoundedCornerShape(13.dp)) { Text("Unlock Bungee", Modifier.padding(7.dp)) }
             TextButton(onClick = { startActivity(Intent(this@MainActivity, LocalRecoveryActivity::class.java)) }) { Text("Local recovery · works offline") }
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(top = 15.dp)) }
@@ -200,14 +200,14 @@ class MainActivity : FragmentActivity() {
                 Text(" bungee.", fontSize = 27.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.weight(1f)); Icon(Icons.Outlined.Shield, "Self hosted", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
             }
-            Text("CONNECTED, ON YOUR TERMS", letterSpacing = 2.sp, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
-            Text(if (enrolled) "A little closer to home." else "Give your phone\na private way home.", fontSize = 30.sp, lineHeight = 37.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 12.dp))
-            Text(if (enrolled) "Your household. Your server. Your peace of mind." else "Find it. Ring it. Keep it close.\nYour data stays with the people you trust.", fontSize = 12.sp, lineHeight = 21.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 13.dp, bottom = 26.dp))
+            Text("SELF-HOSTED DEVICE FINDER", letterSpacing = 2.sp, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
+            Text(if (enrolled) "This phone" else "Pair with your\nhome server", fontSize = 30.sp, lineHeight = 37.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 12.dp))
+            Text(if (enrolled) "Location sharing and recovery settings for this phone." else "Connect to a Bungee server to share location\nand receive recovery commands.", fontSize = 12.sp, lineHeight = 21.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 13.dp, bottom = 26.dp))
             if (!enrolled) {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), shape = RoundedCornerShape(20.dp)) {
                     Column(Modifier.padding(22.dp)) {
                         Icon(Icons.Outlined.Key, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(27.dp))
-                        Text("A key that belongs to you.", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp))
+                        Text("Phone public key", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp))
                         Text("Copy this public key into “Add a device” on your home server. Your private keys stay on this phone.", fontSize = 12.sp, lineHeight = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 9.dp, bottom = 17.dp))
                         Text(identity.wgPublic, fontSize = 11.sp, color = MaterialTheme.colorScheme.primary, modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(10.dp)).clickable {
                             getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Bungee WireGuard public key", identity.wgPublic))
@@ -225,10 +225,10 @@ class MainActivity : FragmentActivity() {
                     Column(Modifier.padding(22.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(Modifier.size(45.dp).background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(13.dp)), contentAlignment = Alignment.Center) { Icon(if (status.connected) Icons.Outlined.Wifi else Icons.Outlined.Pause, null, tint = MaterialTheme.colorScheme.secondary) }
-                            Column(Modifier.padding(start = 13.dp)) { Text(if (status.connected) "Home is within reach." else if (status.running) "Finding the way home…" else "Sharing is stopped.", fontSize = 14.sp, fontWeight = FontWeight.SemiBold); Text(status.text, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 5.dp)) }
+                            Column(Modifier.padding(start = 13.dp)) { Text(if (status.connected) "Connected to server" else if (status.running) "Connecting to server…" else "Sharing stopped", fontSize = 14.sp, fontWeight = FontWeight.SemiBold); Text(status.text, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 5.dp)) }
                         }
                         HorizontalDivider(Modifier.padding(vertical = 20.dp), color = MaterialTheme.colorScheme.outlineVariant)
-                        Row { Icon(Icons.Outlined.VpnLock, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(17.dp)); Text("  Household traffic uses app-contained WireGuard.", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        Row { Icon(Icons.Outlined.VpnLock, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(17.dp)); Text("  Bungee traffic uses WireGuard to your server.", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                         Text("Bungee’s app-contained connection leaves Android’s VPN slot free for your other VPN. That VPN may still filter Bungee’s UDP connection.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
                         Text("Queued GPS fixes: ${status.queuedFixes} · dropped at capacity: ${status.droppedFixes}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.padding(top = 10.dp))
                         Text(when (status.gpsAccess) {
@@ -251,7 +251,7 @@ class MainActivity : FragmentActivity() {
                         Text("Stop is saved across restarts. To resume, open local recovery, allow a manual restart, then start sharing here.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
                     }
                 }
-                Text("YOU’RE IN CONTROL", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp, letterSpacing = 1.8.sp, modifier = Modifier.padding(top = 30.dp, bottom = 15.dp))
+                Text("SHARING AND PERMISSIONS", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp, letterSpacing = 1.8.sp, modifier = Modifier.padding(top = 30.dp, bottom = 15.dp))
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), shape = RoundedCornerShape(17.dp)) {
                     Column(Modifier.padding(horizontal = 18.dp)) {
                         SettingRow("Share GPS history", "Turning off cancels pending sends; already sent data stays at home until erased", locate) { value ->
@@ -288,7 +288,7 @@ class MainActivity : FragmentActivity() {
                             unlock {
                                 runCatching { identity.appLock = enabled }
                                     .onSuccess { lockEnabled = enabled; locked = false }
-                                    .onFailure { lockEnabled = identity.appLock; locked = true; error = "App-lock preference was not saved. This session remains locked; fix storage and retry before relying on restart protection." }
+                                    .onFailure { lockEnabled = identity.appLock; locked = true; error = "Could not save app lock. Bungee is still locked in this session. Check storage and try again." }
                             }
                         }
                     }
@@ -297,7 +297,7 @@ class MainActivity : FragmentActivity() {
                     Column(Modifier.padding(18.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Outlined.PhotoCamera, null, Modifier.size(19.dp), tint = MaterialTheme.colorScheme.primary); Text("  Automatic theft photos", fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
                         Text(camera.detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
-                        Text("Enable once before the phone is lost. Three new failed PIN/password entries trigger one front-camera attempt while ready. Protection requests system restart after process loss. Optional automatic boot recovery restores protection after Android’s first unlock, without opening Bungee yourself. Android force-stop still requires a manual app launch. Android camera privacy controls apply; biometric failures are not guaranteed.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 8.dp))
+                        Text("Enable before the phone is lost. While ready, three new failed PIN/password entries trigger one front-camera attempt. Optional boot recovery restores protection after Android’s first unlock. After a force-stop, open Bungee manually. Camera privacy settings apply; biometric failures may not be reported.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 8.dp))
                         if (!cameraGranted) TextButton(onClick = { cameraPermission.launch(Manifest.permission.CAMERA) }) { Text("Grant camera permission") }
                         if (cameraEnabled) {
                             HorizontalDivider(Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outlineVariant)
@@ -328,8 +328,8 @@ class MainActivity : FragmentActivity() {
                 }
                 Card(Modifier.fillMaxWidth().padding(top = 18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                     Column(Modifier.padding(18.dp)) {
-                        Text("Recovery stays local", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                        Text("This build refuses device-owner operation and persistent policies. Android Settings remains available to deactivate administration, force-stop or uninstall Bungee on a personal phone. No wipe, credential change, app suspension, forced DNS or remote reboot is available.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp)
+                        Text("Local recovery", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Text("Open “Bungee recovery” to stop sharing offline. You can also deactivate administration, force-stop or uninstall Bungee in Android Settings. Device ownership and persistent phone restrictions are disabled.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp)
                     }
                 }
                 TextButton(onClick = { unlock(requireCredential = true) { startActivity(Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, ComponentName(this@MainActivity, BungeeAdminReceiver::class.java)).putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Optional removable screen locking and eligible failed-credential callbacks for the separately armed camera. Camera protection needs separate one-time local approval. Locking needs your existing PIN/password afterward. No credential changes or wipe. Deactivate in Android Settings.")) } }, modifier = Modifier.padding(top = 9.dp)) {
@@ -361,12 +361,12 @@ class MainActivity : FragmentActivity() {
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 20.dp), color = MaterialTheme.colorScheme.primary)
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 18.dp)) }
             Row(Modifier.fillMaxWidth().padding(vertical = 32.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Outlined.FavoriteBorder, null, Modifier.size(13.dp), tint = MaterialTheme.colorScheme.primary); Text("  Home is the cloud.", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(Icons.Outlined.FavoriteBorder, null, Modifier.size(13.dp), tint = MaterialTheme.colorScheme.primary); Text("  Self-hosted device finder", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Text("Version ${BuildConfig.VERSION_NAME} · no Google Play services required", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp, modifier = Modifier.padding(bottom = 22.dp))
         }
         if (showCommandConsent) AlertDialog(onDismissRequest = { showCommandConsent = false }, title = { Text("Allow household recovery commands?") }, text = {
-            Text("Your home server administrator can request a fresh GPS fix, play or stop a sound, and display or clear a recovery message. Screen locking additionally needs your separate, removable Android administrator approval. Lost mode can apply those permitted actions, including an existing request after you enable this. GPS sharing alone does not grant these commands. You can turn them off here or stop Bungee through local recovery or Android Settings.")
+            Text("The server administrator can request a fresh GPS fix, play or stop an alarm, and show or clear a recovery notification. Screen locking also needs removable Android device administration.\n\nEnabling commands can apply an existing lost-mode request. GPS sharing has separate consent. Turn commands off here, or stop Bungee through local recovery or Android Settings.")
         }, confirmButton = { TextButton(onClick = {
             showCommandConsent = false
             unlock {
@@ -381,10 +381,10 @@ class MainActivity : FragmentActivity() {
             }
         }) { Text("Approve with phone unlock") } }, dismissButton = { TextButton(onClick = { showCommandConsent = false }) { Text("Keep commands off") } })
         if (showCameraConsent) AlertDialog(onDismissRequest = { showCameraConsent = false }, title = { Text("Enable automatic theft photos?") }, text = {
-            Text("Once enabled and ready, Bungee may take one front-camera photo after three new failed device/profile PIN or password entries in a row. Android may refuse camera access; fingerprints and face failures are not guaranteed callbacks. A visible foreground notification and Android camera indicators remain. No root, shell bridge or provider is used.\n\nPhotos are resized, stripped of EXIF and kept in an encrypted queue of up to three, then sent only to your own Bungee server. Server copies remain until erased. At most one attempt per five minutes and six per hour, including manual tests.\n\nYour choice stays enabled until you disarm. Android may restart the service after process loss; the failure streak, attempt budget and unsent photos survive that restart. This also permits automatic recovery of the home connection. Optional automatic boot recovery uses Android’s revocable ‘Display over other apps’ access to show a brief real startup screen after reboot or an APK update and Android’s first unlock. It restores protection and closes without a tap in Bungee. Without that access, open Bungee once. Force-stop still requires a manual launch; no new camera consent prompt is needed. The server cannot arm this feature.\n\nDisarm here or in the camera notification, stop through local recovery, or use Android Settings. Disarm and local stop clear unsent photos and prevent automatic camera resumption. Dismissing the notification alone does not disable protection.", modifier = Modifier.verticalScroll(rememberScrollState()))
+            Text("While ready, Bungee attempts one front-camera photo after three new failed PIN/password entries in a row. Fingerprint and face failures may not be reported. Android can refuse camera access. Protection keeps a visible notification and uses Android camera indicators.\n\nPhotos are resized, stripped of EXIF metadata and stored in an encrypted queue of up to three. They go only to your Bungee server and remain there until erased. Attempts are limited to one per five minutes and six per hour, including test photos.\n\nThis approval lasts until you disarm and allows the home connection to recover automatically. Android may restore the service after process loss, retaining the failure count, rate limits and queued photos. Optional boot recovery needs separate approval and Android’s ‘Display over other apps’ access; otherwise open Bungee after reboot or an app update. Force-stop always needs a manual launch. Only this phone can enable protection.\n\nDisarm here or in the camera notification, use local recovery, or stop Bungee in Android Settings. Disarming clears unsent photos and automatic recovery. Server copies need separate erasure. Swiping the notification does not disarm protection.", modifier = Modifier.verticalScroll(rememberScrollState()))
         }, confirmButton = { TextButton(onClick = { showCameraConsent = false; unlock { locked = false; runCatching { ArmedCameraService.enable(this@MainActivity); cameraEnabled = LocalSafety.isCameraEnabled(this@MainActivity) }.onFailure { error = it.message ?: "Keep Bungee open and try arming again" } } }) { Text("Enable with phone unlock") } }, dismissButton = { TextButton(onClick = { showCameraConsent = false }) { Text("Keep disarmed") } })
         if (showCameraBootConsent) AlertDialog(onDismissRequest = { showCameraBootConsent = false }, title = { Text("Restore protection automatically?") }, text = {
-            Text("After reboot or an APK update and Android’s first normal unlock, Bungee can show a brief startup screen, restore the theft-photo protection you already enabled, and close itself. No tap in Bungee is needed.\n\nAndroid calls the required special access ‘Display over other apps’. This app uses the official background activity-launch exception; it does not draw an overlay, cover the lock screen or ask for credentials at startup. Access is broad, optional and revocable in Android Settings. No root, bridge, device owner or provider is added. Pairing keys and photos stay in credential-encrypted storage.\n\nThe screen makes at most one automatic attempt per boot/app version and closes within twelve seconds if it cannot recover. Android force-stop, revoked permissions and OS restrictions can still prevent recovery. Disarm or local stop cancels the saved choice.", modifier = Modifier.verticalScroll(rememberScrollState()))
+            Text("After reboot or an app update, Bungee can restore approved theft-photo protection after Android’s first unlock. A brief startup screen opens and closes automatically.\n\nThis needs Android’s ‘Display over other apps’ special access. The permission is broad: Bungee uses it to open the startup screen. It draws no overlay, covers no lock screen and asks for no startup credentials. Revoke access at any time in Android Settings. Pairing keys and photos remain encrypted until first unlock.\n\nBungee makes one automatic attempt per boot/app version. The screen has a twelve-second close timer. Force-stop, revoked permissions and Android restrictions can prevent recovery. Disarming or a local stop cancels this choice.", modifier = Modifier.verticalScroll(rememberScrollState()))
         }, confirmButton = { TextButton(onClick = {
             showCameraBootConsent = false
             unlock {
@@ -405,8 +405,8 @@ class MainActivity : FragmentActivity() {
                 TextButton(onClick = { showBackgroundGuide = false }) { Text("Cancel") }
             }
         })
-        if (showPairing) AlertDialog(onDismissRequest = { if (!busy) showPairing = false }, title = { Text("Connect to your home") }, text = {
-            Column { Text("This creates a private tunnel and shares your phone’s location and battery with the server you chose. Timestamped GPS history stays on that server until explicitly erased or the device is revoked. Unsent GPS fixes are encrypted on this phone, up to 10,080 points. Household recovery commands start off and need separate approval after pairing. Continue only if you consent.", fontSize = 12.sp, lineHeight = 20.sp); OutlinedTextField(value = pairingText, onValueChange = { pairingText = it }, label = { Text("Enrollment invitation") }, modifier = Modifier.fillMaxWidth().padding(top = 16.dp), minLines = 4); error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 11.sp) } }
+        if (showPairing) AlertDialog(onDismissRequest = { if (!busy) showPairing = false }, title = { Text("Pair with your server") }, text = {
+            Column { Text("Pairing connects this phone to the selected server. When sharing is active, location and battery reports go to that server. GPS history stays there until erased or the device is revoked. Up to 10,080 unsent GPS fixes are encrypted on this phone. Recovery commands stay off until you approve them separately.", fontSize = 12.sp, lineHeight = 20.sp); OutlinedTextField(value = pairingText, onValueChange = { pairingText = it }, label = { Text("Enrollment invitation") }, modifier = Modifier.fillMaxWidth().padding(top = 16.dp), minLines = 4); error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 11.sp) } }
         }, confirmButton = { TextButton(onClick = { pair(pairingText) }, enabled = !busy) { Text("Agree & pair") } }, dismissButton = { TextButton(onClick = { showPairing = false }, enabled = !busy) { Text("Cancel") } })
         if (confirmReset) AlertDialog(onDismissRequest = { confirmReset = false }, title = { Text("Unpair this phone?") }, text = { Text("This erases local keys and stops sharing. Also revoke this device on the server to erase its location history and remove the peer.") }, confirmButton = { TextButton(onClick = { unlock {
             if (ManagementAgent.isOwner(this@MainActivity)) { error = "Use Bungee recovery first. Do not discard the identity while device ownership remains."; return@unlock }

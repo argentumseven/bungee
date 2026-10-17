@@ -218,7 +218,7 @@ function App() {
           message: text,
         }),
       });
-      setToast("Command queued. The phone will acknowledge it when connected.");
+      setToast("Command queued. Check Recent commands for the phone’s response.");
       setModal(null);
       setMessage("");
       await load();
@@ -297,23 +297,21 @@ function App() {
         <section className="login-story">
           <Brand />
           <div>
-            <span className="eyebrow">A LITTLE CLOSER TO HOME</span>
+            <span className="eyebrow">SELF-HOSTED DEVICE FINDER</span>
             <h1>
-              Your devices.
+              Find your
               <br />
-              Your people.
+              household’s
               <br />
-              <em>Your peace of mind.</em>
+              <em>phones.</em>
             </h1>
             <p>
-              A private place to keep your household connected.
-              <br />
-              Hosted by you. Held by you.
+              Check locations, send recovery messages and manage paired phones
+              from your own server.
             </p>
           </div>
           <div className="story-footer">
-            <ShieldCheck size={18} /> No cloud account. No data broker. Just
-            home.
+            <ShieldCheck size={18} /> Phone records are stored on your server.
           </div>
         </section>
         <section className="login-panel">
@@ -322,11 +320,10 @@ function App() {
             <div className="icon-tile">
               <Fingerprint size={30} />
             </div>
-            <span className="eyebrow">YOUR PRIVATE HOUSEHOLD</span>
-            <h2>Welcome home.</h2>
+            <span className="eyebrow">BUNGEE ADMINISTRATION</span>
+            <h2>Sign in to Bungee</h2>
             <p>
-              Sign in to your Bungee server to find a device or lend a little
-              help.
+              Enter the administrator password for this server.
             </p>
             <form onSubmit={login}>
               <label htmlFor="password">Server administrator password</label>
@@ -350,17 +347,16 @@ function App() {
                 ) : (
                   <LockKeyhole size={17} />
                 )}
-                Unlock your household
+                Sign in
                 <ArrowRight size={17} />
               </button>
             </form>
             <p className="fine">
-              <LockKeyhole size={13} /> Credentials stay with this server. Read
-              your locally generated admin-password file to get started.
+              <LockKeyhole size={13} /> For your first sign-in, read the admin-password file on the server.
             </p>
           </div>
           <div className="login-caption">
-            SELF-HOSTED BY DESIGN · PRIVATE BY DEFAULT
+            ANDROID & GRAPHENEOS
           </div>
         </section>
       </main>
@@ -375,7 +371,7 @@ function App() {
           </div>
           <div>
             <strong>My household</strong>
-            <small>Your private space</small>
+            <small>Paired phones</small>
           </div>
           <ShieldCheck size={16} />
         </div>
@@ -406,11 +402,11 @@ function App() {
           <div className="privacy-note">
             <div>
               <ShieldCheck size={18} />
-              <strong>Home is the cloud.</strong>
+              <strong>Local storage</strong>
             </div>
-            <p>Your location data stays on your server. Always.</p>
+            <p>Location history is kept until you erase it.</p>
             <span>
-              <i className="status-dot" /> Private connection
+              <i className="status-dot" /> Self-hosted
             </span>
           </div>
           <button className="nav-item" onClick={() => setModal("help")}>
@@ -449,32 +445,32 @@ function App() {
         <main className="main">
           <div className="page-heading">
             <div>
-              <div className="eyebrow">CONNECTED, ON YOUR TERMS</div>
+              <div className="eyebrow">HOUSEHOLD PHONES</div>
               <h1>
                 {page === "Overview"
-                  ? "A little peace of mind."
+                  ? "Overview"
                   : page === "Devices"
-                    ? "Everyone, accounted for."
+                    ? "Devices"
                     : page === "Device care"
-                      ? "Ready when it matters."
+                      ? "Device care"
                       : page === "History"
-                        ? "A trail you control."
+                        ? "History"
                         : page === "Activity"
-                          ? "A clear trail."
-                          : "Private by design."}
+                          ? "Activity"
+                          : "Settings"}
               </h1>
               <p>
                 {page === "Overview"
-                  ? "Everything you need to keep your household devices close."
+                  ? "Last contact, saved locations and recovery commands."
                   : page === "Devices"
                     ? "Manage the phones that belong to your household."
                     : page === "Device care"
-                      ? "Recovery, local safety and any saved DNS summaries."
+                      ? "Lost mode, theft photos and the phone’s last reported settings."
                       : page === "History"
-                        ? "Look back through GPS, IP observations and check-ins. Stored only here."
+                        ? "Search saved GPS locations, IP observations and check-ins."
                         : page === "Activity"
-                          ? "Enrollment, access, and remote commands. All on your server."
-                          : "Understand the boundaries protecting your household."}
+                          ? "Enrollment, administrator access and command events."
+                          : "Connection, permissions and data retention."}
               </p>
             </div>
             {["Overview", "Devices"].includes(page) && (
@@ -514,8 +510,8 @@ function App() {
                 />
                 <Stat
                   icon={<ShieldCheck size={20} />}
-                  label="Your data belongs to"
-                  value="You."
+                  label="History storage"
+                  value="Local"
                   note="No external map requests"
                   color="accent"
                 />
@@ -537,9 +533,9 @@ function App() {
                           <ShieldCheck size={17} />
                         </span>
                       </div>
-                      <h3>It starts with one phone.</h3>
+                      <h3>No paired phones</h3>
                       <p>
-                        Pair your first device to give it a private way home.
+                        Add a device, then scan its invitation in the Android app.
                       </p>
                       <button
                         className="text-button"
@@ -589,7 +585,7 @@ function App() {
                   )}
                   <div className="panel-footer">
                     <LockKeyhole size={13} />
-                    Connected through your private WireGuard tunnel
+                    Bungee traffic uses WireGuard to this server
                   </div>
                 </section>
                 <section className="panel location-panel">
@@ -613,12 +609,12 @@ function App() {
                         <strong>
                           {device?.telemetry?.location
                             ? device.name
-                            : "A private point of view"}
+                            : "No saved location"}
                         </strong>
                         <small>
                           {device?.telemetry?.location
                             ? `Accuracy ±${Math.round(device.telemetry.location.accuracy)} m · observed ${ago(device.telemetry.location.observed_at)}`
-                            : "Locations appear here after the phone grants access."}
+                            : "Start GPS sharing on the phone to save its location."}
                         </small>
                       </div>
                     </div>
@@ -629,7 +625,7 @@ function App() {
               <div className="lower-grid">
                 <section className="panel">
                   <div className="panel-heading">
-                    <h2>Send a little help</h2>
+                    <h2>Recovery commands</h2>
                     <span className="subtle">
                       {device ? device.name : "SELECT A PAIRED DEVICE"}
                     </span>
@@ -651,7 +647,7 @@ function App() {
                       {
                         kind: "message",
                         name: "Leave a message",
-                        desc: "A note on the lock screen",
+                        desc: "An Android notification",
                         icon: MessageSquare,
                       },
                       {
@@ -754,7 +750,7 @@ function App() {
                     .length === 0 && (
                     <div className="empty-commands">
                       <Check size={22} />
-                      <strong>All quiet at home.</strong>
+                      <strong>No recent commands</strong>
                       <p>Command receipts will appear here.</p>
                     </div>
                   )}
@@ -841,12 +837,12 @@ function App() {
             <div className="settings-grid">
               <section className="panel settings-card">
                 <ShieldCheck size={26} />
-                <h2>Small attack surface. Clear boundaries.</h2>
+                <h2>Connection and storage</h2>
                 <p>
                   The dashboard and device API use separate listeners. Device
                   requests are signed with phone-held keys, timestamped, and
-                  protected against replay. Your phone routes only{" "}
-                  <code>10.77.0.1/32</code> through WireGuard.
+                  protected against replay. Bungee sends only{" "}
+                  its home API traffic to <code>10.77.0.1/32</code> through WireGuard.
                 </p>
                 <ul>
                   <li>
@@ -865,9 +861,8 @@ function App() {
                   <li>Eight-hour administrator sessions</li>
                 </ul>
                 <div className="notice">
-                  This is an early implementation awaiting a security audit and
-                  testing on physical GrapheneOS devices. Use a test phone
-                  before relying on it.
+                  Physical GrapheneOS testing and an independent security audit
+                  are still pending. Test recovery on your phone before relying on it.
                 </div>
               </section>
               <section className="panel settings-card">
@@ -882,9 +877,10 @@ function App() {
                   stop controls offline.
                 </p>
                 <p>
-                  Background failed-unlock photos and lock-screen overlays are
-                  not supported by this version. Recovery messages use ordinary
-                  lock-screen notifications and respect system privacy settings.
+                  Theft photos need one-time approval on the phone and a running
+                  camera service. Optional boot recovery needs separate Android
+                  special access. Recovery messages use Android notifications;
+                  their visibility follows the phone’s notification settings.
                 </p>
                 {active.map((d) => (
                   <div className="settings-device" key={d.id}>
@@ -935,13 +931,13 @@ function App() {
           <footer className="main-footer">
             <span>
               <Heart size={13} />
-              Built for the people you call home.
+              Bungee · Self-hosted device finder
             </span>
             <span>
               {lastRefresh
                 ? `Updated ${new Date(lastRefresh).toLocaleTimeString()}`
                 : "Connecting…"}
-              <span className="footer-dot">·</span>All data stays here
+              <span className="footer-dot">·</span>Server storage
             </span>
           </footer>
         </main>
@@ -979,14 +975,14 @@ function App() {
             </span>
             <h2 id="modal-title">
               {modal === "enroll"
-                ? "A private way home."
+                ? "Pair a phone"
                 : modal === "message"
-                  ? "Leave a recovery message."
+                  ? "Leave a recovery message"
                   : modal === "clear_location"
                     ? "Erase this saved history?"
                     : modal === "revoke"
                       ? "Revoke this device?"
-                      : "Welcome to your household."}
+                      : "Pairing instructions"}
             </h2>
             {modal === "enroll" && !bundle && (
               <form onSubmit={enroll}>
@@ -1013,9 +1009,8 @@ function App() {
                   onChange={(e) => setWgKey(e.target.value)}
                 />
                 <p className="fine">
-                  Both people should agree to location sharing. No background
-                  enrollment or silent tracking. Reissuing a never-enrolled
-                  phone key replaces its earlier invitation and tunnel secret.
+                  The phone user must approve sharing. Reissuing an invitation for
+                  an unpaired phone invalidates its earlier invitation and tunnel secret.
                 </p>
                 <button className="primary full" disabled={busy}>
                   <Plus size={17} />
@@ -1092,7 +1087,7 @@ function App() {
                   maxLength={240}
                   value={message}
                   onChange={(e) => setMessage(e.target.value)}
-                  placeholder="This phone is loved. Please call…"
+                  placeholder="If you find this phone, please call…"
                 />
                 <small>{message.length}/240 characters</small>
                 <button className="primary full" disabled={busy}>

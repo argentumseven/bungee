@@ -1,6 +1,6 @@
-# Security design and review boundaries
+# Security design
 
-Bungee enforces the [reversibility contract](SAFETY.md). Device-owner enrollment/operation and persistent MDM controls are disabled. References to old DNS forwarding below describe compatibility boundaries, not an enrollment option.
+Bungee installs as a removable personal app with optional ordinary device administration. Device ownership and persistent MDM controls are disabled. DNS forwarding is retained for legacy compatibility; new enrollment cannot enable it. See [recovery requirements](SAFETY.md).
 
 ## Intended trust model
 
@@ -27,7 +27,7 @@ flowchart LR
 4. The user explicitly consents and establishes the app-contained WireGuard tunnel. The current build exposes no Android VPN service or managed DNS/always-on mode. The phone submits the invitation and its signing public key, plus an ECDSA proof over `BUNGEE-ENROLL-V1\n<token>\n<wg-public>\n<signing-public>`.
 5. The server checks the invitation, approved peer, source tunnel address, and proof, then consumes the invitation and binds the signing key. A loopback source-address exception exists only for the HTTP loopback development server; production HTTPS configurations do not allow it.
 
-There is no remote unattended enrollment and no server-generated phone private key. A compromised administrator or a stolen, still-valid invitation is within the provisioning trust boundary. Do not photograph or publish invitations. An ambiguous network failure after successful enrollment currently requires server revocation, local Bungee unpairing and re-pairing (never a phone reset), documented in the README.
+There is no remote unattended enrollment and no server-generated phone private key. A compromised administrator or a stolen, still-valid invitation is within the provisioning trust boundary. Do not photograph or publish invitations. After an interrupted enrollment, **Retry saved pairing** confirms an already-bound signing identity through signed policy sync. An expired, never-enrolled invitation can be reissued with the same WireGuard public key. Reissue rotates its token and PSK; paired identities cannot be rebound.
 
 ## Signed device requests
 
@@ -71,11 +71,11 @@ The image build supports an optional `build_ca` BuildKit secret for TLS-inspecti
 
 ## Post-quantum protection and limits
 
-A WireGuard Curve25519 key pair is **not** post-quantum. Each new peer additionally requires an independently generated, random 32-byte preshared secret, mixed by WireGuard's standard PSK mechanism. This provides a symmetric protection layer for tunnel confidentiality when the PSK stays secret. Do not describe the classical public key itself as quantum-proof or invent a custom replacement protocol.
+A WireGuard Curve25519 key pair is **not** post-quantum. Each new peer additionally requires an independently generated, random 32-byte preshared secret, mixed by WireGuard's standard PSK mechanism. This provides a symmetric protection layer for tunnel confidentiality when the PSK stays secret. The Curve25519 public key remains classical; the PSK adds a symmetric layer.
 
 The dashboard requires TLS 1.3 with **X25519MLKEM768** hybrid key exchange and no classical-only group fallback. The tested Caddy image supports it; a current compatible browser is required. Its local CA avoids disclosing a household hostname to a public certificate authority. Trust the root certificate through a verified local channel before pairing. The QR transfers the PSK from that trusted administrator connection/display to the phone. Never send it through email, cloud photo storage, remote QR generators, or synchronized clipboards.
 
-Certificate signatures and Android request signatures still use **classical cryptography**. Hardware-backed post-quantum Keystore signing is not implemented. The system has not been demonstrated secure against an active quantum attacker during first provisioning, a compromised endpoint, secret theft, or all future cryptanalysis. Fully post-quantum authenticated enrollment/update signing requires further protocol work and independent review. “Quantum-proof” would be an unjustified whole-product claim.
+Certificate signatures and Android request signatures still use **classical cryptography**. Hardware-backed post-quantum Keystore signing is not implemented. First provisioning and updates still depend on classical authentication. The hybrid/PSK layers do not protect a compromised endpoint or stolen secret. Fully post-quantum authenticated enrollment and signing need further protocol work and independent review.
 
 ## Data flow and location history
 
@@ -85,15 +85,15 @@ The phone samples independently of network attempts, storing up to **10,080 uniq
 
 GPS history and the recovery checkpoint use observation time; check-ins use server receipt time. Old points can fill history without moving the checkpoint backwards. Erasure clears relevant history and rotates a random generation that excludes old queued/in-flight GPS at the transaction boundary. Full history erasure and revocation also clear check-in logs. Reads and exports are administrator-only, same-origin and no-store. Erasure is logical and does not remove encrypted backups or guarantee forensic block erasure. Disk exhaustion is an operator responsibility; no silent eviction is performed.
 
-## Before production
+## Outstanding security work
 
-Require a real security review and physical GrapheneOS testing, including permission revocation, VPN replacement, network transitions, doze, reconnect, reboot/first unlock, replay after restart, multi-profile behavior, and revocation during a command. Add passkeys/MFA, per-user household authorization, administrator recovery/rotation, secure update signing, attestation policy, migration/backups, persistent abuse controls, and dependency/advisory scanning in CI. Resource-exhaustion and snapshot-restoration behavior need load and fault testing. See ROADMAP.md.
+Physical GrapheneOS testing and an independent security audit are pending. Other open work includes publisher-authenticated updates, encrypted snapshot archives, passkeys/MFA, household roles, administrator recovery, endpoint-change handling, accessibility, and load/fault testing. See [ROADMAP.md](ROADMAP.md) and the completed checks in [VALIDATION.md](VALIDATION.md).
 
 ## Reversible policy and legacy DNS boundary
 
 The signed sync schema still reads legacy policy/reports, but the server rejects every new persistent-control field regardless of owner/consent claims and projects old stored settings to permitted recovery intent. The phone independently rejects persistent controls, owner operation and locally stopped operation. Provisioning activities are disabled/cancelled. The merged manifest removes the unused library VpnService; private HTTP has no direct-network fallback and only uses the native fixed-home transport.
 
-Local recovery is separate from Identity/Compose/native initialization. Stop persistence precedes cleanup; cleanup failures do not skip independent operations. A failed stop write is surfaced with Android force-stop/deactivation instructions. Saved stop is checked at boot/service/connect/command boundaries. Short actuation is synchronized with the local stop to prevent a newly stopped action passing a stale consent check. The new build performs no enabling owner mutations; its explicit legacy-cleanup methods only remove known old policies and never clear/transfer ownership or reset a phone.
+Local recovery is separate from Identity/Compose/native initialization. Stop persistence precedes cleanup; cleanup failures do not skip independent operations. A failed stop write is surfaced with Android force-stop/deactivation instructions. Saved stop is checked at boot/service/connect/command boundaries. Short actuation is synchronized with the local stop to prevent a newly stopped action passing a stale consent check. The app enables no owner policies; its explicit legacy-cleanup methods only remove known old policies and never clear/transfer ownership or reset a phone.
 
 Legacy DNS forwarding retains its private upstream allowlist and per-peer ACLs, randomized upstream ID/question checks, no ECS, UDP/TCP bounds/rate limits and grouped no-raw-subdomain storage. New phones cannot enroll in that mode; leave its upstream unset. Compatibility tests seed an explicit old-policy fixture.
 
@@ -101,7 +101,7 @@ Recurring history is read-only sampling: groups are selected before pagination, 
 
 ## Host installation and updates
 
-See [INSTALL.md](INSTALL.md) for mandatory source-prefix rules at both gateway and Caddy, exact-origin/port configuration, maintenance admission, cold five-volume snapshots, journaled failed-trial recovery and local-console repair. The app has no Docker socket or updater API. Only the host updater downloads artifacts; those providers receive download metadata, never phone records or keys. Registry TLS, fixed repositories and immutable digests are enforced; client-side publisher-signature verification is not implemented. These boundaries do not provide a zero-failure or compromised-publisher guarantee.
+See [INSTALL.md](INSTALL.md) for mandatory source-prefix rules at both gateway and Caddy, exact-origin/port configuration, maintenance admission, cold five-volume snapshots, journaled failed-trial recovery and local-console repair. The app has no Docker socket or updater API. Only the host updater downloads artifacts; those providers receive download metadata, never phone records or keys. Registry TLS, fixed repositories and immutable digests are enforced; client-side publisher-signature verification is not implemented. A compromised authorized publisher remains an update compromise path.
 
 ## Offline maps and IP evidence
 
@@ -109,19 +109,8 @@ Map requests are authenticated and same-origin; only local raster MBTiles/City M
 
 ## DDIL and receipts
 
-Alpha.8 retains signed/timestamped/nonce-protected requests and the two-minute replay window. Retries use new request nonces; expired commands are never newly delivered. A signed late receipt may report a previously delivered attempt within its original deadline; terminal outcomes cannot be overwritten, and arrival time remains separate. This is phone-reported evidence, not exactly-once execution/attestation. Backoff closes Bungee's peer and cancels its request contexts; no alternate provider, radio setting or routing exception is introduced. See [DDIL.md](DDIL.md) for bounded queues, clock assumptions and erasure limits.
+Requests remain signed, timestamped and nonce-protected within a two-minute replay window. Retries use new request nonces; expired commands are never newly delivered. A signed late receipt may report a previously delivered attempt within its original deadline; terminal outcomes cannot be overwritten, and arrival time remains separate. This is phone-reported evidence, not exactly-once execution/attestation. Backoff closes Bungee's peer and cancels its request contexts; no alternate provider, radio setting or routing exception is introduced. See [DDIL.md](DDIL.md) for bounded queues, clock assumptions and erasure limits.
 
-## Independent review corrections (alpha.9)
+## Review records
 
-See [REVIEW-2026-10.md](REVIEW-2026-10.md) for confirmed defects, corrections, test boundaries and remaining open security requirements. Optional background location is explicitly granted by the owner for automatic GPS restart after first unlock; a connection alone never establishes a fresh fix. GPS coordinates are individually encrypted in SQLite, with timestamps/counters as sandbox-protected indexing metadata. Unverified IDs cannot allocate signed-device limiter entries; administrative budgets are separate, and bundled Caddy overwrites its trusted loopback identity header. Unknown/conflicting command receipts remain unresolved. Publisher signatures and encrypted snapshot archives are still absent; root-only archives and digest checks do not supply those protections.
-
-## Second review corrections (alpha.10)
-
-See [REVIEW-2026-10-SECOND.md](REVIEW-2026-10-SECOND.md). Explicit command consent defaults off; failed writes/read errors fail closed in the current process. Independent stop is attempted on a command-write failure; complete storage failure cannot guarantee persistence across restart. New invitation state/audit transitions are transactional, with private peer-file staging, post-commit publication and safe reissue after a publication failure. A device API bind guard reinforces the tunnel boundary. CSV streams use bounded workers/buffers, recheck sessions/erasure state and stop on disconnect/deadline; already downloaded bytes cannot be recalled. The host/APK/server version now derives from the release manifest. Publisher-signature enforcement and application-encrypted backups remain open.
-
-
-## Adversarial review corrections (alpha.11)
-
-[REVIEW-2026-10-ADVERSARIAL.md](REVIEW-2026-10-ADVERSARIAL.md) defines the erasure generation, consent cancellation and deadline contracts. Local cancellation cannot recall already-sent bytes or promise a remote erase while offline. A home erase rotates the generation transactionally. Upgraded phones discard an old untagged backlog on first reconciliation. GPS and command withdrawal/local stop cancel pending capture/native reservations and invalidate prepared work across re-enabling. Remote locate needs an exact stored-point acknowledgment and server commit-admission expiry check.
-
-The plain HTTP administrator backend always binds loopback, regardless of public-origin scheme. JSON history scans use at most two separate read-only workers with five-second cancellation/progress limits; interval JSON/CSV selection is limited to 366 days and 10,000 buckets. No scan holds the canonical write mutex. Publisher signatures, encrypted snapshot archives and physical GrapheneOS acceptance remain open.
+The [first review](REVIEW-2026-10.md), [second review](REVIEW-2026-10-SECOND.md) and [adversarial review](REVIEW-2026-10-ADVERSARIAL.md) record historical findings, fixes and regression checks. Current enrollment, erasure, cancellation and resource limits are described above and in the linked guides. Publisher-signature enforcement, application-encrypted archives and physical GrapheneOS acceptance remain open.

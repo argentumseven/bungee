@@ -161,7 +161,7 @@ export function DeviceCare({
       setDraft(result.policy);
       setSaved((old) => (old ? { ...old, ...result } : old));
       setNotice(
-        "Saved at home. Check the phone-reported state for application and errors.",
+        "Saved. Wait for the phone to report the new revision and check for errors.",
       );
     } catch (e) {
       setError((e as Error).message);
@@ -216,7 +216,7 @@ export function DeviceCare({
                 checked={draft.lost_mode}
                 disabled={!report?.recovery_consent || busy}
                 onChange={(v) => set("lost_mode", v)}
-                note="Keep recovery intent pending through outages. The phone locks once and displays your contact message when permitted."
+                note="Keep lost mode pending while offline. On reconnect, the phone attempts one lock per revision and shows your message if permissions allow."
               />
               <label htmlFor="lost-contact">Recovery contact message</label>
               <textarea
@@ -231,20 +231,18 @@ export function DeviceCare({
                 placeholder="This phone is lost. Please call…"
               />
               <p className="fine">
-                Unlock controls stay accessible. Notification privacy and
-                Android permissions still apply. Sirens remain short-lived
-                commands.
+                Android controls lock-screen visibility. Lost mode leaves
+                credential entry accessible. Send an alarm separately.
               </p>
               <details className="message-preview-details">
                 <summary>Preview recovery message</summary>
                 <RecoveryMessagePreview message={draft.recovery_message} lost />
               </details>
               <div className="notice">
-                Device-owner enrollment and persistent controls are disabled.
-                This build cannot enforce DNS/always-on, suspend apps, prevent
-                uninstall, change lock requirements or block Android recovery
-                settings. Use the phone's separate “Bungee recovery” entry to
-                stop controls offline.
+                Bungee uses removable device administration for screen locking
+                and failed-unlock reports. Device ownership, forced DNS, app
+                suspension and uninstall restrictions are unavailable. To stop
+                Bungee offline, open “Bungee recovery” on the phone.
               </div>
               {(report?.owner || saved.legacy_policy_present) && (
                 <div className="error" role="alert">
@@ -294,15 +292,13 @@ export function DeviceCare({
                           : "Requested state reported"}
                     </strong>
                   </div>
-                  <h3 className="delivery-heading">Locally armed camera</h3>
-                  <p className="fine">{report.camera ? `${report.camera.armed ? "Armed at last report" : "Not ready at last report"} · ${time(report.camera.reported_at)}. ${report.camera.status}. Pending ${report.camera.pending}/3; discarded at capacity ${report.camera.dropped}.` : "Not reported by this app. Update the phone and enable theft photos once if wanted."} An offline phone’s current state is unknown. Enable protection on the phone before it is lost; the server cannot arm it.</p>
+                  <h3 className="delivery-heading">Theft-photo protection</h3>
+                  <p className="fine">{report.camera ? `${report.camera.armed ? "Armed at last report" : "Not ready at last report"} · ${time(report.camera.reported_at)}. ${report.camera.status}. Pending ${report.camera.pending}/3; discarded at capacity ${report.camera.dropped}.` : "Not reported. Check the app version and theft-photo settings on the phone."} Enable protection on the phone before it is lost. This server cannot enable it remotely.</p>
                   <h3 className="delivery-heading">Delivery &amp; offline queue</h3>
                   {report.delivery ? (
                     <>
                       <p className="fine">
-                        Last reported {time(report.delivery.reported_at)}. These
-                        are saved observations, not a live view while the phone
-                        is offline.
+                        Last reported {time(report.delivery.reported_at)}. Queue counts reflect that report and can change while offline.
                       </p>
                       <dl className="care-health">
                         <div>
@@ -406,17 +402,14 @@ export function DeviceCare({
                 </>
               )}
               <p className="fine">
-                These are signed app reports, not hardware attestation.
-                Failed-credential callbacks depend on Android administration;
-                they do not count every biometric attempt.
+                The app signs these reports; hardware attestation is unavailable.
+                Failed-credential reports require Android administration and
+                may exclude biometric attempts.
               </p>
               <div className="notice">
-                Managed DNS is disabled for new policies. Older previews used
-                Android's system resolver in the managed profile. App-supplied
-                DoH/DoT, hard-coded DNS, other profiles and periods without the
-                VPN are coverage limits. App suspension is unavailable in this
-                build. This view is not a browsing-history or app-attribution
-                claim.
+                DNS summaries below come from earlier managed-DNS installations.
+                New installations leave system DNS unchanged. Summaries cannot
+                identify the requesting app or show queries that bypassed Bungee.
               </div>
             </section>
           </div>
