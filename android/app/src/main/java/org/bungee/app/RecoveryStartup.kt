@@ -41,9 +41,10 @@ object RecoveryStartup {
 class RecoveryBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == Intent.ACTION_BOOT_COMPLETED || intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
+            val automaticCamera = CameraBootRecovery.request(context)
             RecoveryStartup.startIfApproved(context)
-            // A standing camera choice does not grant permission to start a camera FGS at boot.
-            ArmedCameraService.showAttention(context)
+            // Camera starts only from the real resumed startup activity, never this receiver.
+            if (!automaticCamera) ArmedCameraService.showAttention(context)
         }
     }
 }

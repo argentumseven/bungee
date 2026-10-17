@@ -57,6 +57,9 @@ class MainActivity : FragmentActivity() {
     private var backgroundGuideForRestart by mutableStateOf(false)
     private var showCommandConsent by mutableStateOf(false)
     private var showCameraConsent by mutableStateOf(false)
+    private var showCameraBootConsent by mutableStateOf(false)
+    private var cameraBootAllowed by mutableStateOf(false)
+    private var startupAccess by mutableStateOf(false)
     private var cameraGranted by mutableStateOf(false)
     private var cameraEnabled by mutableStateOf(false)
     private var cameraResumeJob: Job? = null
@@ -87,11 +90,15 @@ class MainActivity : FragmentActivity() {
         } }
     }
     override fun onStop() { super.onStop(); if (::identity.isInitialized && identity.appLock) locked = true }
-    override fun onResume() { super.onResume(); backgroundLocation = TelemetryService.hasBackgroundLocation(this); locallyStopped = LocalSafety.isStopped(this); cameraGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED }
+    override fun onResume() { super.onResume(); backgroundLocation = TelemetryService.hasBackgroundLocation(this); locallyStopped = LocalSafety.isStopped(this); cameraGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED; cameraBootAllowed = LocalSafety.isCameraRestartAllowed(this); startupAccess = CameraBootRecovery.hasStartupAccess(this) }
     override fun onPostResume() {
         super.onPostResume()
         cameraEnabled = LocalSafety.isCameraEnabled(this)
         resumeCameraIfEnabled()
+    }
+    private fun openStartupAccess() {
+        runCatching { startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:$packageName"))) }
+            .onFailure { error = "Open Android Settings → Apps → Special app access → Display over other apps → Bungee." }
     }
     private fun resumeCameraIfEnabled() {
         if (!::identity.isInitialized || !LocalSafety.isCameraEnabled(this) || LocalSafety.isStopped(this) || ManagementAgent.isOwner(this)) return
@@ -179,7 +186,7 @@ class MainActivity : FragmentActivity() {
     @Composable private fun HomeScreen() {
         val status by TelemetryService.status.collectAsState()
         val camera by ArmedCameraService.status.collectAsState()
-        LaunchedEffect(camera) { cameraEnabled = LocalSafety.isCameraEnabled(this@MainActivity) }
+        LaunchedEffect(camera) { cameraEnabled = LocalSafety.isCameraEnabled(this@MainActivity); cameraBootAllowed = LocalSafety.isCameraRestartAllowed(this@MainActivity) }
         var lockEnabled by remember { mutableStateOf(identity.appLock) }
         var locate by remember { mutableStateOf(identity.allowLocate) }
         var commands by remember { mutableStateOf(identity.allowCommands) }
@@ -290,8 +297,22 @@ class MainActivity : FragmentActivity() {
                     Column(Modifier.padding(18.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Outlined.PhotoCamera, null, Modifier.size(19.dp), tint = MaterialTheme.colorScheme.primary); Text("  Automatic theft photos", fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
                         Text(camera.detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
-                        Text("Enable once before the phone is lost. Three new failed PIN/password entries trigger one front-camera attempt while ready. Protection requests system restart after process loss. After reboot or force-stop, open Bungee once to resume automatically. Android camera privacy controls apply; biometric failures are not guaranteed.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 8.dp))
+                        Text("Enable once before the phone is lost. Three new failed PIN/password entries trigger one front-camera attempt while ready. Protection requests system restart after process loss. Optional automatic boot recovery restores protection after Android’s first unlock, without opening Bungee yourself. Android force-stop still requires a manual app launch. Android camera privacy controls apply; biometric failures are not guaranteed.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 8.dp))
                         if (!cameraGranted) TextButton(onClick = { cameraPermission.launch(Manifest.permission.CAMERA) }) { Text("Grant camera permission") }
+                        if (cameraEnabled) {
+                            HorizontalDivider(Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                            Text("Automatic recovery after reboot", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                            Text(if (cameraBootAllowed && startupAccess) "Enabled · after Android’s first unlock, a brief Bungee startup screen restores protection and closes. No tap in Bungee is needed."
+                                else "Enable once and grant Android’s ‘Display over other apps’ access. Bungee uses it to show its startup screen; it does not draw an overlay or cover your lock screen.", fontSize = 10.sp, lineHeight = 17.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
+                            if (!cameraBootAllowed) TextButton(onClick = { showCameraBootConsent = true }) { Text("Enable automatic boot recovery") }
+                            else {
+                                if (!startupAccess) TextButton(onClick = { openStartupAccess() }) { Text("Grant startup access in Android Settings") }
+                                TextButton(onClick = {
+                                    runCatching { LocalSafety.setCameraRestartAllowed(this@MainActivity, false); CameraBootRecovery.cancel(this@MainActivity) }
+                                        .onSuccess { cameraBootAllowed = false }.onFailure { error = "Automatic recovery preference could not be saved. Use local recovery or Android Settings." }
+                                }) { Text("Turn off automatic boot recovery") }
+                            }
+                        }
                         if (camera.armed || cameraEnabled) {
                             if (camera.armed) Text("Encrypted pending photos: ${camera.pending}/3 · discarded at capacity: ${camera.dropped}", fontSize = 10.sp, modifier = Modifier.padding(top = 10.dp))
                             else Text("Retained photos will be counted here when protection resumes.", fontSize = 10.sp, modifier = Modifier.padding(top = 10.dp))
@@ -360,8 +381,18 @@ class MainActivity : FragmentActivity() {
             }
         }) { Text("Approve with phone unlock") } }, dismissButton = { TextButton(onClick = { showCommandConsent = false }) { Text("Keep commands off") } })
         if (showCameraConsent) AlertDialog(onDismissRequest = { showCameraConsent = false }, title = { Text("Enable automatic theft photos?") }, text = {
-            Text("Once enabled and ready, Bungee may take one front-camera photo after three new failed device/profile PIN or password entries in a row. Android may refuse camera access; fingerprints and face failures are not guaranteed callbacks. A visible foreground notification and Android camera indicators remain. No root, shell bridge or provider is used.\n\nPhotos are resized, stripped of EXIF and kept in an encrypted queue of up to three, then sent only to your own Bungee server. Server copies remain until erased. At most one attempt per five minutes and six per hour, including manual tests.\n\nYour choice stays enabled until you disarm. Android may restart the service after process loss; the failure streak, attempt budget and unsent photos survive that restart. This also permits automatic recovery of the home connection. Reboot, APK replacement or force-stop can leave camera protection unavailable until you open Bungee once; no new consent prompt is needed. The server cannot arm this feature.\n\nDisarm here or in the camera notification, stop through local recovery, or use Android Settings. Disarm and local stop clear unsent photos and prevent automatic camera resumption. Dismissing the notification alone does not disable protection.", modifier = Modifier.verticalScroll(rememberScrollState()))
+            Text("Once enabled and ready, Bungee may take one front-camera photo after three new failed device/profile PIN or password entries in a row. Android may refuse camera access; fingerprints and face failures are not guaranteed callbacks. A visible foreground notification and Android camera indicators remain. No root, shell bridge or provider is used.\n\nPhotos are resized, stripped of EXIF and kept in an encrypted queue of up to three, then sent only to your own Bungee server. Server copies remain until erased. At most one attempt per five minutes and six per hour, including manual tests.\n\nYour choice stays enabled until you disarm. Android may restart the service after process loss; the failure streak, attempt budget and unsent photos survive that restart. This also permits automatic recovery of the home connection. Optional automatic boot recovery uses Android’s revocable ‘Display over other apps’ access to show a brief real startup screen after reboot or an APK update and Android’s first unlock. It restores protection and closes without a tap in Bungee. Without that access, open Bungee once. Force-stop still requires a manual launch; no new camera consent prompt is needed. The server cannot arm this feature.\n\nDisarm here or in the camera notification, stop through local recovery, or use Android Settings. Disarm and local stop clear unsent photos and prevent automatic camera resumption. Dismissing the notification alone does not disable protection.", modifier = Modifier.verticalScroll(rememberScrollState()))
         }, confirmButton = { TextButton(onClick = { showCameraConsent = false; unlock { locked = false; runCatching { ArmedCameraService.enable(this@MainActivity); cameraEnabled = LocalSafety.isCameraEnabled(this@MainActivity) }.onFailure { error = it.message ?: "Keep Bungee open and try arming again" } } }) { Text("Enable with phone unlock") } }, dismissButton = { TextButton(onClick = { showCameraConsent = false }) { Text("Keep disarmed") } })
+        if (showCameraBootConsent) AlertDialog(onDismissRequest = { showCameraBootConsent = false }, title = { Text("Restore protection automatically?") }, text = {
+            Text("After reboot or an APK update and Android’s first normal unlock, Bungee can show a brief startup screen, restore the theft-photo protection you already enabled, and close itself. No tap in Bungee is needed.\n\nAndroid calls the required special access ‘Display over other apps’. This app uses the official background activity-launch exception; it does not draw an overlay, cover the lock screen or ask for credentials at startup. Access is broad, optional and revocable in Android Settings. No root, bridge, device owner or provider is added. Pairing keys and photos stay in credential-encrypted storage.\n\nThe screen makes at most one automatic attempt per boot/app version and closes within twelve seconds if it cannot recover. Android force-stop, revoked permissions and OS restrictions can still prevent recovery. Disarm or local stop cancels the saved choice.", modifier = Modifier.verticalScroll(rememberScrollState()))
+        }, confirmButton = { TextButton(onClick = {
+            showCameraBootConsent = false
+            unlock {
+                runCatching { LocalSafety.setCameraRestartAllowed(this@MainActivity, true); cameraBootAllowed = true }
+                    .onSuccess { if (!CameraBootRecovery.hasStartupAccess(this@MainActivity)) openStartupAccess() }
+                    .onFailure { error = "Automatic recovery consent could not be saved." }
+            }
+        }) { Text("Enable with phone unlock") } }, dismissButton = { TextButton(onClick = { showCameraBootConsent = false }) { Text("Keep manual recovery") } })
         if (showBackgroundGuide) AlertDialog(onDismissRequest = { showBackgroundGuide = false }, title = { Text("GPS after restart") }, text = {
             Text("Bungee records your GPS trail for your home server. To resume GPS after reboot and first unlock, Android requires Location → Allow all the time, with precise location enabled. This is optional and reversible in Android Settings. Without it, automatic restart can reconnect but GPS stays paused until you open Bungee and resume GPS. No data is available before the first unlock.")
         }, confirmButton = { TextButton(onClick = {

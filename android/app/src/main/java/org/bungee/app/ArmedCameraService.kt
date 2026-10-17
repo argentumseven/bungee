@@ -176,6 +176,7 @@ class ArmedCameraService : Service() {
             // Do not adopt remnants from an old, explicitly disarmed installation/session.
             discardPending(activity)
             clearLease(activity)
+            CameraBootRecovery.cancel(activity)
             LocalSafety.setCameraEnabled(activity, true)
             refreshReadiness(activity)
             resume(activity)
@@ -211,7 +212,7 @@ class ArmedCameraService : Service() {
         fun refreshReadiness(context: Context, reason: String? = null) {
             if (active != null) return
             status.value = ArmedCameraStatus(detail = if (LocalSafety.isCameraEnabled(context))
-                "Enabled · not ready: ${reason ?: "open Bungee to resume camera protection"}"
+                "Enabled · not ready: ${reason ?: if (LocalSafety.isCameraRestartAllowed(context)) "automatic recovery configured; check startup access" else "open Bungee or enable automatic boot recovery"}"
             else "Disabled · enable theft photos once on this phone")
         }
         fun showAttention(context: Context) {
@@ -239,6 +240,7 @@ class ArmedCameraService : Service() {
                 "Camera service could not be stopped" to { context.stopService(Intent(context, ArmedCameraService::class.java)); Unit },
                 "Pending photo cleanup failed" to { discardPending(context) },
                 "Camera checkpoint cleanup failed" to { clearLease(context) },
+                "Automatic camera startup cleanup failed" to { CameraBootRecovery.cancel(context) },
                 "Camera attention notification cleanup failed" to { context.getSystemService(NotificationManager::class.java).cancel(12) }
             ))
             if (failures.isNotEmpty()) {

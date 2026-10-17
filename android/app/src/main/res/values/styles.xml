@@ -20,5 +20,5 @@
         <item name="android:colorAccent">#96C5CF</item>
         <item name="android:windowActionModeOverlay">true</item>
     </style>
-    <string name="admin_description">Allow optional screen locking and eligible failed-credential callbacks. Camera capture requires separate local arming. No remote wipe or password changes. You can revoke access in Android settings.</string>
+    <string name="admin_description">Allow optional screen locking and eligible failed-credential callbacks. Camera capture needs separate one-time local approval. No remote wipe or password changes. You can revoke access in Android settings.</string>
 </resources>

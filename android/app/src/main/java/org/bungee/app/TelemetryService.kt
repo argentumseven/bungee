@@ -37,6 +37,12 @@ class TelemetryService : Service() {
     private data class Observation(val point: JSONObject, val epoch: String, val stamp: DisclosureFence.Stamp)
     @Volatile private var network: Network? = null
     private var watchingNetwork = false
+    private var watchingUnlock = false
+    private val unlockReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == Intent.ACTION_USER_PRESENT) CameraBootRecovery.resumePending(this@TelemetryService)
+        }
+    }
     private var locationForeground = false
     private fun canSample() = identity.allowLocate && hasLocation(this) && locationForeground
     private fun updateLocationStatus() {
@@ -64,6 +70,11 @@ class TelemetryService : Service() {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel("sharing", "Private household connection", NotificationManager.IMPORTANCE_LOW))
         nm.createNotificationChannel(NotificationChannel("recovery", "Phone recovery messages", NotificationManager.IMPORTANCE_HIGH).apply { lockscreenVisibility = Notification.VISIBILITY_PUBLIC })
+        watchingUnlock = runCatching {
+            ContextCompat.registerReceiver(this, unlockReceiver, IntentFilter(Intent.ACTION_USER_PRESENT), ContextCompat.RECEIVER_NOT_EXPORTED)
+            true
+        }.getOrDefault(false)
+        CameraBootRecovery.resumePending(this)
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (LocalSafety.isStopped(this) || ManagementAgent.isOwner(this)) { stopSelf(); return START_NOT_STICKY }
@@ -401,6 +412,7 @@ class TelemetryService : Service() {
         // A deliberate local stop still cancels capture and clears its queue independently.
         if (LocalSafety.isStopped(this)) runCatching { ArmedCameraService.disarm(this) }
         if (watchingNetwork) runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(callback) }
+        if (watchingUnlock) runCatching { unregisterReceiver(unlockReceiver) }
         stopRinging(); scope.cancel()
         networkChanged.close()
         Thread { runCatching { HomeTunnel.disconnectOwned(tunnelOwner) } }.start()

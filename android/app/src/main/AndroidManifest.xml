@@ -12,6 +12,7 @@
     <queries><intent><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent></queries>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
     <application android:name=".BungeeApplication" android:label="Bungee" android:theme="@style/Theme.Bungee" android:icon="@mipmap/ic_launcher"
@@ -19,6 +20,7 @@
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
         </activity>
+        <activity android:name=".CameraRecoveryActivity" android:exported="false" android:excludeFromRecents="true" android:noHistory="true" android:taskAffinity="org.bungee.app.cameraRecovery"/>
         <activity android:name=".LocalRecoveryActivity" android:label="Bungee recovery" android:exported="true">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
         </activity>

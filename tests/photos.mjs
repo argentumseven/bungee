@@ -35,8 +35,10 @@ test("armed recovery photos: private storage, bounded input and erasure generati
     const exif = Buffer.concat([jpeg.subarray(0, 2), Buffer.from([255, 225, 0, 8, 69, 120, 105, 102, 0, 0]), jpeg.subarray(2)]);
     const lateExif = Buffer.concat([jpeg.subarray(0, -2), Buffer.from([255, 225, 0, 8, 69, 120, 105, 102, 0, 0]), jpeg.subarray(-2)]);
     const oversize = Buffer.from(jpeg), frame = oversize.indexOf(Buffer.from([255, 192])); assert.ok(frame > 0); oversize.writeUInt16BE(32767, frame + 7);
-    for (const change of [{ jpeg: Buffer.from('<svg onload="alert(1)"></svg>').toString("base64") }, { jpeg: exif.toString("base64") }, { jpeg: lateExif.toString("base64") }, { jpeg: oversize.toString("base64") }, { jpeg: "A".repeat(16_385) }, { jpeg: "???" }, { failed_attempts: 2 }, { reason: "local_test" }, { captured_at: Math.floor(Date.now()/1000)+121 }, { reason: "remote_camera" }]) {
-      assert.equal((await upload(body(photo(change)))).status, 400);
+    // Leave a margin beyond the server's 120-second allowance: this array is
+    // constructed before several requests and can cross a wall-clock second.
+    for (const change of [{ jpeg: Buffer.from('<svg onload="alert(1)"></svg>').toString("base64") }, { jpeg: exif.toString("base64") }, { jpeg: lateExif.toString("base64") }, { jpeg: oversize.toString("base64") }, { jpeg: "A".repeat(16_385) }, { jpeg: "???" }, { failed_attempts: 2 }, { reason: "local_test" }, { captured_at: Math.floor(Date.now()/1000)+300 }, { reason: "remote_camera" }]) {
+      assert.equal((await upload(body(photo(change)))).status, 400, `Invalid photo fields: ${Object.keys(change).join(", ")}`);
     }
     assert.equal((await upload(body(photo({ jpeg: "A".repeat(40_000) })))).status, 413);
     const noEpoch = body(photo()); delete noEpoch.photo_epoch; assert.equal((await upload(noEpoch)).status, 409);

@@ -31,4 +31,16 @@ class LocalSafetyStateTest {
         assertFalse(LocalSafetyState().allowCamera(true).allowCamera(false).connectionRestartAllowed)
         assertTrue(LocalSafetyState().allowRestart(true).allowCamera(true).allowCamera(false).connectionRestartAllowed)
     }
+    @Test fun automaticBootWindowsRequireSeparateCameraConsentAndLocalOptIn() {
+        assertThrows(IllegalStateException::class.java) { LocalSafetyState().allowCameraRestart(true) }
+        val optedIn = LocalSafetyState().allowCamera(true).allowCameraRestart(true)
+        assertTrue(optedIn.cameraRestartAllowed)
+        assertFalse(optedIn.allowCamera(false).cameraRestartAllowed)
+        assertFalse(optedIn.stop().clearStop().allowCamera(true).cameraRestartAllowed)
+    }
+    @Test fun disablingAutomaticBootRecoveryLeavesCurrentCameraAndSharingChoicesAlone() {
+        val state = LocalSafetyState().allowRestart(true).allowCamera(true).allowCameraRestart(true).allowCameraRestart(false)
+        assertFalse(state.cameraRestartAllowed); assertTrue(state.cameraEnabled); assertTrue(state.restartAllowed)
+        assertThrows(IllegalArgumentException::class.java) { LocalSafetyState(cameraRestartAllowed = true) }
+    }
 }
