@@ -10,7 +10,7 @@ From this checkout run:
 sudo python3 scripts/bungee-host.py install
 ```
 
-Choose the dashboard HTTPS port/address, explicit administrator IP prefixes, custom WireGuard UDP port, reachable numeric endpoint, optional DNS resolver, encrypted storage capacity, and update preference. Port 51820 and allow-everyone administrator prefixes are rejected. No reverse proxy or load balancer is required: Rust serves HTTPS directly.
+Choose an internal management bind IP and HTTPS port, explicit internal administrator prefixes, a separate reachable numeric phone endpoint/custom WireGuard UDP port, optional DNS resolver, encrypted storage capacity, and update preference. Port 51820 and allow-everyone administrator prefixes are rejected. No reverse proxy or load balancer is required: Rust serves HTTPS directly.
 
 For unattended setup, pass `--config answers.json`. Preview without root, Docker, file writes or network access:
 
@@ -61,7 +61,13 @@ sudo python3 /opt/bungee/bungee-host.py recover
 
 Normal reboot unlocks storage, starts Docker, restarts the two containers and runs interrupted-update recovery. Missing keys, failed mounts, malformed firewall configuration or failed recovery keep admission closed. `recover --start` explicitly starts an unfinished/stopped installation after diagnosis. Keep the daily timer enabled for certificate maintenance; disable software downloads with `auto_updates: false`, rather than disabling the timer.
 
-Only the selected HTTPS TCP port and custom WireGuard UDP port are published. The device API stays at `10.77.0.1:8081`, accessible through WireGuard; never publish port 8081. Administrator source prefixes are checked by both the gateway and Rust using the actual TCP source. Forwarding headers have no authority. Restrict the host/provider firewall to the same administrator sources and the selected UDP endpoint. Do not publish any internal ports.
+HTTPS is published only on the configured **internal management IP** (`bind_ip`), with an explicit administrator source allowlist. The WireGuard UDP endpoint can be public; do not port-forward HTTPS from a WAN router or publish it on the VPS public interface. Wildcard management binds and binds inside `10.77.0.0/24` are rejected. Administrator prefixes that overlap that phone subnet, including a broad `10.0.0.0/8`, are rejected; enter your actual management VLAN/subnet instead. An address class alone does not define trust: use the internal management address and routed source prefixes you control.
+
+Server `wg0` permits only phone C2 at TCP `10.77.0.1:8081` and optional legacy DNS at UDP/TCP `10.77.0.1:5353` after the port-53 redirect. All other `wg0` INPUT is dropped **before** conntrack's established/related rules. It cannot reach the dashboard, any administrator API, SSH or another local service, even by targeting the container's `eth0` address. FORWARD remains DROP.
+
+Rust's administrator TLS socket uses `SO_BINDTODEVICE=eth0` in the shared container namespace, independently of its wildcard IPv4 bind. `BUNGEE_ADMIN_INTERFACE` is required for a non-loopback administrator bind and cannot be `wg0`. Unsupported kernel/security policies fail startup; capabilities are never added to work around this. Rust also rejects phone-overlay sources independently of the allowlist. Both layers enforce the actual management-source prefixes; forwarding headers have no authority.
+
+For a VPS without a directly routed internal network, provision a separate management/private network or a distinct host-to-site management tunnel. It must not use the phone `wg0` overlay or overlapping subnet. Bind HTTPS to that management address and restrict host/provider ingress to its routed source prefixes. Restrict host SSH and Docker management to the same internal management zone; the installer does not rewrite the host's SSH daemon or firewall. Do not publish device port 8081 or DNS port 5353.
 
 ## Updates, encrypted backups and recovery keys
 

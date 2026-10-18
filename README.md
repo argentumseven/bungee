@@ -60,6 +60,8 @@ bash scripts/install.sh --plan   # validate answers without writes or network ca
 sudo bash scripts/install.sh    # configure and start the stack
 ```
 
+Server administration uses only your internal management network. Publish HTTPS on that host address and allow only its source prefixes. Phone `wg0` carries C2 and optional legacy DNS; it cannot reach the dashboard, administrator API or host management. A VPS needs a separate private management route.
+
 The wizard asks for ports and mandatory administrator source hosts/prefixes. It configures source restrictions in both the gateway firewall and Rust HTTPS. Verify the printed local-CA fingerprint and trust the public root certificate on administrator devices before signing in. Keep persistent data and backups on encrypted storage.
 
 For phones away from home, the selected WireGuard UDP endpoint must be reachable. Public IPv4 normally requires forwarding that UDP port on your router; CGNAT needs another reachable path. The dashboard can stay on your LAN/VPN. WireGuard provides encryption; it does not create inbound reachability. No relay is included.
