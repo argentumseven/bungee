@@ -2,8 +2,8 @@
 
 These are drawn raster PNG pictures with fixed geometry and technical labels. No live Mermaid renderer or automatic box layout is required.
 
-- `security-architecture.png` separates the logical WireGuard L3 overlay from its routed UDP underlay, including phone userspace addressing, host Docker publication, shared-namespace `eth0`/`wg0`, encapsulation and local INPUT delivery.
-- `backend-topology.png` shows the shared network namespace, distinct gateway/server containers, kernel WireGuard, one Rust process, its three socket services, SQLite file I/O and the peer-configuration control plane. Management arrives only from the internal network through `eth0`; the Rust TLS socket is interface-bound. Phone `wg0` admits C2 and optional DNS only, with all other local ingress dropped before conntrack.
+- `security-architecture.png` is one logical network topology with separate phone, internal management and server zones. It shows encrypted WireGuard ingress, decrypted local C2, optional legacy DNS, internal HTTPS and a new DNS upstream connection. Host publishing is an annotation outside the shared namespace; the picture does not duplicate endpoint views.
+- `backend-topology.png` shows the shared network namespace, distinct gateway/server containers, kernel WireGuard, one Rust process, its three socket services, SQLite file I/O and the peer-configuration control plane. Management arrives only from the internal network through `eth0`; the Rust TLS socket is interface-bound. Phone `wg0` admits C2 and optional DNS only, with all other local ingress dropped before the ESTABLISHED/RELATED accept rule. Connection tracking still runs.
 - `storage-lifecycle.png` shows host-key unlock, cold encrypted backups and authenticated restore with separate host keys.
 
 The [topology reference](../NETWORK-TOPOLOGY.md) records the address/port notation, forwarding scope, connection and mount tables, omissions and pinned implementation sources. It distinguishes optional legacy DNS from the current personal app's fixed HTTP transport.
