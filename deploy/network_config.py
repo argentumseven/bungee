@@ -6,6 +6,8 @@ import os
 import re
 import sys
 
+PHONE_NETWORK = ipaddress.ip_network('10.77.0.0/24')
+
 
 def port(value, wireguard=False):
     text = str(value)
@@ -31,6 +33,8 @@ def admin_networks(value):
             raise ValueError("Unspecified and multicast administrator networks are forbidden")
         if network.version == 6 and network.overlaps(ipaddress.ip_network('::ffff:0:0/96')):
             raise ValueError("Enter IPv4 addresses directly, not IPv4-mapped IPv6 prefixes")
+        if network.version == 4 and network.overlaps(PHONE_NETWORK):
+            raise ValueError("Administrator networks must not overlap the phone C2 subnet 10.77.0.0/24")
         if network not in networks:
             networks.append(network)
     return [str(n) for n in networks]
@@ -42,6 +46,15 @@ def address(value, endpoint=False):
     ip = ipaddress.ip_address(value)
     if endpoint and (ip.is_unspecified or ip.is_multicast or ip.is_loopback):
         raise ValueError("Use the numeric home-server address reachable by your phones")
+    return str(ip)
+
+
+def management_address(value):
+    ip = ipaddress.ip_address(address(value))
+    if (ip.is_unspecified or ip.is_multicast or ip.is_link_local or
+        (ip.version == 4 and (ip in PHONE_NETWORK or ip.packed[0] == 0 or ip.packed[0] >= 224)) or
+        (ip.version == 6 and ip.ipv4_mapped is not None)):
+        raise ValueError('Bind HTTPS to one internal management IP or loopback, never a wildcard or phone-overlay address')
     return str(ip)
 
 
@@ -88,7 +101,7 @@ def validate(config):
     result['wg_port'] = port(config['wg_port'], wireguard=True)
     result['web_port'] = port(config['web_port'])
     result['endpoint_ip'] = address(config['endpoint_ip'], endpoint=True)
-    result['bind_ip'] = address(config['bind_ip'])
+    result['bind_ip'] = management_address(config['bind_ip'])
     result['web_host'] = hostname(config['web_host'])
     result['admin_subnets'] = admin_networks(config['admin_subnets'])
     if type(config['auto_updates']) is not bool or config['channel'] not in ('stable', 'preview'):
@@ -104,6 +117,7 @@ if __name__ == '__main__':
     try:
         if sys.argv[1:] == ['firewall']:
             port(os.environ['BUNGEE_WG_PORT'], wireguard=True)
+            management_address(os.environ.get('BUNGEE_ADMIN_ADDRESS', '127.0.0.1'))
             for net in admin_networks(os.environ.get('BUNGEE_ADMIN_SUBNETS', '')):
                 print(ipaddress.ip_network(net).version, net)
         elif sys.argv[1:] == ['dns']:

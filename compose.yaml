@@ -38,6 +38,7 @@
         "BUNGEE_DNS_UPSTREAM_IP": "${BUNGEE_DNS_UPSTREAM_IP:-}",
         "BUNGEE_DNS_UPSTREAM_PORT": "${BUNGEE_DNS_UPSTREAM_PORT:-53}",
         "BUNGEE_WG_PORT": "${BUNGEE_WG_PORT:?Choose UDP port}",
+        "BUNGEE_ADMIN_ADDRESS": "${BUNGEE_ADMIN_ADDRESS:-127.0.0.1}",
         "BUNGEE_ADMIN_SUBNETS": "${BUNGEE_ADMIN_SUBNETS:?Set explicit administrator prefixes}",
         "BUNGEE_UPDATE_CONTROL": "/control"
       },
@@ -129,6 +130,7 @@
         "BUNGEE_DNS_UPSTREAM_PORT": "${BUNGEE_DNS_UPSTREAM_PORT:-53}",
         "BUNGEE_PUBLIC_ORIGIN": "${BUNGEE_PUBLIC_ORIGIN:?Set exact HTTPS origin}",
         "BUNGEE_ADMIN_BIND": "0.0.0.0:8443",
+        "BUNGEE_ADMIN_INTERFACE": "eth0",
         "BUNGEE_ADMIN_SUBNETS": "${BUNGEE_ADMIN_SUBNETS:?Set explicit administrator prefixes}",
         "BUNGEE_DEVICE_BIND": "10.77.0.1:8081",
         "BUNGEE_WG_ENDPOINT": "${BUNGEE_WG_ENDPOINT:?Set reachable numeric IP and UDP port}",

@@ -196,7 +196,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 shutdown().await;
                 shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
             });
-            axum_server::bind_rustls(admin_bind, config)
+            axum_server::from_tcp_rustls(tls::listener(admin_bind)?, config)
                 .handle(handle)
                 .serve(admin.into_make_service_with_connect_info::<SocketAddr>())
                 .await?;

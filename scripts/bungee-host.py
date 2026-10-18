@@ -120,13 +120,13 @@ def compose(config, images, root):
     dns = {'BUNGEE_DNS_UPSTREAM_IP': c.get('dns_upstream_ip', ''), 'BUNGEE_DNS_UPSTREAM_PORT': str(c.get('dns_upstream_port', 53))}
     return {'name': 'bungee', 'services': {
         'gateway': service(images['gateway'], cap_add=['NET_ADMIN', 'CHOWN', 'DAC_OVERRIDE'], tmpfs=['/run:mode=0700'],
-            environment={**PRIVATE_ENV, **dns, 'BUNGEE_WG_PORT': str(c['wg_port']), 'BUNGEE_ADMIN_SUBNETS': ' '.join(c['admin_subnets']), 'BUNGEE_UPDATE_CONTROL': '/control'},
+            environment={**PRIVATE_ENV, **dns, 'BUNGEE_WG_PORT': str(c['wg_port']), 'BUNGEE_ADMIN_ADDRESS': c['bind_ip'], 'BUNGEE_ADMIN_SUBNETS': ' '.join(c['admin_subnets']), 'BUNGEE_UPDATE_CONTROL': '/control'},
             ports=[f"{network.bracket(c['bind_ip'])}:{c['web_port']}:8443/tcp", f"{c['wg_port']}:{c['wg_port']}/udp"],
             sysctls={'net.ipv4.ip_forward': '0', 'net.ipv6.conf.all.forwarding': '0'},
             volumes=[bind('gateway-private', '/private'), bind('gateway-peers', '/peers'), {'type': 'bind', 'source': str(root / 'control'), 'target': '/control', 'read_only': True, 'bind': {'create_host_path': False}}],
             healthcheck={'test': ['CMD', 'wg', 'show', 'wg0'], 'interval': '10s', 'timeout': '3s', 'retries': 5}),
         'server': service(images['server'], network_mode='service:gateway', depends_on={'gateway': {'condition': 'service_healthy'}},
-            environment={**PRIVATE_ENV, **dns, 'BUNGEE_PUBLIC_ORIGIN': network.origin(c), 'BUNGEE_ADMIN_BIND': '0.0.0.0:8443', 'BUNGEE_ADMIN_SUBNETS': ' '.join(c['admin_subnets']), 'BUNGEE_DEVICE_BIND': '10.77.0.1:8081', 'BUNGEE_WG_ENDPOINT': f"{network.bracket(c['endpoint_ip'])}:{c['wg_port']}", 'BUNGEE_TLS_CERT_FILE': '/tls/current/server.crt', 'BUNGEE_TLS_KEY_FILE': '/tls/current/server.key'},
+            environment={**PRIVATE_ENV, **dns, 'BUNGEE_PUBLIC_ORIGIN': network.origin(c), 'BUNGEE_ADMIN_BIND': '0.0.0.0:8443', 'BUNGEE_ADMIN_INTERFACE': 'eth0', 'BUNGEE_ADMIN_SUBNETS': ' '.join(c['admin_subnets']), 'BUNGEE_DEVICE_BIND': '10.77.0.1:8081', 'BUNGEE_WG_ENDPOINT': f"{network.bracket(c['endpoint_ip'])}:{c['wg_port']}", 'BUNGEE_TLS_CERT_FILE': '/tls/current/server.crt', 'BUNGEE_TLS_KEY_FILE': '/tls/current/server.key'},
             tmpfs=['/tmp:size=16m'], volumes=[bind('server-data', '/state'), bind('gateway-peers', '/state/wireguard'), bind('tls-data/issued', '/tls', True), {'type': 'bind', 'source': str(dataset), 'target': '/datasets', 'read_only': True, 'bind': {'create_host_path': False}}])
     }}
 
@@ -401,10 +401,10 @@ def guided(existing=None):
             wg = network.port(ask('WireGuard UDP port (51820 forbidden)', c.get('wg_port')), True)
             web = network.port(ask('Dashboard HTTPS TCP port', c.get('web_port', 8443)))
             endpoint = network.address(ask('Numeric home-server address reachable by phones', c.get('endpoint_ip')), endpoint=True)
-            bind = network.address(ask('Dashboard bind IP; 127.0.0.1 means local/SSH access only', c.get('bind_ip', '127.0.0.1')))
+            bind = network.management_address(ask('Internal management bind IP; 127.0.0.1 means local/SSH access only', c.get('bind_ip', '127.0.0.1')))
             host = network.hostname(ask('Dashboard address used in your browser (no port)', c.get('web_host', bind if bind not in ('0.0.0.0', '::') else None)))
-            print('Enter administrator IPs/prefixes separated by spaces or commas. No allow-everyone option.')
-            nets = network.admin_networks(ask('Allowed administrator networks', ' '.join(c['admin_subnets']) if c.get('admin_subnets') else None))
+            print('Use only your internal management IPs/prefixes. They must not overlap the phone C2 subnet.')
+            nets = network.admin_networks(ask('Allowed internal administrator networks', ' '.join(c['admin_subnets']) if c.get('admin_subnets') else None))
             dns_value = ask('Optional DNS resolver IP (type off to disable)', c.get('dns_upstream_ip', ''))
             dns = network.dns_upstream('' if dns_value == 'off' else dns_value)
             dns_port = network.port(ask('DNS resolver port', c.get('dns_upstream_port', 53))) if dns else 53

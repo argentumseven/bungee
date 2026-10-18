@@ -56,8 +56,13 @@ class SetupTests(unittest.TestCase):
             self.assertEqual(result.strip(), host.VERSION)
     def test_bare_hosts_canonical_prefixes_ipv6_and_no_shell_input(self):
         self.assertEqual(host.network.admin_networks('192.168.1.15,192.168.1.99/24 fd12::4'), ['192.168.1.15/32', '192.168.1.0/24', 'fd12::4/128'])
-        for value in ['', [], '0.0.0.0/0', '::/0', '128.0.0.0/1', '192.168.1', '::ffff:192.168.1.1', '192.168.1.1;id', 'fe80::1%eth0', '224.0.0.0/8']:
+        for value in ['', [], '0.0.0.0/0', '::/0', '128.0.0.0/1', '192.168.1', '::ffff:192.168.1.1', '192.168.1.1;id', 'fe80::1%eth0', '224.0.0.0/8', '10.0.0.0/8', '10.77.0.0/24', '10.77.0.2/32', '10.77.0.255']:
             with self.subTest(value=value), self.assertRaises((ValueError, TypeError)): host.network.admin_networks(value)
+    def test_management_publication_cannot_bind_a_wildcard_or_phone_overlay(self):
+        for bind in ['0.0.0.0', '::', '10.77.0.1', '10.77.0.254', '::ffff:10.77.0.1', 'fe80::1']:
+            with self.subTest(bind=bind), self.assertRaises(ValueError): host.network.validate({**CONFIG, 'bind_ip': bind})
+        for bind in ['127.0.0.1', '::1', '192.168.1.10', 'fd12::10']:
+            with self.subTest(bind=bind): self.assertEqual(host.network.validate({**CONFIG, 'bind_ip': bind})['bind_ip'], bind)
     def test_invalid_ports_addresses_and_names_are_refused(self):
         for value in [0, 65536, '3.2', '-1', True, '$(id)']:
             with self.subTest(value=value), self.assertRaises(ValueError): host.network.port(value)
@@ -70,6 +75,8 @@ class SetupTests(unittest.TestCase):
         c = host.compose(CONFIG, metadata()['images'], Path('/opt/bungee'))
         self.assertEqual(c['services']['server']['environment']['BUNGEE_PUBLIC_ORIGIN'], 'https://192.168.1.10:8443')
         self.assertEqual(c['services']['server']['environment']['BUNGEE_ADMIN_BIND'], '0.0.0.0:8443')
+        self.assertEqual(c['services']['server']['environment']['BUNGEE_ADMIN_INTERFACE'], 'eth0')
+        self.assertIn('192.168.1.10:8443:8443/tcp', c['services']['gateway']['ports'])
         self.assertNotIn('web', c['services'])
         self.assertEqual(host.network.origin({**CONFIG, 'web_port': 443}), 'https://192.168.1.10')
         self.assertEqual(host.network.origin({**CONFIG, 'web_host': 'fd12::1'}), 'https://[fd12::1]:8443')

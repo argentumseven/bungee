@@ -64,8 +64,10 @@ pub fn admin_bind(value: &str) -> Result<std::net::SocketAddr, &'static str> {
     let bind: std::net::SocketAddr = value
         .parse()
         .map_err(|_| "BUNGEE_ADMIN_BIND must be a numeric socket address")?;
-    if bind.port() == 0 || bind.ip().is_multicast() {
-        return Err("BUNGEE_ADMIN_BIND requires a nonzero unicast or wildcard port");
+    if bind.port() == 0 || bind.ip().is_multicast() || phone_address(bind.ip()) {
+        return Err(
+            "BUNGEE_ADMIN_BIND requires a nonzero management port outside the phone overlay",
+        );
     }
     Ok(bind)
 }
@@ -155,6 +157,13 @@ pub async fn device_source_guard(State(app): State<App>, req: Request, next: Nex
 
 pub fn admin_networks(https: bool) -> Result<Vec<ipnet::IpNet>, Box<dyn std::error::Error>> {
     let value = std::env::var("BUNGEE_ADMIN_SUBNETS").unwrap_or_default();
+    parse_admin_networks(&value, https)
+}
+
+fn parse_admin_networks(
+    value: &str,
+    https: bool,
+) -> Result<Vec<ipnet::IpNet>, Box<dyn std::error::Error>> {
     if value.trim().is_empty() && !https {
         return Ok(vec!["127.0.0.0/8".parse()?, "::1/128".parse()?]);
     }
@@ -176,12 +185,32 @@ pub fn admin_networks(https: bool) -> Result<Vec<ipnet::IpNet>, Box<dyn std::err
         {
             return Err("Administrator prefixes must be explicit unicast networks (/8 IPv4 or /16 IPv6 or narrower)".into());
         }
+        if phone_address(net.network()) || net.contains(&IpAddr::from([10, 77, 0, 1])) {
+            return Err(
+                "Administrator prefixes must not overlap the phone C2 subnet 10.77.0.0/24".into(),
+            );
+        }
         nets.push(net);
     }
     if nets.is_empty() || nets.len() > 32 {
         return Err("Configure 1–32 BUNGEE_ADMIN_SUBNETS".into());
     }
     Ok(nets)
+}
+
+fn phone_address(ip: IpAddr) -> bool {
+    let ip = match ip {
+        IpAddr::V6(ip) => ip
+            .to_ipv4_mapped()
+            .map(IpAddr::V4)
+            .unwrap_or(IpAddr::V6(ip)),
+        other => other,
+    };
+    matches!(ip, IpAddr::V4(ip) if ip.octets()[..3] == [10, 77, 0])
+}
+
+fn administrator_source(ip: IpAddr, networks: &[ipnet::IpNet]) -> bool {
+    !phone_address(ip) && networks.iter().any(|net| net.contains(&ip))
 }
 
 pub fn require_admin(app: &App, headers: &HeaderMap) -> ApiResult<()> {
@@ -217,7 +246,7 @@ pub async fn browser_guard(State(app): State<App>, req: Request, next: Next) -> 
         IpAddr::V6(v) => v.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(IpAddr::V6(v)),
         ip => ip,
     };
-    if !(app.admin_networks.iter().any(|net| net.contains(&ip))
+    if !(administrator_source(ip, &app.admin_networks)
         || (ip.is_loopback() && req.uri().path() == "/healthz"))
     {
         return Error(StatusCode::FORBIDDEN, "Administrator source rejected").into_response();
@@ -360,9 +389,40 @@ mod tests {
         ] {
             assert!(admin_bind(address).is_ok());
         }
-        for address in ["224.0.0.1:8443", "localhost:8080", "127.0.0.1:0"] {
+        for address in [
+            "224.0.0.1:8443",
+            "localhost:8080",
+            "127.0.0.1:0",
+            "10.77.0.1:8443",
+            "[::ffff:10.77.0.2]:8443",
+        ] {
             assert!(admin_bind(address).is_err());
         }
+    }
+    #[test]
+    fn management_prefixes_cannot_include_any_phone_overlay_address() {
+        for value in [
+            "10.0.0.0/8",
+            "10.77.0.0/24",
+            "10.77.0.2",
+            "10.77.0.255/32",
+            "::ffff:10.77.0.2",
+            "192.168.1.0/24,10.77.0.0/25",
+        ] {
+            assert!(parse_admin_networks(value, true).is_err(), "{value}");
+        }
+        assert!(parse_admin_networks("10.76.0.0/16 192.168.1.0/24 fd12::/64", true).is_ok());
+    }
+    #[test]
+    fn phone_sources_are_denied_even_with_a_permissive_in_memory_acl() {
+        let broad = vec!["0.0.0.0/0".parse().unwrap(), "::/0".parse().unwrap()];
+        for value in ["10.77.0.1", "10.77.0.2", "10.77.0.254", "::ffff:10.77.0.2"] {
+            assert!(
+                !administrator_source(value.parse().unwrap(), &broad),
+                "{value}"
+            );
+        }
+        assert!(administrator_source("192.168.1.5".parse().unwrap(), &broad));
     }
     #[test]
     fn full_source_bucket_preserves_existing_peers_and_other_classes() {
