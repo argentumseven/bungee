@@ -18,7 +18,7 @@ The drawings use a Linux/VPS host with a reachable phone UDP endpoint, a separat
 
 ## Underlay and overlay
 
-The top and bottom panels are two views of the **same** phone and server. The dashed green line expresses logical L3 reachability. It is carried inside the orange UDP path; it is not a second physical link.
+The network picture is one logical security topology. Its orange path carries WireGuard ciphertext across the routed underlay and host/Docker transport, ending at kernel WireGuard in the shared namespace. Green paths are decrypted packets for local C2 or optional legacy DNS. Blue is the separate internal management TLS path. Host DNAT is summarized in the host heading; its port mappings are operations on those paths, not extra routers. The resolver arrow is a new socket originated by the Rust DNS service. The companion backend picture expands process, control-file and storage relationships.
 
 The phone runs `wireguard-go` and a gVisor TCP/IP stack inside Bungee's process. `P/32` belongs to that private userspace stack. Bungee creates no Android OS WireGuard interface, VPN service, system route or system DNS setting. Its transport only dials TCP `10.77.0.1:8081`. The OS carries WireGuard's ordinary UDP socket over the phone's existing Wi-Fi, cellular or other network path. Other apps keep that existing path.
 
@@ -62,7 +62,7 @@ The phone and management zones have different entry points. `wg0` is limited to 
 
 Host `bind_ip` must name a single internal management address or loopback, never a wildcard or phone-overlay address. The operator defines the internal routing zone using the bind address and explicit CIDRs; private/global address classification is not an authorization mechanism. Administrator CIDRs overlapping any of `10.77.0.0/24` are refused, including broad supernets such as `10.0.0.0/8`.
 
-The firewall first classifies `wg0`: C2 and configured DNS are accepted; everything else is dropped. Only then do the general conntrack and `eth0` administrator rules run. Rust separately binds its TLS socket to `eth0` and rejects all phone-subnet sources, even with a permissive in-memory ACL. A non-loopback standalone administrator bind requires `BUNGEE_ADMIN_INTERFACE`; selecting `wg0`, an unavailable interface or a kernel that refuses the binding fails startup. Rust still has zero Linux capabilities.
+The firewall first classifies `wg0`: C2 and configured DNS are accepted; everything else is dropped. Only then do the ESTABLISHED/RELATED and `eth0` administrator accept rules run. This ordering does not bypass connection tracking itself: DNS REDIRECT runs in PREROUTING before local INPUT filtering. Rust separately binds its TLS socket to `eth0` and rejects all phone-subnet sources, even with a permissive in-memory ACL. A non-loopback standalone administrator bind requires `BUNGEE_ADMIN_INTERFACE`; selecting `wg0`, an unavailable interface or a kernel that refuses the binding fails startup. Rust still has zero Linux capabilities.
 
 On a VPS, provision an independent management/private route or separate host-to-site management tunnel if an internal route does not already exist. It must use a distinct interface/subnet from phone `wg0`. Keep host SSH and Docker management inside that zone too. Bungee does not reconfigure those host services. Match provider/host ingress policies to the management network and publish only the phone WireGuard UDP endpoint on the public side.
 
