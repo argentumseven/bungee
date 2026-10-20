@@ -211,8 +211,9 @@ class TelemetryService : Service() {
         if (!manager.isProviderEnabled(LocationManager.GPS_PROVIDER)) return null
         val started = SystemClock.elapsedRealtimeNanos()
         var ticket: DisclosureFence.Ticket? = null
+        var bestFix: Location? = null
         try {
-            val fix: Location = withTimeoutOrNull(25000) {
+            val fix: Location = (withTimeoutOrNull(25000) {
                 suspendCancellableCoroutine { continuation ->
                     val done = AtomicBoolean(false)
                     lateinit var listener: LocationListener
@@ -224,7 +225,12 @@ class TelemetryService : Service() {
                     }
                     listener = LocationListener { location ->
                         // Never re-label an OS-cached pre-generation fix as new data.
-                        if (location.elapsedRealtimeNanos >= started) finish(location)
+                        if (!done.get() && location.elapsedRealtimeNanos >= started &&
+                            location.time > 0 && location.time <= System.currentTimeMillis() + 60_000 &&
+                            GpsFixQuality.usable(location.latitude, location.longitude, location.accuracy, location.hasAccuracy())) {
+                            if (GpsFixQuality.prefer(location.accuracy, bestFix?.accuracy)) bestFix = location
+                            if (GpsFixQuality.ideal(location.accuracy)) finish(location)
+                        }
                     }
                     continuation.invokeOnCancellation { done.set(true); runCatching { manager.removeUpdates(listener) } }
                     try {
@@ -235,7 +241,7 @@ class TelemetryService : Service() {
                         }
                     } catch (_: Exception) { finish(null) }
                 }
-            } ?: return null
+            } ?: bestFix) ?: return null
             return PrivacySends.fence.checked(stamp, { disclosureAllowed(epoch, command) }) { Observation(locationJson(fix), epoch, stamp) }
         } finally { ticket?.let { PrivacySends.fence.release(it) } }
     }

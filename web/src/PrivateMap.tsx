@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { api } from "./api";
+import { gpsTrail } from "./gpsTrail";
 
 export type GeoIP = {
   latitude: number | null;
@@ -59,6 +60,7 @@ export function PrivateMap({
     [error, setError] = useState(""),
     [missing, setMissing] = useState(false);
   const signature = JSON.stringify({ points, selected, network });
+  const ignored = gpsTrail(points).ignored;
   useEffect(() => {
     const abort = new AbortController();
     api<Geography>("/geography", { signal: abort.signal })
@@ -88,11 +90,13 @@ export function PrivateMap({
         .on("loading", () => setMissing(false))
         .addTo(m);
     }
-    const gps = points.map((p) => L.latLng(p.latitude, p.longitude));
+    const cleaned = gpsTrail(points);
+    const gps = cleaned.points.map((p) => L.latLng(p.latitude, p.longitude));
     const trail = L.featureGroup().addTo(m);
-    if (gps.length > 1)
-      L.polyline(gps, { color: "#4d8797", weight: 3 }).addTo(trail);
-    points.forEach((p) => {
+    cleaned.segments.forEach(part => {
+      if (part.length > 1) L.polyline(part.map(p => L.latLng(p.latitude, p.longitude)), { color: "#4d8797", weight: 3 }).addTo(trail);
+    });
+    cleaned.points.forEach((p) => {
       const isSelected = p.observed_at === selected?.observed_at;
       L.circleMarker([p.latitude, p.longitude], {
         color: "#234d60",
@@ -108,7 +112,7 @@ export function PrivateMap({
             : "GPS observation",
         );
     });
-    if (selected?.accuracy)
+    if (selected?.accuracy && cleaned.points.some(p => p.observed_at === selected.observed_at))
       L.circle([selected.latitude, selected.longitude], {
         radius: selected.accuracy,
         color: "#4d8797",
@@ -163,6 +167,7 @@ export function PrivateMap({
       />
       <div className="private-map-key">
         <span className="gps-key">● GPS</span>
+        {ignored > 0 && <span className="gps-key">· {ignored} uncertain GPS fix{ignored === 1 ? "" : "es"} omitted from map</span>}
         <span className="ip-key">◌ Approximate IP area</span>
         {network?.geoip?.latitude != null && (
           <button

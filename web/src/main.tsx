@@ -35,6 +35,7 @@ import QRCode from "qrcode";
 import { version as releaseVersion } from "../../release.json";
 import "./style.css";
 import { api } from "./api";
+import { gpsTrail } from "./gpsTrail";
 import {
   PrivateMap,
   NetworkCard,
@@ -1263,7 +1264,8 @@ function HistoryView({ device }: { device: Device }) {
     .filter((r) => r.latitude !== undefined)
     .slice()
     .reverse();
-  const bounds = points.reduce(
+  const displayTrail = gpsTrail(points);
+  const bounds = displayTrail.points.reduce(
     (b, p) => ({
       minLat: Math.min(b.minLat, p.latitude!),
       maxLat: Math.max(b.maxLat, p.latitude!),
@@ -1486,7 +1488,7 @@ function HistoryView({ device }: { device: Device }) {
             selected={chosen as Location | null}
             label="OpenStreetMap GPS history"
           />
-          <svg
+          {displayTrail.points.length > 0 && <svg
             className="history-trail"
             viewBox="0 0 700 260"
             role="img"
@@ -1513,13 +1515,10 @@ function HistoryView({ device }: { device: Device }) {
             <text x="16" y="18" fill="var(--muted)" fontSize="8">
               LATITUDE ↑
             </text>
-            <polyline
-              points={points.map(xy).join(" ")}
-              fill="none"
-              stroke="var(--accent)"
-              strokeWidth="2"
-            />
-            {points.map((p) => {
+            {displayTrail.segments.filter(segment => segment.length > 1).map((segment, i) => (
+              <polyline key={i} points={segment.map(xy).join(" ")} fill="none" stroke="var(--accent)" strokeWidth="2" />
+            ))}
+            {displayTrail.points.map((p) => {
               const [cx, cy] = xy(p).split(",");
               return (
                 <circle
@@ -1540,7 +1539,9 @@ function HistoryView({ device }: { device: Device }) {
                 </circle>
               );
             })}
-          </svg>
+          </svg>}
+          {displayTrail.ignored > 0 && <p className="fine">{displayTrail.ignored} uncertain fix{displayTrail.ignored === 1 ? "" : "es"} omitted from visual trail; raw records remain available below and in CSV.</p>}
+          {displayTrail.points.length === 0 && <p className="fine">No reliable GPS fixes to plot in this range.</p>}
           {chosen && (
             <p className="history-selection">
               Selected: {new Date(chosen.observed_at! * 1000).toLocaleString()}{" "}
@@ -1549,8 +1550,7 @@ function HistoryView({ device }: { device: Device }) {
             </p>
           )}
           <p className="fine">
-            Lines connect sampled fixes; gaps do not prove a route or continuous
-            coverage. Accuracy is reported by the phone.
+            Lines connect only plausible nearby fixes; gaps remain open and lines do not prove a traveled route. Accuracy is reported by the phone.
           </p>
         </>
       )}
