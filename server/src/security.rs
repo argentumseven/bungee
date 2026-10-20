@@ -346,19 +346,19 @@ pub fn verify_device(app: &App, headers: &HeaderMap, path: &str, body: &[u8]) ->
     Ok(id.into())
 }
 
-pub fn private_dir(path: &Path) -> io::Result<()> {
+pub fn private_dir(_path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        fs::set_permissions(_path, fs::Permissions::from_mode(0o700))?;
     }
     Ok(())
 }
-pub fn private_file(path: &Path) -> io::Result<()> {
+pub fn private_file(_path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        fs::set_permissions(_path, fs::Permissions::from_mode(0o600))?;
     }
     Ok(())
 }
