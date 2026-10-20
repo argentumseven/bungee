@@ -1261,7 +1261,8 @@ function HistoryView({ device }: { device: Device }) {
     setExportStarted(true);
   }
   const points = records
-    .filter((r) => r.latitude !== undefined)
+    .filter((r): r is HistoryRecord & { latitude: number; longitude: number } =>
+      r.latitude !== undefined && r.longitude !== undefined)
     .slice()
     .reverse();
   const displayTrail = gpsTrail(points);
