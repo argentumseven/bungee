@@ -28,10 +28,9 @@ static LOGIN_WORK: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2)
 pub async fn login(
     State(app): State<App>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
     Json(input): Json<Login>,
 ) -> ApiResult<impl IntoResponse> {
-    let source = admin_source(addr.ip(), &headers, app.trust_admin_proxy)?;
+    let source = addr.ip();
     rate_limit(&app, RateClass::AdminSource, source.to_string(), 5)?;
     rate_limit(&app, RateClass::AdminAggregate, "household".into(), 30)?;
     if input.password.len() > 1024 {
@@ -654,7 +653,7 @@ mod privacy_tests {
             origin: String::new(),
             secure_cookie: false,
             admin_hash: String::new(),
-            trust_admin_proxy: false,
+            admin_networks: vec!["127.0.0.0/8".parse().unwrap()],
             limiter: Arc::new(Mutex::new(RateLimits::default())),
             state_dir: directory.clone(),
             wg_endpoint: None,

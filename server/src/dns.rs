@@ -37,12 +37,15 @@ impl Config {
         }
         let ip: IpAddr = ip
             .parse()
-            .map_err(|_| "DNS upstream must be a numeric private home IP")?;
+            .map_err(|_| "DNS upstream must be a numeric resolver IP")?;
         let port: u16 = env::var("BUNGEE_DNS_UPSTREAM_PORT")
             .unwrap_or("53".into())
             .parse()?;
-        if !private_upstream(ip) || port == 0 {
-            return Err("DNS upstream must be your private/loopback resolver, never a public provider or the phone tunnel subnet".into());
+        if !valid_upstream(ip) || port == 0 {
+            return Err(
+                "DNS upstream must be an explicit unicast resolver outside the phone tunnel subnet"
+                    .into(),
+            );
         }
         let bind: SocketAddr = env::var("BUNGEE_DNS_BIND")
             .unwrap_or("10.77.0.1:5353".into())
@@ -59,14 +62,24 @@ impl Config {
         }))
     }
 }
-fn private_upstream(ip: IpAddr) -> bool {
+fn valid_upstream(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v) => {
-            (v.is_private() || v.is_loopback())
+            !v.is_unspecified()
+                && !v.is_multicast()
+                && !v.is_broadcast()
+                && !v.is_link_local()
+                && v.octets()[0] != 0
+                && v.octets()[0] < 224
                 && v.octets()[..3] != [10, 77, 0]
                 && v.octets() != [127, 0, 0, 11]
         }
-        IpAddr::V6(v) => v.is_loopback() || v.is_unique_local(),
+        IpAddr::V6(v) => {
+            !v.is_unspecified()
+                && !v.is_multicast()
+                && !v.is_unicast_link_local()
+                && v.to_ipv4_mapped().is_none()
+        }
     }
 }
 pub async fn start(app: App) -> Result<(), Box<dyn std::error::Error>> {
@@ -360,12 +373,26 @@ mod tests {
         assert_eq!(group("1.0.0.127.in-addr.arpa."), "[reverse DNS]");
     }
     #[test]
-    fn public_upstreams_and_tunnel_loops_are_rejected() {
-        for ip in ["1.1.1.1", "8.8.8.8", "10.77.0.1", "0.0.0.0", "::"] {
-            assert!(!private_upstream(ip.parse().unwrap()));
+    fn resolver_targets_exclude_loops_and_non_unicast_addresses() {
+        for ip in [
+            "10.77.0.1",
+            "127.0.0.11",
+            "0.0.0.0",
+            "::",
+            "169.254.169.254",
+            "ff02::1",
+        ] {
+            assert!(!valid_upstream(ip.parse().unwrap()));
         }
-        for ip in ["192.168.1.53", "127.0.0.1", "fd00::53"] {
-            assert!(private_upstream(ip.parse().unwrap()));
+        for ip in [
+            "1.1.1.1",
+            "8.8.8.8",
+            "192.168.1.53",
+            "127.0.0.1",
+            "fd00::53",
+            "2606:4700:4700::1111",
+        ] {
+            assert!(valid_upstream(ip.parse().unwrap()));
         }
     }
 }

@@ -63,10 +63,10 @@ pub fn now() -> i64 {
 pub fn admin_bind(value: &str) -> Result<std::net::SocketAddr, &'static str> {
     let bind: std::net::SocketAddr = value
         .parse()
-        .map_err(|_| "BUNGEE_ADMIN_BIND must be a numeric loopback address")?;
-    if bind.port() == 0 || !bind.ip().is_loopback() {
+        .map_err(|_| "BUNGEE_ADMIN_BIND must be a numeric socket address")?;
+    if bind.port() == 0 || bind.ip().is_multicast() || phone_address(bind.ip()) {
         return Err(
-            "BUNGEE_ADMIN_BIND must use a nonzero loopback port; this listener is HTTP and requires the local TLS gateway for remote access",
+            "BUNGEE_ADMIN_BIND requires a nonzero management port outside the phone overlay",
         );
     }
     Ok(bind)
@@ -155,16 +155,62 @@ pub async fn device_source_guard(State(app): State<App>, req: Request, next: Nex
     next.run(req).await
 }
 
-pub fn admin_source(peer: IpAddr, headers: &HeaderMap, trusted_proxy: bool) -> ApiResult<IpAddr> {
-    if trusted_proxy && peer.is_loopback() {
-        headers
-            .get("x-bungee-admin-ip")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse().ok())
-            .ok_or_else(denied)
-    } else {
-        Ok(peer)
+pub fn admin_networks(https: bool) -> Result<Vec<ipnet::IpNet>, Box<dyn std::error::Error>> {
+    let value = std::env::var("BUNGEE_ADMIN_SUBNETS").unwrap_or_default();
+    parse_admin_networks(&value, https)
+}
+
+fn parse_admin_networks(
+    value: &str,
+    https: bool,
+) -> Result<Vec<ipnet::IpNet>, Box<dyn std::error::Error>> {
+    if value.trim().is_empty() && !https {
+        return Ok(vec!["127.0.0.0/8".parse()?, "::1/128".parse()?]);
     }
+    let mut nets = Vec::new();
+    for entry in value
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|s| !s.is_empty())
+    {
+        let net: ipnet::IpNet = if entry.contains('/') {
+            entry.parse()?
+        } else {
+            ipnet::IpNet::from(entry.parse::<IpAddr>()?)
+        };
+        let min = if net.addr().is_ipv4() { 8 } else { 16 };
+        if net.prefix_len() < min
+            || net.network().is_unspecified()
+            || net.network().is_multicast()
+            || matches!(net, ipnet::IpNet::V6(n) if n.addr().to_ipv4_mapped().is_some())
+        {
+            return Err("Administrator prefixes must be explicit unicast networks (/8 IPv4 or /16 IPv6 or narrower)".into());
+        }
+        if phone_address(net.network()) || net.contains(&IpAddr::from([10, 77, 0, 1])) {
+            return Err(
+                "Administrator prefixes must not overlap the phone C2 subnet 10.77.0.0/24".into(),
+            );
+        }
+        nets.push(net);
+    }
+    if nets.is_empty() || nets.len() > 32 {
+        return Err("Configure 1–32 BUNGEE_ADMIN_SUBNETS".into());
+    }
+    Ok(nets)
+}
+
+fn phone_address(ip: IpAddr) -> bool {
+    let ip = match ip {
+        IpAddr::V6(ip) => ip
+            .to_ipv4_mapped()
+            .map(IpAddr::V4)
+            .unwrap_or(IpAddr::V6(ip)),
+        other => other,
+    };
+    matches!(ip, IpAddr::V4(ip) if ip.octets()[..3] == [10, 77, 0])
+}
+
+fn administrator_source(ip: IpAddr, networks: &[ipnet::IpNet]) -> bool {
+    !phone_address(ip) && networks.iter().any(|net| net.contains(&ip))
 }
 
 pub fn require_admin(app: &App, headers: &HeaderMap) -> ApiResult<()> {
@@ -190,6 +236,21 @@ pub fn require_admin(app: &App, headers: &HeaderMap) -> ApiResult<()> {
 }
 
 pub async fn browser_guard(State(app): State<App>, req: Request, next: Next) -> Response {
+    let Some(peer) = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+    else {
+        return denied().into_response();
+    };
+    let ip = match peer.0.ip() {
+        IpAddr::V6(v) => v.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(IpAddr::V6(v)),
+        ip => ip,
+    };
+    if !(administrator_source(ip, &app.admin_networks)
+        || (ip.is_loopback() && req.uri().path() == "/healthz"))
+    {
+        return Error(StatusCode::FORBIDDEN, "Administrator source rejected").into_response();
+    }
     // Cookie-authenticated mutations require an exact same-origin Origin header, including login.
     if !matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS)
         && req
@@ -285,19 +346,19 @@ pub fn verify_device(app: &App, headers: &HeaderMap, path: &str, body: &[u8]) ->
     Ok(id.into())
 }
 
-pub fn private_dir(path: &Path) -> io::Result<()> {
+pub fn private_dir(_path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        fs::set_permissions(_path, fs::Permissions::from_mode(0o700))?;
     }
     Ok(())
 }
-pub fn private_file(path: &Path) -> io::Result<()> {
+pub fn private_file(_path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        fs::set_permissions(_path, fs::Permissions::from_mode(0o600))?;
     }
     Ok(())
 }
@@ -318,20 +379,50 @@ pub fn private_write(path: &Path, data: &[u8]) -> io::Result<()> {
 mod tests {
     use super::*;
     #[test]
-    fn admin_http_listener_is_always_loopback() {
-        for address in ["127.0.0.1:8080", "[::1]:8080"] {
+    fn admin_bind_is_numeric_and_nonzero() {
+        for address in [
+            "127.0.0.1:8080",
+            "[::1]:8080",
+            "0.0.0.0:8443",
+            "[::]:8443",
+            "192.168.1.5:8443",
+        ] {
             assert!(admin_bind(address).is_ok());
         }
         for address in [
-            "0.0.0.0:8080",
-            "[::]:8080",
-            "192.168.1.5:8080",
-            "203.0.113.1:8080",
+            "224.0.0.1:8443",
             "localhost:8080",
             "127.0.0.1:0",
+            "10.77.0.1:8443",
+            "[::ffff:10.77.0.2]:8443",
         ] {
             assert!(admin_bind(address).is_err());
         }
+    }
+    #[test]
+    fn management_prefixes_cannot_include_any_phone_overlay_address() {
+        for value in [
+            "10.0.0.0/8",
+            "10.77.0.0/24",
+            "10.77.0.2",
+            "10.77.0.255/32",
+            "::ffff:10.77.0.2",
+            "192.168.1.0/24,10.77.0.0/25",
+        ] {
+            assert!(parse_admin_networks(value, true).is_err(), "{value}");
+        }
+        assert!(parse_admin_networks("10.76.0.0/16 192.168.1.0/24 fd12::/64", true).is_ok());
+    }
+    #[test]
+    fn phone_sources_are_denied_even_with_a_permissive_in_memory_acl() {
+        let broad = vec!["0.0.0.0/0".parse().unwrap(), "::/0".parse().unwrap()];
+        for value in ["10.77.0.1", "10.77.0.2", "10.77.0.254", "::ffff:10.77.0.2"] {
+            assert!(
+                !administrator_source(value.parse().unwrap(), &broad),
+                "{value}"
+            );
+        }
+        assert!(administrator_source("192.168.1.5".parse().unwrap(), &broad));
     }
     #[test]
     fn full_source_bucket_preserves_existing_peers_and_other_classes() {
@@ -373,21 +464,5 @@ mod tests {
                 .check(RateClass::AdminSource, "source".into(), 5, 1000)
                 .is_err()
         );
-    }
-    #[test]
-    fn admin_forwarding_identity_requires_explicit_loopback_trust() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-bungee-admin-ip", "192.0.2.7".parse().unwrap());
-        let direct = "192.0.2.8".parse::<IpAddr>().unwrap();
-        let proxy = "127.0.0.1".parse::<IpAddr>().unwrap();
-        assert_eq!(admin_source(direct, &headers, true).unwrap(), direct);
-        assert_eq!(admin_source(proxy, &headers, false).unwrap(), proxy);
-        assert_eq!(
-            admin_source(proxy, &headers, true).unwrap(),
-            "192.0.2.7".parse::<IpAddr>().unwrap()
-        );
-        assert!(admin_source(proxy, &HeaderMap::new(), true).is_err());
-        headers.insert("x-bungee-admin-ip", "192.0.2.7,192.0.2.8".parse().unwrap());
-        assert!(admin_source(proxy, &headers, true).is_err());
     }
 }

@@ -2,6 +2,7 @@
 """Local Linux installer and transactional Compose updater. Never runs inside the app."""
 import argparse
 import contextlib
+import ctypes
 import fcntl
 import hashlib
 import importlib.util
@@ -9,13 +10,20 @@ import json
 import os
 from pathlib import Path
 import re
+import resource
 import secrets
 import shutil
+import signal
 import socket
 import ssl
 import subprocess
 import sys
 import time
+
+# Sibling modules are copied with this helper during installation.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import secure_storage
+import tls_config
 
 HERE = Path(__file__).resolve().parent
 SOURCE = HERE.parent
@@ -28,11 +36,20 @@ release_path = HERE / 'release.json' if (HERE / 'release.json').exists() else SO
 RELEASE = json.loads(release_path.read_text())
 VERSION = RELEASE['version']
 PRIVATE_ENV = {**{name: '' for name in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy')}, 'NO_PROXY': '*', 'no_proxy': '*'}
-VOLUMES = ('server-data', 'gateway-private', 'gateway-peers', 'caddy-data', 'caddy-config')
+VOLUMES = ('server-data', 'gateway-private', 'gateway-peers', 'tls-data')
 
 
 def run(args, **kwargs):
     return subprocess.check_output([str(a) for a in args], text=True, timeout=kwargs.pop('timeout', 900), **kwargs).strip()
+
+
+def child_guard(parent):
+    # Host archive helpers must not outlive a killed updater and race recovery.
+    def guard():
+        if ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGKILL, 0, 0, 0) != 0:
+            os._exit(125)
+        if os.getppid() != parent: os._exit(125)
+    return guard
 
 
 def atomic(path, data):
@@ -74,14 +91,14 @@ def version(value):
 def release(data, channel, current=None):
     if not isinstance(data, dict) or set(data) != {'format', 'host_api', 'data_contract', 'version', 'published_at', 'images'}:
         raise ValueError('Invalid release manifest fields')
-    if any(type(data[k]) is not int or data[k] != 1 for k in ('format', 'host_api', 'data_contract')):
+    if any(type(data[k]) is not int or data[k] != (1 if k == 'format' else RELEASE[k]) for k in ('format', 'host_api', 'data_contract')):
         raise ValueError('This release needs a reviewed installer/data-format migration')
     proposed = version(data['version'])
     if channel == 'stable' and proposed[3] != 1: raise ValueError('Stable updates cannot install previews')
     if type(data['published_at']) is not int or not 1 <= data['published_at'] <= int(time.time()) + 3600:
         raise ValueError('Invalid release time')
-    if not isinstance(data['images'], dict) or set(data['images']) != {'server', 'gateway', 'web'}:
-        raise ValueError('A release must name all three images')
+    if not isinstance(data['images'], dict) or set(data['images']) != {'server', 'gateway'}:
+        raise ValueError('A release must name both runtime images')
     for service, image in data['images'].items():
         if not isinstance(image, str) or not re.fullmatch(re.escape(f'{REGISTRY}-{service}@sha256:') + r'[a-f0-9]{64}', image):
             raise ValueError('Only immutable images in the Bungee release repositories are permitted')
@@ -96,24 +113,22 @@ def release(data, channel, current=None):
 def compose(config, images, root):
     c = network.validate(config)
     dataset = root / 'datasets' / c.get('geodata', 'empty')
-    common = {'restart': 'unless-stopped', 'cap_drop': ['ALL'], 'security_opt': ['no-new-privileges:true'], 'read_only': True}
+    common = {'restart': 'unless-stopped', 'cap_drop': ['ALL'], 'security_opt': ['no-new-privileges:true'], 'read_only': True, 'ulimits': {'core': {'soft': 0, 'hard': 0}}}
+    def bind(name, target, readonly=False):
+        return {'type': 'bind', 'source': str(root / 'volumes' / name), 'target': target, 'read_only': readonly, 'bind': {'create_host_path': False}}
     def service(image, **values): return {**common, 'image': image, **values}
+    dns = {'BUNGEE_DNS_UPSTREAM_IP': c.get('dns_upstream_ip', ''), 'BUNGEE_DNS_UPSTREAM_PORT': str(c.get('dns_upstream_port', 53))}
     return {'name': 'bungee', 'services': {
         'gateway': service(images['gateway'], cap_add=['NET_ADMIN', 'CHOWN', 'DAC_OVERRIDE'], tmpfs=['/run:mode=0700'],
-            environment={**PRIVATE_ENV, 'BUNGEE_WG_PORT': str(c['wg_port']), 'BUNGEE_ADMIN_SUBNETS': ' '.join(c['admin_subnets']), 'BUNGEE_UPDATE_CONTROL': '/control'},
-            ports=[f"{network.bracket(c['bind_ip'])}:{c['web_port']}:443/tcp", f"{c['wg_port']}:{c['wg_port']}/udp"],
+            environment={**PRIVATE_ENV, **dns, 'BUNGEE_WG_PORT': str(c['wg_port']), 'BUNGEE_ADMIN_ADDRESS': c['bind_ip'], 'BUNGEE_ADMIN_SUBNETS': ' '.join(c['admin_subnets']), 'BUNGEE_UPDATE_CONTROL': '/control'},
+            ports=[f"{network.bracket(c['bind_ip'])}:{c['web_port']}:8443/tcp", f"{c['wg_port']}:{c['wg_port']}/udp"],
             sysctls={'net.ipv4.ip_forward': '0', 'net.ipv6.conf.all.forwarding': '0'},
-            volumes=['gateway-private:/private', 'gateway-peers:/peers', {'type': 'bind', 'source': str(root / 'control'), 'target': '/control', 'read_only': True}],
+            volumes=[bind('gateway-private', '/private'), bind('gateway-peers', '/peers'), {'type': 'bind', 'source': str(root / 'control'), 'target': '/control', 'read_only': True, 'bind': {'create_host_path': False}}],
             healthcheck={'test': ['CMD', 'wg', 'show', 'wg0'], 'interval': '10s', 'timeout': '3s', 'retries': 5}),
         'server': service(images['server'], network_mode='service:gateway', depends_on={'gateway': {'condition': 'service_healthy'}},
-            environment={**PRIVATE_ENV, 'BUNGEE_PUBLIC_ORIGIN': network.origin(c), 'BUNGEE_ADMIN_BIND': '127.0.0.1:8080', 'BUNGEE_TRUST_LOOPBACK_PROXY': 'true', 'BUNGEE_DEVICE_BIND': '10.77.0.1:8081', 'BUNGEE_WG_ENDPOINT': f"{network.bracket(c['endpoint_ip'])}:{c['wg_port']}"},
-            tmpfs=['/tmp:size=16m'], volumes=['server-data:/state', 'gateway-peers:/state/wireguard', {'type': 'bind', 'source': str(dataset), 'target': '/datasets', 'read_only': True, 'bind': {'create_host_path': False}}]),
-        'web': service(images['web'], network_mode='service:gateway', depends_on={'server': {'condition': 'service_healthy'}},
-            cap_add=['NET_BIND_SERVICE'], tmpfs=['/tmp:size=16m'],
-            environment={**PRIVATE_ENV, 'BUNGEE_DOMAIN': c['web_host'], 'BUNGEE_ADMIN_SUBNETS': ' '.join(c['admin_subnets'])},
-            volumes=['caddy-data:/data', 'caddy-config:/config'],
-            healthcheck={'test': ['CMD', 'wget', '-q', '-Y', 'off', '-O', '/dev/null', 'http://127.0.0.1:8090/healthz'], 'interval': '10s', 'timeout': '3s', 'retries': 5})
-    }, 'volumes': {v: {} for v in VOLUMES}}
+            environment={**PRIVATE_ENV, **dns, 'BUNGEE_PUBLIC_ORIGIN': network.origin(c), 'BUNGEE_ADMIN_BIND': '0.0.0.0:8443', 'BUNGEE_ADMIN_INTERFACE': 'eth0', 'BUNGEE_ADMIN_SUBNETS': ' '.join(c['admin_subnets']), 'BUNGEE_DEVICE_BIND': '10.77.0.1:8081', 'BUNGEE_WG_ENDPOINT': f"{network.bracket(c['endpoint_ip'])}:{c['wg_port']}", 'BUNGEE_TLS_CERT_FILE': '/tls/current/server.crt', 'BUNGEE_TLS_KEY_FILE': '/tls/current/server.key'},
+            tmpfs=['/tmp:size=16m'], volumes=[bind('server-data', '/state'), bind('gateway-peers', '/state/wireguard'), bind('tls-data/issued', '/tls', True), {'type': 'bind', 'source': str(dataset), 'target': '/datasets', 'read_only': True, 'bind': {'create_host_path': False}}])
+    }}
 
 
 class Engine:
@@ -166,34 +181,54 @@ class Engine:
         output = self.compose(generation, 'ps', '--all', '--format', 'json')
         rows = json.loads(output) if output.startswith('[') else [json.loads(line) for line in output.splitlines()]
         if isinstance(rows, dict): rows = [rows]
-        if len(rows) != 3 or {r['Service'] for r in rows} != {'gateway', 'server', 'web'} or any(r['State'] != 'running' or r.get('Health') != 'healthy' for r in rows):
-            raise RuntimeError('All three services must be running and healthy')
+        if len(rows) != 2 or {r['Service'] for r in rows} != {'gateway', 'server'} or any(r['State'] != 'running' or r.get('Health') != 'healthy' for r in rows):
+            raise RuntimeError('Both runtime services must be running and healthy')
     def volumes(self):
+        secure_storage.check(self.root)
         for name in VOLUMES:
-            real = self.project + '_' + name
-            value = json.loads(run(['docker', 'volume', 'inspect', real]))[0]
-            if (value.get('Labels') or {}).get('com.docker.compose.project') != self.project or value['Labels'].get('com.docker.compose.volume') != name:
-                raise ValueError('Refusing an unowned volume')
+            path = self.root / 'volumes' / name
+            if path.is_symlink() or not path.is_dir(): raise ValueError('Missing encrypted data directory')
     def storage_ready(self, generation):
         self.volumes()
-        image = read(self.root / 'generations' / generation / 'release.json')['images']['server']
-        args = ['docker', 'run', '--rm', '--network', 'none', '--read-only', '--user', '0:0', '--cap-drop', 'ALL', '--cap-add', 'DAC_OVERRIDE', '--entrypoint', 'du']
-        for index, name in enumerate(VOLUMES): args += ['--mount', f'type=volume,src={self.project}_{name},dst=/data{index},readonly']
-        sizes = run([*args, image, '-sb', *[f'/data{i}' for i in range(len(VOLUMES))]])
-        required = sum(int(line.split()[0]) for line in sizes.splitlines()) * 12 // 10 + 1024 ** 3
+        required = sum(int(run(['du', '-sb', self.root / 'volumes' / name]).split()[0]) for name in VOLUMES) * 12 // 10 + 1024**3
         if shutil.disk_usage(self.root).free < required:
-            raise ValueError('Insufficient backup space: free a full snapshot plus 20% and 1 GiB before updating; primary history is never automatically deleted')
+            raise ValueError('Insufficient encrypted backup space: reserve a full snapshot plus 20% and 1 GiB')
+    def backup_key(self):
+        path = secure_storage.KEY.parent / 'backup-identity'
+        secure_storage.private(path)
+        return path
     def archive(self, generation, directory, restore=False):
         self.volumes()
-        image = read(self.root / 'generations' / generation / 'release.json')['images']['server']
+        key = self.backup_key()
+        if restore:
+            # Authenticate EVERY archive before removing any current data.
+            for name in VOLUMES:
+                subprocess.run(['age', '--decrypt', '--identity', str(key), str(directory / (name + '.tar.age'))], stdout=subprocess.DEVNULL, check=True, timeout=900)
+        recipient = run(['age-keygen', '-y', key]) if not restore else None
         for name in VOLUMES:
-            args = ['docker', 'run', '--rm', '--label', f'org.bungee.helper={self.project}-archive', '--network', 'none', '--read-only', '--user', '0:0', '--cap-drop', 'ALL', '--cap-add', 'CHOWN', '--cap-add', 'DAC_OVERRIDE', '--cap-add', 'FOWNER', '--security-opt', 'no-new-privileges:true', '--entrypoint', 'sh', '--mount', f'type=volume,src={self.project}_{name},dst=/data' + ('' if restore else ',readonly'), '--mount', f'type=bind,src={directory},dst=/backup' + (',readonly' if restore else ''), image, '-ec']
+            data = self.root / 'volumes' / name
+            archive = directory / (name + '.tar.age')
             if restore:
-                command = f'find /data -mindepth 1 -maxdepth 1 -exec rm -rf -- {{}} +; tar -xpf /backup/{name}.tar -C /data'
+                # Archives contain only our cold data directories and are authenticated.
+                # Never extract host-owned external archives into a running service.
+                for child in data.iterdir():
+                    if child.is_dir() and not child.is_symlink(): shutil.rmtree(child)
+                    else: child.unlink()
+                first_args = ['age', '--decrypt', '--identity', str(key), str(archive)]
+                second_args = ['tar', '--extract', '--preserve-permissions', '--file', '-', '--directory', str(data)]
+                output = subprocess.DEVNULL
             else:
-                command = f'umask 077; tar -cpf /backup/{name}.tar -C /data .'
-            try: run([*args, command])
-            finally: self.stop_helpers()
+                first_args = ['tar', '--create', '--file', '-', '--directory', str(data), '.']
+                second_args = ['age', '--encrypt', '--recipient', recipient]
+                output = archive.open('xb')
+            try:
+                with subprocess.Popen(first_args, stdout=subprocess.PIPE, preexec_fn=child_guard(os.getpid())) as producer:
+                    try:
+                        subprocess.run(second_args, stdin=producer.stdout, stdout=output, check=True, timeout=900, preexec_fn=child_guard(os.getpid()))
+                    finally: producer.stdout.close()
+                    if producer.wait(timeout=900): raise RuntimeError('Snapshot pipeline failed')
+            finally:
+                if not restore: output.close()
 
 
 class Host:
@@ -204,6 +239,8 @@ class Host:
         return gen
     def metadata(self, gen): return read(self.root / 'generations' / gen / 'release.json')
     def stage(self, config, metadata):
+        for name in VOLUMES:
+            (self.root / 'volumes' / name).mkdir(parents=True, exist_ok=True, mode=0o700)
         dataset = self.root / 'datasets' / config.get('geodata', 'empty')
         if config.get('geodata'):
             if not dataset.is_dir(): raise ValueError('Pinned dataset directory is missing; restore it before updating')
@@ -257,14 +294,14 @@ class Host:
         backup.mkdir(parents=True, mode=0o700)
         self.engine.archive(gen, backup)
         for name in VOLUMES:
-            with (backup / f'{name}.tar').open('rb') as stream: os.fsync(stream.fileno())
-        sums = {name: checksum(backup / f'{name}.tar') for name in VOLUMES}
+            with (backup / f'{name}.tar.age').open('rb') as stream: os.fsync(stream.fileno())
+        sums = {name: checksum(backup / f'{name}.tar.age') for name in VOLUMES}
         atomic(backup / 'complete.json', sums)
     def restore(self, gen, backup):
         sums = read(backup / 'complete.json')
         if set(sums) != set(VOLUMES): raise ValueError('Incomplete recovery snapshot')
         for name in VOLUMES:
-            if checksum(backup / f'{name}.tar') != sums[name]: raise ValueError('Recovery snapshot checksum mismatch')
+            if checksum(backup / f'{name}.tar.age') != sums[name]: raise ValueError('Recovery snapshot checksum mismatch')
         self.engine.archive(gen, backup, restore=True)
     def finish(self, gen):
         self.engine.healthy(gen)
@@ -311,6 +348,7 @@ class Host:
             self.backup(old, self.root / 'backups' / new)
             tx['phase'] = 'backed_up'; self.journal(tx)
             tx['phase'] = 'candidate'; self.journal(tx)
+            self.renew_tls(config)
             self.engine.up(new)
             self.engine.healthy(new)
             tx['phase'] = 'accepted'; self.journal(tx)
@@ -324,8 +362,16 @@ class Host:
         backups = sorted((self.root / 'backups').iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
         for backup in backups[3:]:
             if (backup / 'complete.json').is_file(): shutil.rmtree(backup)
+    def renew_tls(self, config=None):
+        config = config or read(self.root / 'generations' / self.current() / 'config.json')
+        tls_config.ensure(self.root / 'volumes/tls-data', config['web_host'])
+        for path in (self.root / 'volumes/tls-data/issued').rglob('*'):
+            if not path.is_symlink(): os.chown(path, 10001, 10001)
+        os.chown(self.root / 'volumes/tls-data/issued', 10001, 10001)
+
     def update(self, manual=False):
         self.recover()
+        self.renew_tls()
         current = self.current()
         config = read(self.root / 'generations' / current / 'config.json')
         if not config['auto_updates'] and not manual: print('Automatic updates are disabled.'); return
@@ -355,14 +401,18 @@ def guided(existing=None):
             wg = network.port(ask('WireGuard UDP port (51820 forbidden)', c.get('wg_port')), True)
             web = network.port(ask('Dashboard HTTPS TCP port', c.get('web_port', 8443)))
             endpoint = network.address(ask('Numeric home-server address reachable by phones', c.get('endpoint_ip')), endpoint=True)
-            bind = network.address(ask('Dashboard bind IP; 127.0.0.1 means local/SSH access only', c.get('bind_ip', '127.0.0.1')))
+            bind = network.management_address(ask('Internal management bind IP; 127.0.0.1 means local/SSH access only', c.get('bind_ip', '127.0.0.1')))
             host = network.hostname(ask('Dashboard address used in your browser (no port)', c.get('web_host', bind if bind not in ('0.0.0.0', '::') else None)))
-            print('Enter administrator IPs/prefixes separated by spaces or commas. No allow-everyone option.')
-            nets = network.admin_networks(ask('Allowed administrator networks', ' '.join(c['admin_subnets']) if c.get('admin_subnets') else None))
+            print('Use only your internal management IPs/prefixes. They must not overlap the phone C2 subnet.')
+            nets = network.admin_networks(ask('Allowed internal administrator networks', ' '.join(c['admin_subnets']) if c.get('admin_subnets') else None))
+            dns_value = ask('Optional DNS resolver IP (type off to disable)', c.get('dns_upstream_ip', ''))
+            dns = network.dns_upstream('' if dns_value == 'off' else dns_value)
+            dns_port = network.port(ask('DNS resolver port', c.get('dns_upstream_port', 53))) if dns else 53
+            size = int(ask('Encrypted storage capacity in GiB (new installations)', c.get('storage_size_gib', 8)))
             channel = ask('Update channel: stable or preview', c.get('channel', 'stable'))
             auto = ask('Check daily for tested images in that channel? yes/no', 'yes' if c.get('auto_updates', True) else 'no')
             if auto not in ('yes', 'no'): raise ValueError('Answer yes or no')
-            return network.validate({**({'geodata': c['geodata']} if c.get('geodata') else {}), 'wg_port': wg, 'web_port': web, 'endpoint_ip': endpoint, 'bind_ip': bind, 'web_host': host, 'admin_subnets': nets, 'channel': channel, 'auto_updates': auto == 'yes'})
+            return network.validate({**({'geodata': c['geodata']} if c.get('geodata') else {}), 'wg_port': wg, 'web_port': web, 'endpoint_ip': endpoint, 'bind_ip': bind, 'web_host': host, 'admin_subnets': nets, 'channel': channel, 'auto_updates': auto == 'yes', 'dns_upstream_ip': dns, 'dns_upstream_port': dns_port, 'storage_size_gib': size})
         except ValueError as exc: print('Please correct:', exc)
 
 
@@ -382,6 +432,11 @@ def preflight(root, installing=False, config=None):
     v = run(['docker', 'compose', 'version', '--short']).lstrip('v').split('.')
     if tuple(int(n) for n in v[:2]) < (2, 24): raise ValueError('Docker Compose 2.24+ is required')
     if not Path('/run/systemd/system').exists(): raise ValueError('Guided installation requires systemd; manual Compose remains available')
+    if not installing: secure_storage.check(root)
+    swaps = run(['swapon', '--show', '--noheadings', '--raw', '--output', 'NAME'])
+    for swap in swaps.splitlines():
+        if not swap.startswith('/dev/') or run(['lsblk', '-dn', '-o', 'TYPE', swap]) != 'crypt':
+            raise ValueError('Disable unencrypted swap or use encrypted swap before deployment')
     if installing:
         if root.exists(): raise ValueError('Installation directory already exists; use configure/status/update instead of overwriting it')
         if run(['docker', 'ps', '--all', '--quiet', '--filter', 'label=com.docker.compose.project=bungee']): raise ValueError('An existing Bungee stack exists; refusing to replace it')
@@ -394,8 +449,8 @@ def preflight(root, installing=False, config=None):
 def systemd(root):
     command = f'/usr/bin/python3 {root}/bungee-host.py'
     units = {
-        'bungee-recover.service': f'[Unit]\nDescription=Recover an interrupted Bungee update\nRequires=docker.service\nAfter=docker.service\nBefore=bungee-update.service\n[Service]\nType=oneshot\nNoNewPrivileges=yes\nPrivateTmp=yes\nProtectSystem=full\nUMask=0077\nExecStart={command} recover --root {root}\nTimeoutStartSec=900\n[Install]\nWantedBy=multi-user.target\n',
-        'bungee-update.service': f'[Unit]\nDescription=Check and transactionally update Bungee\nRequires=docker.service\nAfter=docker.service bungee-recover.service\nOnFailure=bungee-recover.service\n[Service]\nType=oneshot\nNoNewPrivileges=yes\nPrivateTmp=yes\nProtectSystem=full\nUMask=0077\nExecStart={command} update --root {root}\nTimeoutStartSec=1800\n',
+        'bungee-recover.service': f'[Unit]\nDescription=Recover an interrupted Bungee update\nRequires=docker.service\nRequiresMountsFor={root}\nAfter=docker.service\nBefore=bungee-update.service\n[Service]\nType=oneshot\nNoNewPrivileges=yes\nPrivateTmp=yes\nProtectSystem=full\nUMask=0077\nLimitCORE=0\nExecStart={command} recover --root {root}\nTimeoutStartSec=900\n[Install]\nWantedBy=multi-user.target\n',
+        'bungee-update.service': f'[Unit]\nDescription=Check and transactionally update Bungee\nRequires=docker.service\nRequiresMountsFor={root}\nAfter=docker.service bungee-recover.service\nOnFailure=bungee-recover.service\n[Service]\nType=oneshot\nNoNewPrivileges=yes\nPrivateTmp=yes\nProtectSystem=full\nUMask=0077\nLimitCORE=0\nExecStart={command} update --root {root}\nTimeoutStartSec=1800\n',
         'bungee-update.timer': '[Unit]\nDescription=Daily Bungee security update check\n[Timer]\nOnBootSec=15min\nOnCalendar=daily\nRandomizedDelaySec=1h\nPersistent=true\n[Install]\nWantedBy=timers.target\n'}
     for name, content in units.items(): atomic(Path('/etc/systemd/system') / name, content)
     run(['systemctl', 'daemon-reload'])
@@ -409,23 +464,26 @@ def install(root, config):
     install_tag = 'install-' + secrets.token_hex(8)
     run(['docker', 'build', '--pull', '-t', f'bungee-gateway:{install_tag}', '-f', 'deploy/wireguard/Dockerfile', 'deploy'], cwd=SOURCE)
     run(['docker', 'build', '--pull', '-t', f'bungee-server:{install_tag}', '.'], cwd=SOURCE)
-    run(['docker', 'build', '--pull', '-t', f'bungee-web:{install_tag}', '-f', 'deploy/web.Dockerfile', 'deploy'], cwd=SOURCE)
     run(['docker', 'run', '--rm', '--network', 'none', '--cap-drop', 'ALL', '--cap-add', 'NET_ADMIN', '--entrypoint', 'sh', f'bungee-gateway:{install_tag}', '-ec', 'ip link add bungee-check type wireguard; ip link delete bungee-check'])
-    root.mkdir(mode=0o700)
+    secure_storage.provision(root, config.get('storage_size_gib', 8))
+    run(['age-keygen', '-o', secure_storage.KEY.parent / 'backup-identity'])
+    (secure_storage.KEY.parent / 'backup-identity').chmod(0o600)
     with (root / 'host.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         atomic(root / 'control/status', 'closed\n')
-        for source, target in ((Path(__file__), root / 'bungee-host.py'), (module_path, root / 'network_config.py'), (release_path, root / 'release.json')):
+        for source, target in ((Path(__file__), root / 'bungee-host.py'), (module_path, root / 'network_config.py'), (release_path, root / 'release.json'), (HERE / 'secure_storage.py', root / 'secure_storage.py'), (HERE / 'tls_config.py', root / 'tls_config.py')):
             atomic(target, source.read_text())
-        images = {name: json.loads(run(['docker', 'image', 'inspect', f'bungee-{name}:{install_tag}']))[0]['Id'] for name in ('gateway', 'server', 'web')}
+        images = {name: json.loads(run(['docker', 'image', 'inspect', f'bungee-{name}:{install_tag}']))[0]['Id'] for name in ('gateway', 'server')}
         metadata = {'format': 1, 'host_api': RELEASE['host_api'], 'data_contract': RELEASE['data_contract'], 'version': VERSION, 'published_at': 0, 'images': images}
         host = Host(root)
         generation = host.stage(config, metadata)
         atomic(root / 'current.json', {'generation': generation})
+        os.chown(root / 'volumes/server-data', 10001, 10001)
+        host.renew_tls()
         try:
             host.engine.up(generation)
             host.engine.healthy(generation)
-            certificate = host.engine.compose(generation, 'exec', '-T', 'web', 'cat', '/data/caddy/pki/authorities/local/root.crt')
+            certificate = (root / 'volumes/tls-data/root.crt').read_text()
             atomic(root / 'root.crt', certificate + '\n')
             # Recovery must be installed before external admission is opened.
             systemd(root)
@@ -463,6 +521,9 @@ if __name__ == '__main__':
     if args.manual and args.command != 'update': parser.error('--manual is only valid with update')
     if args.config and args.command not in ('install', 'configure'): parser.error('--config is only valid with install/configure')
     os.umask(0o077)
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    if ctypes.CDLL(None, use_errno=True).prctl(4, 0, 0, 0, 0) != 0:
+        parser.error('Cannot disable host helper process dumps')
     try:
         root = args.root.absolute()
         host = Host(root)
@@ -481,6 +542,7 @@ if __name__ == '__main__':
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 if args.command == 'recover':
                     host.recover()
+                    host.renew_tls()
                     if args.start and not (root / 'transaction.json').exists():
                         host.engine.up(host.current()); host.engine.healthy(host.current()); systemd(root); host.finish(host.current())
                 elif args.command == 'update': host.update(manual=args.manual)

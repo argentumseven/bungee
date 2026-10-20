@@ -284,7 +284,7 @@ mod tests {
             origin: "http://127.0.0.1:8080".into(),
             secure_cookie: false,
             admin_hash: String::new(),
-            trust_admin_proxy: false,
+            admin_networks: vec!["127.0.0.0/8".parse().unwrap()],
             limiter: Arc::new(Mutex::new(RateLimits::default())),
             state_dir: directory.clone(),
             wg_endpoint: Some("203.0.113.10:47937".into()),

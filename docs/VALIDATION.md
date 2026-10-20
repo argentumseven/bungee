@@ -2,6 +2,36 @@
 
 This record covers automated checks and their limits. Physical GrapheneOS testing and an independent security audit are pending. The [device procedure](RECOVERY_CONTROLS.md#physical-device-checks) covers camera/boot acceptance; [SAFETY.md](SAFETY.md) covers local recovery and removal.
 
+## Phone C2 and internal management isolation (unreleased)
+
+Server `wg0` permits phone C2 and optional legacy DNS only. Administration uses the explicitly configured internal management address/prefixes and a Rust TLS socket bound to namespace `eth0`. The policy is documented in [the topology reference](NETWORK-TOPOLOGY.md#management-isolation).
+
+| Check | Result |
+| --- | --- |
+| Rust and API | Format check, all-target clippy with warnings denied, locked build, 14 unit tests and 97 API tests pass. Regression cases reject phone-subnet binds and overlapping administrator prefixes, and deny phone sources even with a permissive in-memory ACL. |
+| Firewall isolation | An isolated two-interface Docker fixture establishes a management connection on synthetic `wg0` before applying policy, verifies it is cut off, and rejects new admin connections including those addressed to the namespace's `eth0` IP. Internal management, phone C2 and configured DNS remain reachable. Disabling optional DNS blocks that service while C2 stays available. |
+| Independent listener isolation | With fixture INPUT deliberately relaxed, the actual Rust image still rejects admin connections arriving on `wg0`, including an `eth0` destination. Internal HTTPS and phone C2 remain reachable. UID 10001, zero capabilities and a read-only root are retained. |
+| DNS and TLS | Real scoped outbound UDP/TCP resolver checks, Docker-DNS blocking, forwarding denial, direct trusted hybrid TLS, source ACL and forged-header checks pass. Both runtime images build and the non-root server-image HTTPS check passes. |
+| Host setup | 33 tests run: 31 pass; two unchanged age archive checks skip because age binaries are absent in the resumed executor. Prior real archive validation is recorded below. New cases reject wildcard/phone-overlay management publication and overlapping management CIDRs. |
+
+The isolation fixture uses a second veth renamed `wg0` to exercise real ingress/conntrack and socket interface binding. It does not validate WireGuard cryptography or a real kernel WireGuard tunnel. Target-host tunnel, provider firewall, internal routing and reboot acceptance remain required. This update does not configure host SSH or provider rules, and does not merge/deploy the runtime PR.
+
+## Server deployment changes after 1.1.4 (unreleased)
+
+The host/storage contract is now 2. Android and the phone protocol are unchanged. These checks cover direct Rust TLS, explicit DNS upstreams, LUKS2 provisioning/boot configuration and age-encrypted cold archives.
+
+| Check | Result |
+| --- | --- |
+| Rust | Formatting, all-target Clippy with warnings denied, locked build and 12 unit tests pass; obsolete proxy-trust unit coverage was replaced by direct-source integration checks |
+| API | 97 tests pass, no failures/skips; forged forwarding headers no longer create administrator identities |
+| Host/storage | 32 tests pass, including real tar/age encryption/restore, corruption/wrong-key refusal before mutation, certificate renewal retaining its CA, key/mount rejection and helper termination when an updater dies |
+| TLS | Trusted direct Rust TLS 1.3 X25519MLKEM768 succeeds; classical-only, TLS 1.2, untrusted CA and unlisted/forged source tests pass |
+| Web | TypeScript/Vite production build and all 18 browser tests pass |
+| Containers | Both images build; built Rust image serves direct trusted hybrid HTTPS with UID 10001, zero capabilities, no-new-privileges and a read-only root. Gateway checks retain outbound deny, Docker-DNS blocking and scoped UDP/TCP resolver rules |
+| Documentation | Nine embedded image assets exist, including HTML and the three drawn PNG security pictures. Security image links point to the exact commit containing the PNGs; pinned contents are checked locally and remote assets verified. The transport and backend drawings are checked against the namespace, listener, transport and peer-publication implementation; all security pictures are visually checked at document width. All 18 tracked PNG files decode. Workflow actionlint and whitespace checks pass |
+
+This cloud host cannot perform a real LUKS mount, systemd reboot/power-loss test or kernel WireGuard deployment. Storage mount/type rejection is tested with injected observations; archive encryption/restoration uses real processes. The updater check now reports this distinction explicitly rather than claiming a full container/boot acceptance test. Complete the console reboot and migration/recovery procedure on the target host. Android/native checks were not repeated for server-only changes. No release tag or production deployment is created by these source changes.
+
 ## Version 1.1.4
 
 This version closes the ownership/removal and pairing-stop gaps in [REMOVAL_AUDIT.md](REMOVAL_AUDIT.md). Android permission declarations, native transport code and server protocols are unchanged. The app checks device/profile ownership and failed role queries, confirms asynchronous administration removal, cancels control requests during local stop, closes pairing-only peers and expires stale camera-start approvals.

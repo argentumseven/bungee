@@ -7,6 +7,12 @@ license = "AGPL-3.0-only"
 
 [dependencies]
 axum = "0.8"
+axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
+rustls-pemfile = "2"
+ipnet = "2"
+libc = "0.2"
+zeroize = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "time", "sync", "io-util"] }
 hickory-proto = "0.25"
 psl = "2"

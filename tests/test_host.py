@@ -16,7 +16,7 @@ CONFIG = {'wg_port': 49271, 'web_port': 8443, 'endpoint_ip': '203.0.113.12', 'we
 
 
 def metadata():
-    return {'format': 1, 'host_api': 1, 'data_contract': 1, 'version': '0.1.1', 'published_at': int(time.time()), 'images': {s: f'{host.REGISTRY}-{s}@sha256:' + 'a' * 64 for s in ('server', 'gateway', 'web')}}
+    return {'format': 1, 'host_api': host.RELEASE['host_api'], 'data_contract': host.RELEASE['data_contract'], 'version': '0.1.1', 'published_at': int(time.time()), 'images': {s: f'{host.REGISTRY}-{s}@sha256:' + 'a' * 64 for s in ('server', 'gateway')}}
 
 
 class FakeEngine:
@@ -38,7 +38,7 @@ class FakeEngine:
         self.event('restore' if restore else 'backup')
         if restore: self.restores += 1
         else:
-            for name in host.VOLUMES: (directory / f'{name}.tar').write_bytes(b'coherent fixture')
+            for name in host.VOLUMES: (directory / f'{name}.tar.age').write_bytes(b'coherent fixture')
 
 
 class SetupTests(unittest.TestCase):
@@ -49,15 +49,20 @@ class SetupTests(unittest.TestCase):
         self.assertGreater(manifest['android_version_code'], 0)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for source, target in [(host.HERE / 'bungee-host.py', 'bungee-host.py'), (host.module_path, 'network_config.py'), (host.release_path, 'release.json')]:
+            for source, target in [(host.HERE / 'bungee-host.py', 'bungee-host.py'), (host.module_path, 'network_config.py'), (host.release_path, 'release.json'), (host.HERE / 'secure_storage.py', 'secure_storage.py'), (host.HERE / 'tls_config.py', 'tls_config.py')]:
                 (root / target).write_text(source.read_text())
             script = "import importlib.util,sys; s=importlib.util.spec_from_file_location('installed',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.VERSION)"
             result = subprocess.check_output(['python3', '-c', script, str(root / 'bungee-host.py')], text=True)
             self.assertEqual(result.strip(), host.VERSION)
     def test_bare_hosts_canonical_prefixes_ipv6_and_no_shell_input(self):
         self.assertEqual(host.network.admin_networks('192.168.1.15,192.168.1.99/24 fd12::4'), ['192.168.1.15/32', '192.168.1.0/24', 'fd12::4/128'])
-        for value in ['', [], '0.0.0.0/0', '::/0', '128.0.0.0/1', '192.168.1', '::ffff:192.168.1.1', '192.168.1.1;id', 'fe80::1%eth0', '224.0.0.0/8']:
+        for value in ['', [], '0.0.0.0/0', '::/0', '128.0.0.0/1', '192.168.1', '::ffff:192.168.1.1', '192.168.1.1;id', 'fe80::1%eth0', '224.0.0.0/8', '10.0.0.0/8', '10.77.0.0/24', '10.77.0.2/32', '10.77.0.255']:
             with self.subTest(value=value), self.assertRaises((ValueError, TypeError)): host.network.admin_networks(value)
+    def test_management_publication_cannot_bind_a_wildcard_or_phone_overlay(self):
+        for bind in ['0.0.0.0', '::', '10.77.0.1', '10.77.0.254', '::ffff:10.77.0.1', 'fe80::1']:
+            with self.subTest(bind=bind), self.assertRaises(ValueError): host.network.validate({**CONFIG, 'bind_ip': bind})
+        for bind in ['127.0.0.1', '::1', '192.168.1.10', 'fd12::10']:
+            with self.subTest(bind=bind): self.assertEqual(host.network.validate({**CONFIG, 'bind_ip': bind})['bind_ip'], bind)
     def test_invalid_ports_addresses_and_names_are_refused(self):
         for value in [0, 65536, '3.2', '-1', True, '$(id)']:
             with self.subTest(value=value), self.assertRaises(ValueError): host.network.port(value)
@@ -69,7 +74,10 @@ class SetupTests(unittest.TestCase):
     def test_exact_origin_and_no_privileged_socket_or_extra_published_apis(self):
         c = host.compose(CONFIG, metadata()['images'], Path('/opt/bungee'))
         self.assertEqual(c['services']['server']['environment']['BUNGEE_PUBLIC_ORIGIN'], 'https://192.168.1.10:8443')
-        self.assertEqual(c['services']['server']['environment']['BUNGEE_TRUST_LOOPBACK_PROXY'], 'true')
+        self.assertEqual(c['services']['server']['environment']['BUNGEE_ADMIN_BIND'], '0.0.0.0:8443')
+        self.assertEqual(c['services']['server']['environment']['BUNGEE_ADMIN_INTERFACE'], 'eth0')
+        self.assertIn('192.168.1.10:8443:8443/tcp', c['services']['gateway']['ports'])
+        self.assertNotIn('web', c['services'])
         self.assertEqual(host.network.origin({**CONFIG, 'web_port': 443}), 'https://192.168.1.10')
         self.assertEqual(host.network.origin({**CONFIG, 'web_host': 'fd12::1'}), 'https://[fd12::1]:8443')
         for s in c['services'].values():
@@ -78,7 +86,13 @@ class SetupTests(unittest.TestCase):
             self.assertEqual(s['environment']['http_proxy'], '')
             self.assertEqual(s['environment']['NO_PROXY'], '*')
         self.assertNotIn('docker.sock', json.dumps(c))
-        self.assertNotIn('ports', c['services']['server']); self.assertNotIn('ports', c['services']['web'])
+        self.assertNotIn('storage.key', json.dumps(c))
+        self.assertNotIn('backup-identity', json.dumps(c))
+        tls = c['services']['server']['volumes'][2]
+        self.assertTrue(tls['read_only'])
+        self.assertTrue(tls['source'].endswith('/tls-data/issued'))
+        self.assertFalse(tls['bind']['create_host_path'])
+        self.assertNotIn('ports', c['services']['server'])
     def test_plan_needs_no_docker_root_or_external_services_and_writes_nothing(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / 'untouched'
@@ -89,8 +103,8 @@ class SetupTests(unittest.TestCase):
     def test_release_downgrade_replay_wrong_repo_mutable_tags_and_breaking_contract_refused(self):
         current = {**metadata(), 'version': '0.1.0', 'published_at': 1}
         self.assertEqual(host.release(metadata(), 'stable', current)['version'], '0.1.1')
-        bad = [dict(metadata(), version='0.1.1-alpha.1'), dict(metadata(), version='0.2.0'), dict(metadata(), version='0.0.9'), dict(metadata(), published_at=1), dict(metadata(), host_api=2), dict(metadata(), data_contract=2)]
-        for images in [{'server': 'evil.example/server:latest', 'gateway': 'x', 'web': 'y'}, {**metadata()['images'], 'server': host.REGISTRY + '-server:latest'}]: bad.append(dict(metadata(), images=images))
+        bad = [dict(metadata(), version='0.1.1-alpha.1'), dict(metadata(), version='0.2.0'), dict(metadata(), version='0.0.9'), dict(metadata(), published_at=1), dict(metadata(), host_api=999), dict(metadata(), data_contract=999)]
+        for images in [{'server': 'evil.example/server:latest', 'gateway': 'x'}, {**metadata()['images'], 'server': host.REGISTRY + '-server:latest'}]: bad.append(dict(metadata(), images=images))
         for data in bad:
             with self.subTest(data=data), self.assertRaises(ValueError): host.release(data, 'stable', current)
 
@@ -99,6 +113,7 @@ class TransactionTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        self.tls_patch = patch.object(host.Host, 'renew_tls'); self.tls_patch.start(); self.addCleanup(self.tls_patch.stop)
         self.engine = FakeEngine(self.root); self.host = host.Host(self.root, self.engine)
         self.old = self.host.stage(CONFIG, {**metadata(), 'version': '0.1.0', 'published_at': 1})
         self.engine.old = self.old
@@ -164,7 +179,7 @@ class TransactionTests(unittest.TestCase):
                 self.assertEqual(self.engine.restores - before, 0 if phase == 'accepted' else 1)
     def test_corrupt_backup_leaves_admission_closed_and_does_not_overwrite_live_state(self):
         new = self.host.stage(CONFIG, metadata()); self.host.backup(self.old, self.root / 'backups' / new)
-        (self.root / 'backups' / new / 'server-data.tar').write_bytes(b'corrupt')
+        (self.root / 'backups' / new / 'server-data.tar.age').write_bytes(b'corrupt')
         self.host.journal({'old': self.old, 'new': new, 'phase': 'candidate', 'backup': new})
         with self.assertRaises(ValueError): self.host.recover()
         self.assertEqual((self.root / 'control/status').read_text(), 'closed')

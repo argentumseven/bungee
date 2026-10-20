@@ -9,7 +9,7 @@ The [feature list](../README.md#features) describes current behavior. New contro
 | Physical GrapheneOS testing | Record OS/build and results for GPS, notifications, failed-credential capture, boot/update recovery, Doze, network transitions, another VPN, permission revocation, local stop and removal. Follow [the device procedure](RECOVERY_CONTROLS.md#physical-device-checks) |
 | Independent security audit | Review the app, enrollment protocol, native transport, server and installer/updater; resolve findings with regression coverage |
 | Publisher-authenticated updates | Verify image publisher identity on the host, with key rotation, compromise recovery and offline operation defined |
-| Encrypted snapshot archives | Add authenticated encryption and test restore/key recovery. Current snapshots require encrypted host storage and separately encrypted exports |
+| Host boot/fault acceptance | Exercise LUKS2 host-key unlock, mount-before-Docker ordering, encrypted swap, cold age archive recovery and power loss on supported Linux hosts |
 | Administrator access | Design passkeys/MFA, individual users, device-scoped roles and administrator recovery/rotation |
 | Endpoint changes | Authenticate numeric home-endpoint updates without losing identity/history or introducing a provider lookup |
 | Capacity and fault testing | Measure large histories, exports, low storage, power loss and snapshot recovery on supported hardware |

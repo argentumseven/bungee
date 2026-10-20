@@ -43,7 +43,7 @@ sudo python3 /opt/bungee/bungee-host.py datasets --clear-maps
 sudo python3 /opt/bungee/bungee-host.py datasets --clear-geoip
 ```
 
-Clearing a dataset stops its future use; it does not erase existing IP history or old dataset generations. Older dataset directories are retained for coherent recovery and must be included in your host backup/capacity/licensing policy. The five-volume update snapshot contains phone data/keys but **does not include external datasets**; preserve `/opt/bungee/datasets` alongside generation metadata for complete disaster recovery. Do not remove directories referenced by a current/pending generation. Dataset refreshes are explicit local imports; the container security updater does not refresh geodata or reinterpret saved locations.
+Clearing a dataset stops its future use; it does not erase existing IP history or old dataset generations. Older dataset directories are retained for coherent recovery and must be included in your host backup/capacity/licensing policy. The encrypted cold update snapshot contains phone data/keys but **does not include external datasets**; preserve `/opt/bungee/datasets` alongside generation metadata for complete disaster recovery. Do not remove directories referenced by a current/pending generation. Dataset refreshes are explicit local imports; the container security updater does not refresh geodata or reinterpret saved locations.
 
 ## Manual Compose
 
