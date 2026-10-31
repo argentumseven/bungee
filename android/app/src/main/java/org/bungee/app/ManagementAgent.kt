@@ -21,6 +21,20 @@ object ManagementAgent {
     )
     fun blocksPersonalOperation(context: Context) = role(context).blocksOperation
     private fun admin(context: Context) = ComponentName(context, BungeeAdminReceiver::class.java)
+    @Suppress("DEPRECATION")
+    fun repairOwnership(context: Context): List<String> = OwnershipRepair.run(
+        { role(context) }, { releaseLegacy(context) }, {
+            // Android's self-release API clears this app's device-owner role; it
+            // does not factory-reset the phone. Never call profile deletion/wipe.
+            context.getSystemService(DevicePolicyManager::class.java).clearDeviceOwnerApp(context.packageName)
+            if (role(context) == ManagementRole.PERSONAL) {
+                val dpm = context.getSystemService(DevicePolicyManager::class.java)
+                check(AdminDeactivation.request({ dpm.isAdminActive(admin(context)) }, { dpm.removeActiveAdmin(admin(context)) })) {
+                    "Ownership was released but ordinary administration is still pending; check Android security settings. Pairing keys were preserved."
+                }
+            }
+        }
+    )
     @Synchronized fun report(context: Context, identity: Identity): JSONObject {
         val dpm = context.getSystemService(DevicePolicyManager::class.java)
         val role = role(context)

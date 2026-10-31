@@ -3,169 +3,128 @@ package org.bungee.app
 import android.app.AlertDialog
 import android.app.KeyguardManager
 import android.app.NotificationManager
-import android.app.admin.DevicePolicyManager
-import android.content.ComponentName
 import android.content.Intent
 import android.os.Bundle
 import android.view.WindowManager
-import android.view.WindowInsets
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
+import android.widget.*
 import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG
 import androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.*
 
-/** A separate launcher entry: no Identity, server, Compose, QR, or native tunnel initialization. */
+/** Independent entry for damaged app state; the same panel also lives in ordinary Bungee. */
 class LocalRecoveryActivity : FragmentActivity() {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private lateinit var result: TextView
-    private var recoveryRunning = false
     override fun onCreate(savedInstanceState: Bundle?) {
         AppearancePreference.applyTo(this)
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        window.decorView.systemUiVisibility = 0
-        window.insetsController?.show(WindowInsets.Type.navigationBars() or WindowInsets.Type.statusBars())
-        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(32), dp(24), dp(24)) }
-        content.addView(TextView(this).apply { text = "Bungee · local recovery"; textSize = 25f })
-        content.addView(TextView(this).apply {
-            text = "Works offline without pairing keys. Stop remote controls and attempt to release older Bungee policies. This does not erase phone data, change your PIN, remove Android device/profile ownership or factory-reset the phone.\n\nFor an ordinary personal installation, you can also deactivate Bungee device administration, force-stop or uninstall it in Android Settings."
+        PairingRecoveryPanel(this) {
+            startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
+            finish()
+        }.show()
+    }
+}
+
+class PairingRecoveryPanel(private val activity: FragmentActivity, private val openBungee: () -> Unit) {
+    private lateinit var result: TextView
+    private var running = false
+    private fun dp(value: Int) = (value * activity.resources.displayMetrics.density).toInt()
+    fun show(message: String = "") {
+        val content = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(32), dp(24), dp(24)) }
+        content.addView(TextView(activity).apply { text = "Bungee · pairing & recovery"; textSize = 25f })
+        content.addView(TextView(activity).apply {
+            text = "Works offline. Stopping keeps pairing and server history; it disarms the camera and clears unsent photos. Resetting removes only Bungee's local pairing and queued records. Android management repair is a separate choice."
             textSize = 16f; setPadding(0, dp(16), 0, dp(16))
         })
-        content.addView(Button(this).apply { text = "Stop Bungee and release old policies"; setOnClickListener { authenticate { recover() } } })
-        content.addView(Button(this).apply { text = "Reset Bungee pairing and enroll again"; setOnClickListener { authenticate { confirmPairingReset() } } })
-        content.addView(Button(this).apply { text = "Open Android app settings"; setOnClickListener {
-            startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:$packageName")))
-        } })
-        content.addView(Button(this).apply { text = "Allow a manual restart"; setOnClickListener { authenticate {
-            if (ManagementAgent.blocksPersonalOperation(this@LocalRecoveryActivity)) {
-                result.text = "Android management ownership is present or unavailable. Check administration status before restarting. Preserve app data and the original signer while ownership remains."
-            } else if (!LocalSafety.isStopped(this@LocalRecoveryActivity)) {
-                result.text = "No local stop is set. Use Stop Bungee first if you want to stop sharing."
-            } else {
-                runCatching { LocalSafety.setStopped(this@LocalRecoveryActivity, false) }
-                    .onSuccess { result.text = "Local stop cleared. Sharing remains stopped until you explicitly start it in Bungee." }
-                    .onFailure { result.text = "The local stop could not be cleared. Android Settings remains available." }
-            }
-        } } })
-        content.addView(Button(this).apply { text = "Check administration status"; setOnClickListener {
-            if (recoveryRunning) { result.text = "Recovery is still running. Wait for the cleanup result."; return@setOnClickListener }
-            scope.launch {
-                result.text = withContext(Dispatchers.IO) {
-                    val role = ManagementAgent.role(this@LocalRecoveryActivity)
-                    role.removalNotice ?: runCatching {
-                        val dpm = getSystemService(android.app.admin.DevicePolicyManager::class.java)
-                        if (dpm.isAdminActive(android.content.ComponentName(this@LocalRecoveryActivity, BungeeAdminReceiver::class.java)))
-                            "Bungee device administration is still active. Deactivation may be pending; check Android security settings before uninstalling."
-                        else "Bungee has no device/profile ownership and no active device administration. You can uninstall it in Android Settings."
-                    }.getOrDefault("Administration status could not be checked. Use Android security settings.")
-                }
-            }
-        } })
-        content.addView(Button(this).apply { text = "Open Android security settings"; setOnClickListener {
-            startActivity(Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS))
-        } })
-        result = TextView(this).apply { textSize = 16f; setPadding(0, dp(16), 0, 0) }
+        fun button(label: String, whileRunning: Boolean = false, action: () -> Unit) { content.addView(Button(activity).apply { text = label; setOnClickListener { if (!running || whileRunning) action() } }) }
+        button("Stop Bungee") { authenticate { work("Stopping Bungee…") {
+            val issues = stop()
+            if (issues.isEmpty()) "Bungee stopped. Pairing keys and server history are unchanged." else issues.joinToString("\n")
+        } } }
+        button("Reset pairing") { authenticate { confirmReset() } }
+        button("Allow manual start · keep pairing") { authenticate { work("Allowing a manual start…") {
+            check(!ManagementAgent.blocksPersonalOperation(activity)) { "Repair Bungee's Android management first. Pairing was preserved." }
+            LocalSafety.setStopped(activity, false)
+            returnToBungee()
+            "Manual start allowed. No service was started."
+        } } }
+        button("Repair Bungee Android management") { authenticate {
+            AlertDialog.Builder(activity).setTitle("Repair Bungee's Android management?")
+                .setMessage("Stops Bungee and releases its known old restrictions and administration. If Bungee is device owner, it also asks Android to release that role. Pairing keys and server history stay intact. This does not reset the phone, change its PIN, or delete a profile. Profile ownership or an Android refusal may need a separate Android management path.")
+                .setPositiveButton("Repair") { _, _ -> work("Repairing Bungee management…") {
+                    val stopped = stop()
+                    if (stopped.isNotEmpty()) stopped.joinToString("\n")
+                    else {
+                        val issues = ManagementAgent.repairOwnership(activity)
+                        if (issues.isEmpty()) "Bungee's Android management is released. Pairing is preserved. You can return to Bungee or reset its pairing."
+                        else issues.joinToString("\n")
+                    }
+                } }.setNegativeButton("Cancel", null).show()
+        } }
+        button("Check Android management") { work("Checking…") {
+            val role = ManagementAgent.role(activity)
+            role.removalNotice ?: "Bungee has no device/profile ownership. Ordinary administration, if enabled, does not block pairing reset."
+        } }
+        button("Open Android app settings", whileRunning = true) {
+            activity.startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:${activity.packageName}")))
+        }
+        button("Open Android security settings", whileRunning = true) { activity.startActivity(Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)) }
+        button("Back to Bungee") { openBungee() }
+        result = TextView(activity).apply { text = message; textSize = 16f; setPadding(0, dp(16), 0, 0) }
         content.addView(result)
-        setContentView(ScrollView(this).apply { addView(content) })
+        activity.setContentView(ScrollView(activity).apply { addView(content) })
     }
-    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private fun authenticate(action: () -> Unit) {
-        if (recoveryRunning) { result.text = "Recovery is still running. Wait for the cleanup result."; return }
-        val keyguard = getSystemService(KeyguardManager::class.java)
+        if (running) return
+        val keyguard = activity.getSystemService(KeyguardManager::class.java)
         if (!keyguard.isDeviceSecure) {
             if (keyguard.isDeviceLocked) { result.text = "Unlock the phone first."; return }
-            AlertDialog.Builder(this).setTitle("Confirm local recovery")
-                .setMessage("This phone has no secure screen lock. Confirm that you want to change Bungee's local recovery state.")
-                .setPositiveButton("Confirm") { _, _ -> if (!recoveryRunning) action() }.setNegativeButton("Cancel", null).show()
-            return
-        }
-        BiometricPrompt(this, ContextCompat.getMainExecutor(this), object : BiometricPrompt.AuthenticationCallback() {
-            override fun onAuthenticationSucceeded(authentication: BiometricPrompt.AuthenticationResult) { if (!recoveryRunning) action() }
+            AlertDialog.Builder(activity).setTitle("Confirm local Bungee change")
+                .setMessage("This phone has no screen lock. Continue with this local Bungee action?")
+                .setPositiveButton("Continue") { _, _ -> if (!running) action() }.setNegativeButton("Cancel", null).show()
+        } else BiometricPrompt(activity, ContextCompat.getMainExecutor(activity), object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(authentication: BiometricPrompt.AuthenticationResult) { if (!running) action() }
             override fun onAuthenticationError(code: Int, message: CharSequence) { result.text = message }
-        }).authenticate(BiometricPrompt.PromptInfo.Builder().setTitle("Bungee local recovery")
+        }).authenticate(BiometricPrompt.PromptInfo.Builder().setTitle("Bungee pairing & recovery")
             .setAllowedAuthenticators(BIOMETRIC_STRONG or DEVICE_CREDENTIAL).build())
     }
-    private fun confirmPairingReset() {
-        if (recoveryRunning) return
-        AlertDialog.Builder(this).setTitle("Reset only Bungee pairing?")
-            .setMessage("Use this after revoking the old phone on your server. This removes Bungee pairing keys, the invitation, and unsent GPS records, but does not factory-reset the phone. Android ownership and administration must already be released. Re-enrollment requires a new invitation for the new phone public key.")
-            .setPositiveButton("Reset Bungee pairing") { _, _ -> resetPairing() }
-            .setNegativeButton("Cancel", null).show()
-    }
-    private fun resetPairing() {
-        if (recoveryRunning) return
-        recoveryRunning = true
-        scope.launch {
-            try {
-                result.text = "Stopping Bungee and checking Android management…"
-                val failure = withContext(Dispatchers.IO) {
-                    val context = this@LocalRecoveryActivity
-                    val issues = RecoveryCoordinator.run(
-                        { LocalSafety.setStopped(context, true) },
-                        listOf(
-                            "Could not close the existing Bungee connection." to { RecoveryConnection.current.stop() },
-                            "Could not disarm the camera service." to { ArmedCameraService.disarm(context) },
-                            "Could not stop sharing." to { stopService(Intent(context, TelemetryService::class.java)); Unit }
-                        )
-                    )
-                    val dpm = getSystemService(DevicePolicyManager::class.java)
-                    val admin = ComponentName(context, BungeeAdminReceiver::class.java)
-                    when {
-                        issues.isNotEmpty() -> issues.joinToString("\n")
-                        ManagementAgent.blocksPersonalOperation(context) ->
-                            "Android device/profile ownership remains or could not be verified. Keys were preserved. Release ownership through a supported Android management path first."
-                        dpm.isAdminActive(admin) ->
-                            "Bungee administration is still active. Keys were preserved. Release administration first, then check its status."
-                        else -> {
-                            Identity(context).reset()
-                            LocalSafety.setStopped(context, false)
-                            null
-                        }
-                    }
-                }
-                if (failure == null) {
-                    result.text = "Bungee pairing reset. Use the new phone public key to create a server invitation."
-                    startActivity(Intent(this@LocalRecoveryActivity, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK))
-                    finish()
-                } else result.text = failure
-            } catch (e: Exception) {
-                result.text = "Pairing reset did not finish: ${e.message ?: "local storage or management check failed"}. Check administration status before retrying."
-            } finally { recoveryRunning = false }
+    private fun work(message: String, action: () -> String) {
+        if (running) return
+        running = true; result.text = message
+        activity.lifecycleScope.launch {
+            try { result.text = withContext(Dispatchers.IO) { action() } }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { result.text = "Bungee could not finish: ${e.message ?: "local storage or Android check failed"}. Sharing stays stopped if its stop was saved. No phone reset or profile deletion was requested." }
+            finally { running = false }
         }
     }
-    private fun recover() {
-        recoveryRunning = true
-        scope.launch {
-            try {
-                result.text = "Stopping Bungee and checking old policies…"
-                val failures = withContext(Dispatchers.IO) {
-                    val legacyIssues = mutableListOf<String>()
-                    val failures = RecoveryCoordinator.run({ LocalSafety.setStopped(this@LocalRecoveryActivity, true) }, listOf(
-                        "The existing home connection could not be closed. Deactivate Bungee administration, then force-stop it in Android Settings." to { RecoveryConnection.current.stop() },
-                        "The camera service or pending photos could not be cleared. Deactivate Bungee administration, then force-stop it in Android Settings." to { ArmedCameraService.disarm(this@LocalRecoveryActivity) },
-                        "The sharing service could not be stopped. Deactivate Bungee administration, then force-stop it in Android Settings." to { stopService(Intent(this@LocalRecoveryActivity, TelemetryService::class.java)); Unit },
-                        "Recovery notifications could not be cleared." to { getSystemService(NotificationManager::class.java).cancelAll() },
-                        "Some old managed policies could not be released. Review the legacy recovery guide." to {
-                            legacyIssues += ManagementAgent.releaseLegacy(this@LocalRecoveryActivity)
-                        }
-                    ))
-                    failures + legacyIssues
+    private fun stop(): List<String> = RecoveryCoordinator.run({ LocalSafety.setStopped(activity, true) }, listOf(
+        "Could not close the Bungee connection; use Android Settings to force-stop Bungee." to { RecoveryConnection.current.stop() },
+        "Could not finish camera cleanup." to { ArmedCameraService.disarm(activity) },
+        "Could not stop sharing." to { activity.stopService(Intent(activity, TelemetryService::class.java)); Unit },
+        "Could not clear Bungee notifications." to { activity.getSystemService(NotificationManager::class.java).cancelAll() }
+    ))
+    private fun confirmReset() {
+        val fresh = CheckBox(activity).apply { text = "Generate new phone keys too (use this if keys are damaged)" }
+        AlertDialog.Builder(activity).setTitle("Reset only Bungee pairing?")
+            .setMessage("Stops Bungee and deletes its saved server invitation, sharing approvals and unsent GPS/photos/receipts. Server history and Android permissions/administration are unchanged. Your phone keys are kept unless selected below. Revoke and purge the old binding in the manager, then create a fresh invitation for the phone's current public key.")
+            .setView(fresh)
+            .setPositiveButton("Reset pairing") { _, _ ->
+                val newKeys = fresh.isChecked
+                work("Resetting Bungee pairing…") {
+                    PairingReset.run({ ManagementAgent.role(activity) }, {
+                        val issues = stop(); check(issues.isEmpty()) { issues.joinToString("\n") }
+                    }, { Identity.resetExisting(activity, newKeys) }, {
+                        Identity(activity) // Confirm usable keys before allowing a new manual pairing.
+                        LocalSafety.setStopped(activity, false)
+                    })
+                    returnToBungee()
+                    "Bungee pairing reset. Sharing is off; create a fresh invitation."
                 }
-                val role = ManagementAgent.role(this@LocalRecoveryActivity)
-                result.text = when {
-                    failures.isNotEmpty() -> failures.joinToString("\n\n")
-                    role.blocksOperation -> "Local stop saved. Known-policy cleanup finished, but ownership remains and uninstall is not confirmed."
-                    else -> "Local stop saved. Bungee will not reconnect or accept commands until you manually clear it. Device administration is inactive; you can uninstall in Android Settings."
-                }
-                role.removalNotice?.takeUnless { it in failures }?.let { result.append("\n\n$it") }
-            } finally { recoveryRunning = false }
-        }
+            }.setNegativeButton("Cancel", null).show()
     }
-    override fun onDestroy() { scope.cancel(); super.onDestroy() }
+    private fun returnToBungee() { activity.runOnUiThread { openBungee() } }
 }

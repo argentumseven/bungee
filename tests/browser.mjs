@@ -748,6 +748,28 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await page.getByRole("button",{name:"Close dialog"}).click();
     await page.evaluate(async id=>{await fetch(`/api/devices/${id}`,{method:"DELETE"});},original.device_id);
   });
+  await t.test("inactive binding purge frees the same phone key for a fresh invitation", async () => {
+    const key = randomBytes(32).toString("base64");
+    const old = await page.evaluate(async key => {
+      const response = await fetch("/api/enrollments", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({name:"Stale binding fixture",wg_public_key:key})});
+      return response.json();
+    }, key);
+    execFileSync("python3", ["-c", "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('UPDATE enrollments SET expires=1 WHERE device_id=?',(sys.argv[2],)); c.commit()", join(dir,"bungee.sqlite3"), old.device_id]);
+    await page.getByRole("button", {name:"Settings",exact:true}).click();
+    const inactive = page.locator(".settings-card").filter({has:page.getByRole("heading",{name:"Inactive pairings",exact:true})});
+    const row = inactive.locator(".settings-device").filter({hasText:"Stale binding fixture"});
+    await row.getByRole("button",{name:"Purge binding",exact:true}).click();
+    await page.getByRole("heading",{name:"Purge this inactive binding?"}).waitFor();
+    await page.getByRole("dialog").getByRole("button",{name:"Purge binding",exact:true}).click();
+    assert.equal(await page.getByLabel("Phone’s WireGuard public key",{exact:true}).inputValue(),key);
+    await page.getByRole("button",{name:"Create one-time enrollment"}).click();
+    await page.getByRole("img",{name:"One-time Bungee enrollment QR code"}).waitFor();
+    const next = JSON.parse(await page.getByRole("textbox",{name:"Enrollment bundle",includeHidden:true}).inputValue());
+    assert.notEqual(next.device_id,old.device_id);
+    assert.notEqual(next.token,old.token);
+    await page.getByRole("button",{name:"Close dialog"}).click();
+    await page.evaluate(async id => { await fetch(`/api/devices/${id}`,{method:"DELETE"}); }, next.device_id);
+  });
   await t.test("mobile layout fits a 390-pixel viewport", async () => {
     await page.getByRole("button", { name: "Overview", exact: true }).click();
     await page.setViewportSize({ width: 390, height: 844 });

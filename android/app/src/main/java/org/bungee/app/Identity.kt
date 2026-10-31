@@ -22,6 +22,7 @@ import javax.crypto.spec.GCMParameterSpec
 class Identity(context: Context) {
     private val appContext = context.applicationContext
     private val prefs = context.getSharedPreferences("identity", Context.MODE_PRIVATE)
+    private val generation = prefs.getString("identity_generation", null)
     private val keys = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
     init { synchronized(identityInitialization) {
         val bound = prefs.getBoolean("enrolled", false) || prefs.contains("bundle")
@@ -49,16 +50,17 @@ class Identity(context: Context) {
                 check(prefs.edit().putString("wg_public", derived).commit()) { "Could not repair the public key from its existing private key" }
         }
     } }
-    fun requestsAllowed() = !LocalSafety.isStopped(appContext) && !ManagementAgent.blocksPersonalOperation(appContext)
+    private fun currentIdentity() = generation == prefs.getString("identity_generation", null)
+    fun requestsAllowed() = currentIdentity() && !LocalSafety.isStopped(appContext) && !ManagementAgent.blocksPersonalOperation(appContext)
     val wgPublic: String get() = prefs.getString("wg_public", "")!!
     val wgPrivate: String get() = secret("wg_private")!!
     val publicKey: String get() = encode(keys.getCertificate("bungee-signing").publicKey.encoded)
     var bundle: String?
         get() = secret("bundle")
-        set(value) { if (value == null) check(prefs.edit().remove("bundle").commit()) { "Could not clear pairing invitation" } else putSecret("bundle", value) }
+        set(value) = synchronized(identityInitialization) { check(currentIdentity()) { "Pairing was reset; reopen Bungee" }; if (value == null) check(prefs.edit().remove("bundle").commit()) { "Could not clear pairing invitation" } else putSecret("bundle", value) }
     var enrolled: Boolean
         get() = prefs.getBoolean("enrolled", false)
-        set(value) { check(prefs.edit().putBoolean("enrolled", value).commit()) { "Could not persist enrollment state" } }
+        set(value) = synchronized(identityInitialization) { check(currentIdentity()) { "Pairing was reset; reopen Bungee" }; check(prefs.edit().putBoolean("enrolled", value).commit()) { "Could not persist enrollment state" } }
     var appLock: Boolean
         get() = appLockPreference.read { prefs.getBoolean("app_lock", false) }
         set(value) { appLockPreference.write { prefs.edit().putBoolean("app_lock", value).commit() } }
@@ -167,7 +169,7 @@ class Identity(context: Context) {
             check(prefs.edit().remove("location_queue").remove("gps_backlog_v2").commit()) { "Old GPS queue cleanup failed" }
         return journal
     }
-    fun queueLocation(point: JSONObject, stamp: DisclosureFence.Stamp, epoch: String) = PrivacySends.fence.checked(stamp, { enrolled && allowLocate && gpsEpoch == epoch && !LocalSafety.isStopped(appContext) }) {
+    fun queueLocation(point: JSONObject, stamp: DisclosureFence.Stamp, epoch: String) = PrivacySends.fence.checked(stamp, { enrolled && allowLocate && gpsEpoch == epoch && requestsAllowed() }) {
         synchronized(GpsStorage.lock) { if (GpsBacklog.usable(point)) journal().append(point) }
     }
     fun pendingLocations(limit: Int = 100, before: Long = Long.MAX_VALUE): JSONArray = synchronized(GpsStorage.lock) { if (!allowLocate) JSONArray() else journal().batch(limit, before) }
@@ -179,7 +181,7 @@ class Identity(context: Context) {
         journal().report()
             .put("pending_receipts", ReceiptOutbox.pending(receipts(), System.currentTimeMillis()/1000, 100).length())
     }
-    fun acknowledgeLocations(sent: JSONArray, stamp: DisclosureFence.Stamp, epoch: String) = PrivacySends.fence.checked(stamp, { allowLocate && gpsEpoch == epoch && !LocalSafety.isStopped(appContext) }) {
+    fun acknowledgeLocations(sent: JSONArray, stamp: DisclosureFence.Stamp, epoch: String) = PrivacySends.fence.checked(stamp, { allowLocate && gpsEpoch == epoch && requestsAllowed() }) {
         synchronized(GpsStorage.lock) { journal().acknowledge(sent) }
     }
     private fun receipts() = JSONArray(secret("receipt_outbox") ?: "[]")
@@ -193,19 +195,13 @@ class Identity(context: Context) {
     fun sign(text: String): String = Signature.getInstance("SHA256withECDSA").run {
         initSign(keys.getKey("bungee-signing", null) as java.security.PrivateKey); update(text.toByteArray(Charsets.UTF_8)); encode(sign())
     }
-    fun reset() = PrivacySends.fence.change { synchronized(identityInitialization) { synchronized(GpsStorage.lock) {
-        check(!ManagementAgent.blocksPersonalOperation(appContext)) { "Preserve the identity while management ownership is present or unavailable" }
-        newJournal().clear()
-        check(prefs.edit().clear().commit()) { "Could not erase local identity" }
-        keys.deleteEntry("bungee-signing"); keys.deleteEntry("bungee-storage")
-    } } }
     private fun encrypted(text: String): String {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, keys.getKey("bungee-storage", null) as SecretKey)
         val data = cipher.iv + cipher.doFinal(text.toByteArray(Charsets.UTF_8))
         return encode(data)
     }
-    private fun putSecret(name: String, text: String) { check(prefs.edit().putString(name, encrypted(text)).commit()) { "Could not persist encrypted identity" } }
+    private fun putSecret(name: String, text: String) = synchronized(identityInitialization) { check(currentIdentity()) { "Pairing was reset; reopen Bungee" }; check(prefs.edit().putString(name, encrypted(text)).commit()) { "Could not persist encrypted identity" } }
     private fun secret(name: String): String? = prefs.getString(name, null)?.let {
         val data = Base64.decode(it, Base64.NO_WRAP)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -219,6 +215,24 @@ class Identity(context: Context) {
         private val commandPreference = CheckedPreference(failureValue = false)
         private val appLockPreference = CheckedPreference(failureValue = true)
         fun encode(bytes: ByteArray): String = Base64.encodeToString(bytes, Base64.NO_WRAP)
+        /** Does not construct/decrypt a broken Identity when fresh keys are requested. */
+        fun resetExisting(context: Context, newKeys: Boolean) = PrivacySends.fence.change { synchronized(identityInitialization) { synchronized(GpsStorage.lock) {
+            check(LocalSafety.isStopped(context)) { "Stop Bungee before resetting pairing" }
+            check(!ManagementAgent.blocksPersonalOperation(context)) { "Android ownership must be resolved first; keys were preserved" }
+            val prefs = context.getSharedPreferences("identity", Context.MODE_PRIVATE)
+            val keys = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            val keep = if (newKeys) null else {
+                val existing = Identity(context)
+                check(existing.wgPrivate.isNotEmpty() && existing.publicKey.isNotEmpty())
+                prefs.getString("wg_private", null) to existing.wgPublic
+            }
+            val lock = runCatching { prefs.getBoolean("app_lock", false) }.getOrDefault(true)
+            GpsStorage.reset(context)
+            val edit = prefs.edit().clear().putString("identity_generation", java.util.UUID.randomUUID().toString()).putBoolean("app_lock", lock)
+            keep?.let { edit.putString("wg_private", it.first).putString("wg_public", it.second) }
+            check(edit.commit()) { "Could not reset Bungee's pairing state" }
+            if (newKeys) { keys.deleteEntry("bungee-signing"); keys.deleteEntry("bungee-storage") }
+        } } }
         /** Read legacy recovery records without generating/replacing a key or changing identity state. */
         fun readExistingState(context: Context, name: String): JSONObject {
             val value = context.getSharedPreferences("identity", Context.MODE_PRIVATE).getString("state_$name", null) ?: return JSONObject()

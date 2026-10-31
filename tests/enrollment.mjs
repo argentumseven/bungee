@@ -76,3 +76,63 @@ test("enrollment lifecycle and storage-failure recovery", async t=>{
     assert.equal(f.sql("SELECT public_key IS NOT NULL FROM devices WHERE id=?",[paired.device_id])[0][0],1);
   });
 });
+
+test('inactive bindings can be purged without retiring an offline paired phone', async t => {
+  const f = await fixture(t);
+  const invite = async key => {
+    const response = await f.admin('/api/enrollments','POST',{name:'Reusable phone',wg_public_key:key});
+    assert.equal(response.status,200); return response.json();
+  };
+  const signing = generateKeyPairSync('ec',{namedCurve:'P-256'});
+  const publicKey = signing.publicKey.export({type:'spki',format:'der'}).toString('base64');
+  const redeem = bundle => f.device('/v1/enroll', {token:bundle.token, public_key:publicKey, wg_public_key:bundle.wireguard.client_public_key,
+    proof:sign('sha256',Buffer.from(`BUNGEE-ENROLL-V1\n${bundle.token}\n${bundle.wireguard.client_public_key}\n${publicKey}`),signing.privateKey).toString('base64'),capabilities:[]});
+  const key = randomBytes(32).toString('base64');
+  const first = await invite(key);
+  const purge = id => f.admin(`/api/devices/${id}/binding`,'DELETE');
+  assert.equal((await f.admin(`/api/devices/${first.device_id}/binding`,'DELETE',undefined,{Cookie:''})).status,401);
+  assert.equal((await f.admin(`/api/devices/${first.device_id}/binding`,'DELETE',undefined,{Origin:'https://untrusted.example'})).status,403);
+  assert.equal((await purge(first.device_id)).status,409,'live invitations cannot be silently invalidated');
+  assert.equal((await redeem(first)).status,200);
+  f.sql('UPDATE devices SET last_contact=0,last_seen=0 WHERE id=?',[first.device_id]);
+  f.sql('INSERT INTO location_history VALUES(?,1,1,1,2,3)',[first.device_id]);
+  assert.equal((await purge(first.device_id)).status,409,'offline is not abandoned');
+  assert.equal(f.sql('SELECT COUNT(*) FROM location_history WHERE device_id=?',[first.device_id])[0][0],1);
+  assert.equal((await f.admin(`/api/devices/${first.device_id}`,'DELETE')).status,200);
+  assert.equal((await f.admin('/api/enrollments','POST',{name:'Retry',wg_public_key:key})).status,400,'revocation retains a tombstone until explicit purge');
+  const devices = (await (await f.admin('/api/devices')).json()).devices;
+  assert.equal(devices.find(d=>d.id===first.device_id).can_purge_binding,true);
+  assert.equal((await purge(first.device_id)).status,200);
+  assert.equal((await purge(first.device_id)).status,200,'purge is safely retryable');
+  assert.equal(f.sql('SELECT COUNT(*) FROM devices WHERE id=?',[first.device_id])[0][0],0);
+  assert.ok(!(await readFile(join(f.dir,'wireguard/peers.conf'),'utf8')).includes(key));
+  const second = await invite(key);
+  assert.notEqual(second.device_id,first.device_id);
+  assert.notEqual(second.token,first.token);
+  assert.notEqual(second.wireguard.preshared_key,first.wireguard.preshared_key);
+  assert.equal((await redeem(first)).status,401,'old invitation never revives');
+  assert.equal((await redeem(second)).status,200,'same phone signing/WireGuard keys can enroll with fresh secrets');
+
+  const expiredKey = randomBytes(32).toString('base64');
+  const expired = await invite(expiredKey);
+  f.sql('UPDATE enrollments SET expires=1 WHERE device_id=?',[expired.device_id]);
+  const peers = await readFile(join(f.dir,'wireguard/peers.conf'),'utf8');
+  f.sql("CREATE TRIGGER purge_fault BEFORE DELETE ON devices BEGIN SELECT RAISE(ABORT,'test fault'); END");
+  assert.equal((await purge(expired.device_id)).status,500);
+  assert.equal(f.sql('SELECT COUNT(*) FROM devices WHERE id=?',[expired.device_id])[0][0],1);
+  assert.equal(await readFile(join(f.dir,'wireguard/peers.conf'),'utf8'),peers);
+  f.sql('DROP TRIGGER purge_fault');
+  assert.equal((await purge(expired.device_id)).status,200);
+  const third = await invite(expiredKey);
+  assert.notEqual(third.device_id,expired.device_id);
+  assert.equal((await redeem(expired)).status,401);
+  assert.equal((await redeem(third)).status,200);
+  const interrupted = await invite(randomBytes(32).toString('base64'));
+  f.sql('UPDATE enrollments SET expires=1 WHERE device_id=?',[interrupted.device_id]);
+  await rm(join(f.dir,'wireguard/peers.conf'));
+  await mkdir(join(f.dir,'wireguard/peers.conf'));
+  assert.equal((await purge(interrupted.device_id)).status,503);
+  assert.equal(f.sql('SELECT COUNT(*) FROM devices WHERE id=?',[interrupted.device_id])[0][0],0);
+  await rm(join(f.dir,'wireguard/peers.conf'),{recursive:true});
+  assert.equal((await purge(interrupted.device_id)).status,200,'post-commit gateway failure can be repaired by retrying');
+});

@@ -9,6 +9,12 @@ import android.database.sqlite.SQLiteOpenHelper
 object GpsStorage {
     val lock = Any()
     private var helper: Helper? = null
+    fun reset(context: Context) = synchronized(lock) {
+        helper?.close(); helper = null
+        val path = context.getDatabasePath("gps-journal.sqlite3")
+        if (listOf("", "-wal", "-shm", "-journal").any { java.io.File(path.path + it).exists() })
+            check(context.deleteDatabase("gps-journal.sqlite3")) { "Could not clear Bungee's unsent GPS journal" }
+    }
     fun database(context: Context): GpsDatabase = synchronized(lock) {
         if (helper == null) helper = Helper(context.applicationContext)
         AndroidDatabase(helper!!.writableDatabase)

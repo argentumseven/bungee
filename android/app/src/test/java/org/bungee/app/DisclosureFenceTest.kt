@@ -61,7 +61,7 @@ class DisclosureFenceTest {
     @Test fun durableStopLabelDoesNotPromiseAnOrdinaryResume() {
         assertEquals("Stop sharing", SharingControl.label(true, false))
         val persisted = LocalSafetyState().allowRestart(true).stop()
-        assertEquals("Open local recovery to resume", SharingControl.label(false, persisted.stopped))
+        assertEquals("Resume sharing", SharingControl.label(false, persisted.stopped))
         assertEquals("Start sharing", SharingControl.label(false, persisted.clearStop().stopped))
     }
 }

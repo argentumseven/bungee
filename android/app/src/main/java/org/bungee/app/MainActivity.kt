@@ -78,11 +78,11 @@ class MainActivity : FragmentActivity() {
         appearance = AppearancePreference.read(this)
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        if (LocalSafety.isStopped(this) || ManagementAgent.blocksPersonalOperation(this)) {
-            startActivity(Intent(this, LocalRecoveryActivity::class.java)); finish(); return
+        if (ManagementAgent.blocksPersonalOperation(this)) {
+            openRecovery(); return
         }
         try { identity = Identity(this); identity.recoveryMessage } catch (_: Exception) {
-            startActivity(Intent(this, LocalRecoveryActivity::class.java)); finish(); return
+            openRecovery("Bungee pairing keys could not be opened. Reset pairing with new phone keys to start again."); return
         }
         enrolled = identity.enrolled; locked = identity.appLock
         setContent { BungeeTheme(appearance, window) {
@@ -95,6 +95,9 @@ class MainActivity : FragmentActivity() {
         super.onPostResume()
         cameraEnabled = LocalSafety.isCameraEnabled(this)
         resumeCameraIfEnabled()
+    }
+    private fun openRecovery(message: String = "") {
+        PairingRecoveryPanel(this) { recreate() }.show(message)
     }
     private fun openStartupAccess() {
         runCatching { startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:$packageName"))) }
@@ -132,7 +135,7 @@ class MainActivity : FragmentActivity() {
     }
     private fun pair(text: String) {
         try {
-            check(!LocalSafety.isStopped(this) && !ManagementAgent.blocksPersonalOperation(this)) { "Open Bungee recovery before pairing" }
+            check(!LocalSafety.isStopped(this) && !ManagementAgent.blocksPersonalOperation(this)) { "Open Pairing & recovery before pairing" }
             require(text.length <= 8192) { "Invitation is too large" }
             val bundle = JSONObject(text)
             require(bundle.getLong("expires") > 0) { "Invalid invitation expiry" }
@@ -168,7 +171,7 @@ class MainActivity : FragmentActivity() {
         }
     }
     private fun startSharing() {
-        if (LocalSafety.isStopped(this) || ManagementAgent.blocksPersonalOperation(this)) { error = "Open Bungee recovery before restarting. Device/profile ownership is not supported."; return }
+        if (LocalSafety.isStopped(this) || ManagementAgent.blocksPersonalOperation(this)) { error = "Open Pairing & recovery before restarting. Resolve any Android device/profile ownership there first."; return }
         val needed = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
         if (Build.VERSION.SDK_INT >= 33) needed.add(Manifest.permission.POST_NOTIFICATIONS)
         permissions.launch(needed.toTypedArray())
@@ -179,7 +182,7 @@ class MainActivity : FragmentActivity() {
             Spacer(Modifier.height(26.dp)); Text("Bungee is locked", fontSize = 29.sp, fontWeight = FontWeight.SemiBold)
             Text("Unlock to view this phone’s Bungee settings.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(vertical = 13.dp))
             Button(onClick = { unlock() }, modifier = Modifier.fillMaxWidth().padding(top = 20.dp), shape = RoundedCornerShape(13.dp)) { Text("Unlock Bungee", Modifier.padding(7.dp)) }
-            TextButton(onClick = { startActivity(Intent(this@MainActivity, LocalRecoveryActivity::class.java)) }) { Text("Local recovery · works offline") }
+            TextButton(onClick = { openRecovery() }) { Text("Pairing & recovery · works offline") }
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(top = 15.dp)) }
         }
     }
@@ -190,7 +193,6 @@ class MainActivity : FragmentActivity() {
         var lockEnabled by remember { mutableStateOf(identity.appLock) }
         var locate by remember { mutableStateOf(identity.allowLocate) }
         var commands by remember { mutableStateOf(identity.allowCommands) }
-        var confirmReset by remember { mutableStateOf(false) }
         var recovery by remember { mutableStateOf(identity.recoveryMessage) }
         var resume by remember { mutableStateOf(LocalSafety.isRestartAllowed(this)) }
         fun saveRestart(enabled: Boolean) { runCatching { LocalSafety.setRestartAllowed(this@MainActivity, enabled) }.onSuccess { resume = enabled }.onFailure { error = "Restart preference could not be saved." } }
@@ -245,10 +247,12 @@ class MainActivity : FragmentActivity() {
                             if (status.running) { runCatching { LocalSafety.setStopped(this@MainActivity, true) }.onFailure { error = "Stop could not be saved. Deactivate Bungee administration, then force-stop it in Android Settings." }; locallyStopped = LocalSafety.isStopped(this@MainActivity); resume = false; cameraEnabled = false
                                 runCatching { ArmedCameraService.disarm(this@MainActivity) }.onFailure { error = "Camera cleanup failed; use local recovery or Android Settings." }
                                 stopService(Intent(this@MainActivity, TelemetryService::class.java)) }
-                            else if (LocalSafety.isStopped(this@MainActivity)) startActivity(Intent(this@MainActivity, LocalRecoveryActivity::class.java))
+                            else if (LocalSafety.isStopped(this@MainActivity)) unlock {
+                                runCatching { LocalSafety.setStopped(this@MainActivity, false); locallyStopped = false; startSharing() }.onFailure { error = it.message }
+                            }
                             else startSharing()
                         }, modifier = Modifier.fillMaxWidth().padding(top = 20.dp), shape = RoundedCornerShape(11.dp)) { Text(SharingControl.label(status.running, locallyStopped || LocalSafety.isStopped(this@MainActivity)), Modifier.padding(6.dp)) }
-                        Text("Stop is saved across restarts. To resume, open local recovery, allow a manual restart, then start sharing here.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
+                        Text("Stop is saved across restarts. Resume sharing here when you are ready. Pairing & recovery can reset only Bungee if the connection is broken.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
                     }
                 }
                 Text("SHARING AND PERMISSIONS", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp, letterSpacing = 1.8.sp, modifier = Modifier.padding(top = 30.dp, bottom = 15.dp))
@@ -328,8 +332,8 @@ class MainActivity : FragmentActivity() {
                 }
                 Card(Modifier.fillMaxWidth().padding(top = 18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                     Column(Modifier.padding(18.dp)) {
-                        Text("Local recovery", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                        Text("Open “Bungee recovery” to stop sharing offline. You can also deactivate administration, force-stop or uninstall Bungee in Android Settings. Device ownership and persistent phone restrictions are disabled.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp)
+                        Text("Pairing & recovery", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Text("Stop without unpairing, or reset only Bungee and create a fresh invitation. Android management repair is a separate action.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp)
                     }
                 }
                 TextButton(onClick = { unlock(requireCredential = true) { startActivity(Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, ComponentName(this@MainActivity, BungeeAdminReceiver::class.java)).putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Optional removable screen locking and eligible failed-credential callbacks for the separately armed camera. Camera protection needs separate one-time local approval. Locking needs your existing PIN/password afterward. No credential changes or wipe. Deactivate in Android Settings.")) } }, modifier = Modifier.padding(top = 9.dp)) {
@@ -338,7 +342,7 @@ class MainActivity : FragmentActivity() {
                 if (recovery != null) Card(Modifier.fillMaxWidth().padding(top = 15.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
                     Column(Modifier.padding(18.dp)) { Text("From your household", fontWeight = FontWeight.SemiBold, fontSize = 12.sp); Text(recovery!!, fontSize = 13.sp, modifier = Modifier.padding(top = 9.dp)); TextButton(onClick = { unlock { identity.recoveryMessage = null; recovery = null; getSystemService(NotificationManager::class.java).cancel(2) } }) { Text("Dismiss after unlocking", fontSize = 10.sp) } }
                 }
-                TextButton(onClick = { confirmReset = true }) { Text("Unpair this phone", color = MaterialTheme.colorScheme.error, fontSize = 11.sp) }
+                TextButton(onClick = { openRecovery() }) { Text("Reset pairing", fontSize = 11.sp) }
             }
             Card(Modifier.fillMaxWidth().padding(top = 18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), shape = RoundedCornerShape(17.dp)) {
                 Column(Modifier.padding(18.dp)) {
@@ -357,7 +361,7 @@ class MainActivity : FragmentActivity() {
                     }
                 }
             }
-            TextButton(onClick = { startActivity(Intent(this@MainActivity, LocalRecoveryActivity::class.java)) }) { Text("Local recovery · stop and release") }
+            TextButton(onClick = { openRecovery() }) { Text("Pairing & recovery") }
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 20.dp), color = MaterialTheme.colorScheme.primary)
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 18.dp)) }
             Row(Modifier.fillMaxWidth().padding(vertical = 32.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
@@ -408,24 +412,7 @@ class MainActivity : FragmentActivity() {
         if (showPairing) AlertDialog(onDismissRequest = { if (!busy) showPairing = false }, title = { Text("Pair with your server") }, text = {
             Column { Text("Pairing connects this phone to the selected server. When sharing is active, location and battery reports go to that server. GPS history stays there until erased or the device is revoked. Up to 10,080 unsent GPS fixes are encrypted on this phone. Recovery commands stay off until you approve them separately.", fontSize = 12.sp, lineHeight = 20.sp); OutlinedTextField(value = pairingText, onValueChange = { pairingText = it }, label = { Text("Enrollment invitation") }, modifier = Modifier.fillMaxWidth().padding(top = 16.dp), minLines = 4); error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 11.sp) } }
         }, confirmButton = { TextButton(onClick = { pair(pairingText) }, enabled = !busy) { Text("Agree & pair") } }, dismissButton = { TextButton(onClick = { showPairing = false }, enabled = !busy) { Text("Cancel") } })
-        if (confirmReset) AlertDialog(onDismissRequest = { confirmReset = false }, title = { Text("Unpair this phone?") }, text = { Text("This erases local keys and stops sharing. Also revoke this device on the server to erase its location history and remove the peer.") }, confirmButton = { TextButton(onClick = { unlock {
-            if (ManagementAgent.blocksPersonalOperation(this@MainActivity)) { error = "Use Bungee recovery first. Do not discard the identity while device ownership remains."; return@unlock }
-            scope.launch {
-                try {
-                    val stopped = runCatching { LocalSafety.setStopped(this@MainActivity, true) }
-                    stopService(Intent(this@MainActivity, TelemetryService::class.java))
-                    ArmedCameraService.disarm(this@MainActivity)
-                    stopped.getOrThrow()
-                    withContext(Dispatchers.IO) { ManagementAgent.release(this@MainActivity); RecoveryConnection.current.stop() }
-                    identity.reset(); identity = Identity(this@MainActivity)
-                    LocalSafety.setStopped(this@MainActivity, false)
-                    resume = false; cameraEnabled = false; enrolled = false; confirmReset = false
-                } catch (e: Exception) {
-                    if (e is CancellationException) throw e
-                    error = "Unpairing did not finish. Use local recovery or Android Settings before trying again."
-                }
-            }
-        } }) { Text("Unpair") } }, dismissButton = { TextButton(onClick = { confirmReset = false }) { Text("Keep paired") } })
+
     }
     @Composable private fun SettingRow(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
         Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {

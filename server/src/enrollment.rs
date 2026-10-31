@@ -1,7 +1,7 @@
 use crate::{App, security::*, store};
 use axum::{
     Json,
-    extract::State,
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -103,6 +103,60 @@ pub async fn create_enrollment(
     require_admin(&app, &headers)?;
     issue(&app, input, prepare_peers)
 }
+
+/// Only explicit revocation or an expired, never-redeemed invitation is disposable.
+/// An offline paired phone is still paired and must never be inferred abandoned.
+pub async fn purge_binding(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    require_admin(&app, &headers)?;
+    let mut db = app.db.lock().unwrap();
+    let tx = db.transaction()?;
+    let eligible: Option<bool> = tx.query_row(
+        "SELECT revoked=1 OR (public_key IS NULL AND NOT EXISTS(SELECT 1 FROM enrollments e WHERE e.device_id=devices.id AND e.expires>?)) FROM devices WHERE id=?",
+        params![now(),id], |row| row.get(0)).optional()?;
+    if eligible == Some(false) {
+        return Err(Error(
+            StatusCode::CONFLICT,
+            "This binding is still in use. Revoke a paired phone or cancel its invitation before purging",
+        ));
+    }
+    if eligible.is_some() {
+        for table in [
+            "enrollments",
+            "nonces",
+            "commands",
+            "location_history",
+            "state_history",
+            "network_history",
+            "recovery_photos",
+            "dns_summary",
+            "device_policies",
+        ] {
+            tx.execute(&format!("DELETE FROM {table} WHERE device_id=?"), [&id])?;
+        }
+        tx.execute("DELETE FROM devices WHERE id=?", [&id])?;
+        store::audit(
+            &tx,
+            "device.binding_purged",
+            Some(&id),
+            "Inactive binding removed; a new invitation is required",
+        )?;
+    }
+    let peers = prepare_peers(&app, &tx)?;
+    tx.commit()?;
+    // Retrying a completed purge also repairs a failed post-commit publication.
+    peers.publish().map_err(|e| {
+        tracing::error!(error=%e.1, "Binding purge committed but peer publication failed");
+        Error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Binding removed, but gateway refresh failed. Retry purge after fixing server storage",
+        )
+    })?;
+    Ok(Json(json!({"purged":true})))
+}
 fn issue(
     app: &App,
     input: Enrollment,
@@ -149,7 +203,7 @@ fn issue(
     let (id, address) = match existing {
         Some((_, _, true)) => {
             return Err(bad(
-                "This key belongs to a paired or previously paired phone; reset only Bungee pairing locally before a new enrollment",
+                "This phone key is already bound. Revoke the old device, then purge its inactive binding in Settings before reusing this key",
             ));
         }
         Some((id, address, false)) => {

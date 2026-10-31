@@ -64,6 +64,7 @@ type Device = {
   enrolled: boolean;
   enrollment_state?: "pending" | "expired" | "enrolled" | "revoked";
   wg_public_key?: string;
+  can_purge_binding?: boolean;
   preshared_key: boolean;
   capabilities: string[];
   network?: NetworkObservation | null;
@@ -124,7 +125,7 @@ function App() {
     [selected, setSelected] = useState(""),
     [page, setPage] = useState("Overview");
   const [modal, setModal] = useState<
-      "enroll" | "message" | "revoke" | "clear_location" | "help" | null
+      "enroll" | "message" | "revoke" | "clear_location" | "purge_binding" | "help" | null
     >(null),
     [toast, setToast] = useState("");
   const [name, setName] = useState(""),
@@ -134,6 +135,7 @@ function App() {
     [message, setMessage] = useState(""),
     [lastRefresh, setLastRefresh] = useState<number | null>(null);
   const [clearTarget, setClearTarget] = useState<Device | null>(null);
+  const [bindingTarget, setBindingTarget] = useState<Device | null>(null);
   const active = devices.filter((d) => !d.revoked),
     device = active.find((d) => d.id === selected) || active[0];
   const load = async () => {
@@ -163,6 +165,7 @@ function App() {
       setSelected("");
       setModal(null);
       setClearTarget(null);
+      setBindingTarget(null);
       setBundle("");
     };
     window.addEventListener("bungee:session-expired", expire);
@@ -936,6 +939,17 @@ function App() {
                   </div>
                 ))}
               </section>
+              <section className="panel settings-card">
+                <KeyRound size={26} />
+                <h2>Inactive pairings</h2>
+                <p>Remove revoked devices or expired, unused invitations to free their phone public keys for a fresh invitation. Paired phones stay protected while offline. To retire one, revoke it first.</p>
+                {devices.filter(d => d.can_purge_binding).length === 0 && <p>No inactive bindings to remove.</p>}
+                {devices.filter(d => d.can_purge_binding).map(d => <div className="settings-device" key={d.id}>
+                  <strong>{d.name}</strong>
+                  <small>{d.revoked ? "Revoked" : "Expired invitation · never paired"}</small>
+                  <button className="danger-text" onClick={() => { setBindingTarget(d); setModal("purge_binding"); setError(""); }}>Purge binding</button>
+                </div>)}
+              </section>
             </div>
           )}
           <footer className="main-footer">
@@ -992,7 +1006,7 @@ function App() {
                     ? "Erase this saved history?"
                     : modal === "revoke"
                       ? "Revoke this device?"
-                      : "Pairing instructions"}
+                      : modal === "purge_binding" ? "Purge this inactive binding?" : "Pairing instructions"}
             </h2>
             {modal === "enroll" && !bundle && (
               <form onSubmit={enroll}>
@@ -1136,7 +1150,7 @@ function App() {
                   Remove {device?.name} from your household. Its location
                   history, IP observations, recovery photos, check-in logs and pending commands
                   will be erased, and its WireGuard access removed. To pair it
-                  again, reset pairing on the phone.
+                  again with the same phone key, purge its inactive binding in Settings and create a fresh invitation.
                 </p>
                 <button
                   className="primary danger full"
@@ -1147,6 +1161,22 @@ function App() {
                 </button>
               </>
             )}
+            {modal === "purge_binding" && bindingTarget && <>
+              <p>Remove the inactive record for <strong>{bindingTarget.name}</strong> and any remaining records for it? This frees its phone public key. Old invitations and connection secrets will not work again.</p>
+              <p>Your phone is unchanged. Keep its current keys or generate new ones in Bungee’s Pairing &amp; recovery screen. A fresh invitation is always required.</p>
+              <button className="primary danger full" disabled={busy} onClick={async () => {
+                const target = bindingTarget;
+                setBusy(true); setError("");
+                try {
+                  await api(`/devices/${target.id}/binding`, {method:"DELETE"});
+                  await load();
+                  setName(target.name); setWgKey(target.wg_public_key || ""); setBundle("");
+                  setBindingTarget(null); setModal("enroll");
+                  setToast("Binding purged. Create a fresh invitation using the phone’s current public key.");
+                } catch(e) { setError((e as Error).message); }
+                finally { setBusy(false); }
+              }}>Purge binding</button>
+            </>}
             {modal === "help" && (
               <>
                 <p>

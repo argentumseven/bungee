@@ -30,11 +30,12 @@ object HomeTunnel {
         require(wg.getString("server_public_key").matches(Regex("[A-Za-z0-9+/]{43}="))) { "Invalid server key" }
         check(!LocalSafety.isStopped(context)) { "Bungee is stopped locally" }
         check(!ManagementAgent.blocksPersonalOperation(context)) { "Open Bungee recovery. Device/profile ownership is unsupported" }
+        check(identity.requestsAllowed()) { "Pairing changed; reopen Bungee" }
         val parameters = wg.toString()
         if (state == Tunnel.State.UP && appContained && activeParameters == parameters) { activeOwner = owner; return }
         disconnect()
         RecoveryConnection.current.open(
-            { !LocalSafety.isStopped(context) && !ManagementAgent.blocksPersonalOperation(context) },
+            { identity.requestsAllowed() },
             { Transport.configure(JSONObject().put("address", wg.getString("address")).put("endpoint", endpoint)
                 .put("private_key", identity.wgPrivate).put("public_key", wg.getString("server_public_key"))
                 .put("preshared_key", psk).toString()) },

@@ -96,7 +96,9 @@ For restoration after reboot or an app update, separately enable **Automatic rec
 
 ![Recovery gallery with a synthetic test image](docs/screenshots/recovery-photos.png)
 
-**Bungee recovery** is a separate offline launcher for stopping the app. A saved stop prevents automatic resume across reboot/update and cancels pairing requests as well as telemetry. Recovery confirms ordinary administration is inactive before reporting complete cleanup. To resume, authenticate there, choose **Allow a manual restart**, then start sharing in the main app. Clearing a stop does not restore old camera/restart consent.
+**Pairing & recovery** lives inside the normal phone app, with **Bungee recovery** as an independent offline entry. Stop preserves pairing and server history; reset pairing separately clears Bungee's local connection and queued records. Phone keys are kept unless you explicitly select fresh keys for a damaged identity. Android management repair is a separate confirmed action and never wipes a phone or removes a profile. Resume sharing in the main app; clearing a stop restores no camera/restart consent.
+
+To reuse a phone public key after a failed or deleted pairing, open **Settings → Inactive pairings** in the manager and purge the revoked record or expired, unused invitation. Revoke a previously paired device first. Create a fresh invitation afterward; old tokens and secrets never become valid again. Offline paired devices are protected from purge.
 
 See the [removal audit](docs/REMOVAL_AUDIT.md) for ownership, partial-pairing, update and failed-cleanup scenarios.
 

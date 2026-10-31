@@ -15,7 +15,7 @@ This audit covers the current personal-app installation, Android ownership, part
 
 Pairing creates a Bungee server identity and app-private keys. It does not grant Android device/profile ownership. The ordinary administration dialog grants force-lock/watch-login only. Both provisioning activities are disabled and return cancellation; the app invokes no owner-assignment API.
 
-An external privileged provisioning tool or older build can still assign ownership to an Android administration receiver. Android refuses ordinary removal of device/profile owners, including a removal call that returns without an exception. Bungee cannot promise reset-free removal of that state. The current build blocks normal operation and preserves its identity; it does not reset the phone, delete a profile, transfer ownership or invoke test-only owner removal.
+An external privileged provisioning tool or older build can still assign ownership to an Android administration receiver. Android refuses ordinary removal of device/profile owners, including a removal call that returns without an exception. Bungee cannot promise reset-free removal of that state. The current build blocks normal operation and preserves its identity; it does not reset the phone, delete a profile, transfer ownership or invoke test-only owner removal. Explicit confirmed management repair can ask Android to release Bungee device ownership after successful legacy cleanup and verifies the result; profile ownership stays untouched.
 
 The supported installation is an ordinary personal app. Root/system installation, a modified OS or another MDM's uninstall restrictions have different removal rules. Bungee does not create those conditions or have authority to override them.
 
@@ -54,14 +54,32 @@ The supported installation is an ordinary personal app. Root/system installation
 | App installed in several Android users/profiles | Removal is scoped by Android user/profile. Another installed copy is independent; remove each copy if desired. Bungee requests no cross-user authority |
 | CA certificate manually imported, server data, CSV or backups | These exist separately from the app. Remove/revoke/erase them explicitly if desired. Uninstall does not promise forensic deletion of OS logs or old storage blocks |
 
-## Stop and remove
+## Stop, re-pair or remove
 
-1. Open **Bungee recovery**, authenticate and choose **Stop Bungee and release old policies**.
-2. Review every result. Choose **Check administration status**; confirm no device/profile ownership and no active Bungee administration. If removal is pending, wait/recheck or use **Open Android security settings**.
-3. Uninstall Bungee in Android app settings. A working server, pairing key and production signing key are not prerequisites for removing an ordinary personal installation.
-4. Reboot and verify normal networking, camera, unlock and notification behavior on the test phone. This final physical check has not yet been performed.
+Open **Pairing & recovery** in Bungee or the separate recovery launcher. **Stop
+Bungee** preserves pairing and server history and changes no Android policy.
+To reconnect from scratch, confirm **Reset pairing**; select fresh phone keys
+only if desired or if the old keys cannot be opened. Ordinary administration
+need not be removed for this app-only reset. True device/profile ownership or an
+unknown role blocks key erasure until resolved.
 
-Do not clear app data, discard the original signer or delete a managed profile as an improvised fix while an owner role remains. Data erasure, unpairing and deletion of a profile are not undo operations.
+For old Android policies, use the separately confirmed **Repair Bungee Android
+management** and review its results. It attempts known-policy cleanup, then
+self-release of verified Bungee device ownership; it never deletes a managed
+profile or wipes the phone. A failed/pending OS operation is not reported as
+success. Preserve data/signer while ownership remains. Normal personal installs
+can still deactivate administration and uninstall in Android Settings.
+
+In manager **Settings → Inactive pairings**, purge explicitly revoked records or
+expired, never-paired invitations before reusing their phone keys. Live
+invitations and offline paired phones are not purgeable. Re-enrollment creates
+new invitation/PSK/device identity; old credentials stay invalid. Server history
+erasure/revocation remains separate from the local phone reset.
+
+Physical owner-release, phone reset/corrupt-key lifecycle and post-reboot
+network/camera/unlock checks remain required on a test phone. Automated tests
+cover the reset/repair decisions and server eligibility, not Android binder
+behavior on every OS build.
 
 ## Sources
 

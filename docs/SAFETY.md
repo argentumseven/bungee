@@ -18,7 +18,7 @@ The server and phone reject managed DNS/always-on, remotely requested restart po
 
 The server refuses reboot commands regardless of advertised legacy capability or administrator password. Previously queued pending/delivered reboot commands are rejected before polling and cannot be delivered by the new server. The new app advertises no reboot capability and contains no reboot execution branch. Reboot was removed because unattended restart and device-owner authority do not meet the current recovery requirement. Use GrapheneOS's own native settings manually if you want an OS-supported automatic reboot policy; Bungee does not configure it.
 
-There is no remote wipe, reset-on-failed-unlocks, PIN/password reset, lock-task/kiosk mode, disabling of a launcher/keyboard/Settings, USB/ADB shutdown policy, installation restriction, account lock, encryption-key destruction, boot/firmware modification or factory-reset command. There is no automatic response that erases phone data. The app never blocks Safe Mode or Settings factory reset. It does not hide its launcher or recovery entry.
+There is no remote wipe, reset-on-failed-unlocks, PIN/password reset, lock-task/kiosk mode, disabling of a launcher/keyboard/Settings, USB/ADB shutdown policy, installation restriction, account lock, destruction of the phone’s encryption keys, boot/firmware modification or factory-reset command. There is no automatic response that erases phone data. The app never blocks Safe Mode or Settings factory reset. It does not hide its launcher or recovery entry.
 
 ## Network and offline behavior
 
@@ -28,29 +28,68 @@ A server outage does not execute a fallback device policy. It preserves timestam
 
 ## Local recovery
 
-A separate **Bungee recovery** launcher entry opens `LocalRecoveryActivity`. It uses Android views and does not construct the encrypted Identity, Compose UI, QR decoder or native transport. Android's biometric/device-credential UI authorizes changes. If no secure screen lock exists, the phone must be unlocked and an explicit local confirmation is required. Intent extras cannot trigger cleanup or resume automatically.
+**Pairing & recovery** is available inside the normal Bungee phone app, including
+when its saved identity cannot be opened. The separate recovery launcher remains
+an independent entry to the same panel. It needs no pairing key, server response,
+QR decoder or newly initialized native transport to open. Local biometric/device
+credentials authorize changes; an unlocked phone without a screen lock uses an
+explicit confirmation. Intent extras cannot trigger changes.
 
-**Stop Bungee and release old policies**:
+- **Stop Bungee** saves the local stop, closes an existing connection, stops
+  sharing, disarms the camera and clears unsent photos/notifications. It preserves
+  pairing keys, queued GPS and server history, and changes no Android policies.
+- **Allow manual start · keep pairing** clears only the local stop after checking
+  Android ownership. It starts no services and restores no camera/restart consent.
+  A paired phone can also resume sharing directly in the normal app.
+- **Reset pairing** separately confirms deletion of Bungee's local invitation,
+  queued GPS/photos/receipts and sharing approvals. It keeps phone keys by default.
+  **Generate new phone keys too** explicitly discards Bungee's own keys and works
+  without decrypting a corrupt identity. Android administration and permissions,
+  the phone's PIN, other apps, and saved server records are unchanged. Ordinary
+  device administration does not block this app-only reset. New pairing always
+  needs a fresh invitation; reset never starts sharing automatically.
+- **Repair Bungee Android management** separately confirms known legacy-policy
+  cleanup and release of this app's own administration/device-owner role. Pairing
+  data is preserved. A profile-owner or unknown status never triggers role
+  removal, profile deletion, phone reset or key regeneration.
 
-1. First attempts to persist a non-secret local-stop flag in a separate preference file.
-2. Independently closes an existing home connection, including pairing-only peers, disarms/stops the camera, attempts pending-photo cleanup, stops sharing and cancels Bungee notifications.
-3. Independently attempts removal of known old Bungee restrictions; one failure cannot skip subsequent independent cleanup.
-4. On a personal installation, requests removal of ordinary device administration and checks for completion. A pending removal is reported; the status button can recheck it.
-5. Displays every reported cleanup failure. If saving the stop flag fails, it does not claim the stop will survive restart; the user is directed to Android administration deactivation followed by force-stop.
-
-The saved stop is checked before service/boot identity loading, network connection and command execution. It is not cleared by a server response, boot or app update. Stopping also atomically withdraws permission to resume after boot/update. **Allow a manual restart** requires fresh local authentication/confirmation, clears the stop, and starts no service. It never restores an earlier restart opt-in; that requires a separate fresh choice in the main app. Sharing still requires an explicit start. Normal pause uses the same stop state, so pausing does not unexpectedly resume at the next boot.
-
-The recovery screen directly opens Android app settings and security settings. On a supported personal installation, Android's administration deactivation, force-stop and uninstall remain the final local exits if Bungee's own UI/state fails. Stop/recovery preserves pairing keys and saved server history. Explicit unpairing deletes only Bungee's own identity; server-history erasure/revocation remains a separate confirmed data-management operation. This is not an assurance that intentional deletion of Bungee records can be undone.
+A failed stop or changed/unknown owner status prevents pairing erasure. A failed
+erasure or new-key initialization cannot clear the saved stop. Reset invalidates
+old request stamps and identity generations so a stale pairing operation cannot
+publish its old registration after reset. Android app/security settings remain
+available if local storage or an OS API fails. Normal launch after a saved stop
+stays in Bungee; it does not force users into a destructive recovery flow.
 
 <a id="earlier-preview-device-owner-state"></a>
 
 ## Legacy device-owner state
 
-New installations use the supported personal mode. The cleanup code is a best-effort aid for earlier versions that enabled device ownership.
+Device/profile ownership is not created by current Bungee. The explicit repair
+first stops Bungee and releases its known old policies. Only if cleanup succeeds
+and Android still identifies Bungee as device owner does it call Android's
+self-release API, `clearDeviceOwnerApp`, then verify the role and ordinary
+administration. This deprecated API can be refused by the OS; success is not
+inferred from the call returning. Failed or unconfirmed cleanup preserves pairing
+keys and reports the remaining state. It never transfers ownership, wipes a
+phone, deletes a profile, or calls test-only ADB owner removal.
 
-Android device ownership is OS-managed. It can prevent ordinary uninstall and may require a factory reset to remove if the app/signing key or management path fails. Clearing known restrictions does not remove that role. Bungee does not call deprecated testing-only ownership removal, transfer ownership, reset the phone or discard its old pairing state as a supposed cure.
+Profile ownership is reported separately because removing a managed profile can
+delete its data. This repair does not attempt it. Preserve the original signer
+and app data while Android ownership remains; do not uninstall or clear app data
+as an improvised fix. Missing old encryption keys or unreadable suspended-app
+records are reported before attempting device-owner release. Physical
+Android/GrapheneOS owner-release verification is still outstanding.
 
-If old ownership exists, preserve the original signing key and app data. Do not uninstall, clear app data or install an APK signed with a different key as a recovery strategy. Local cleanup attempts to remove Bungee's old always-on/uninstall/complexity/Settings restrictions and owner lock-screen text. Old suspended-app names are read with the existing storage key only; no replacement key is generated. A missing key or failed Android API is reported. Android ownership remains explicit in the recovery result; the new client refuses normal operation while it remains. Removal of legacy ownership remains unverified on a phone.
+## Server pairing cleanup
+
+In **Settings → Inactive pairings**, purge a revoked device or an expired,
+never-redeemed invitation to release its public-key binding and remaining records.
+A paired phone is still in use even when offline. Purge rejects live invitations
+and non-revoked paired phones; explicitly revoke first when retiring a pairing.
+Eligibility is rechecked inside the database transaction, so enrollment winning
+a race with purge protects that newly paired device. Old tokens, device IDs and
+preshared secrets are never revived: reuse of a phone public key requires a fresh
+invitation with a new device ID and secrets. Purge leaves the phone unchanged.
 
 ## Required verification before household use
 

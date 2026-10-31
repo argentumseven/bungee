@@ -187,6 +187,7 @@ pub async fn devices(State(app): State<App>, headers: HeaderMap) -> ApiResult<Js
         "enrollment_state":if r.get::<_,bool>(5)? {"revoked"} else if r.get::<_,bool>(8)? {"enrolled"} else if r.get::<_,Option<i64>>(13)?.is_some_and(|v|v>now()) {"pending"} else {"expired"},
         "invitation_expires_at":r.get::<_,Option<i64>>(13)?,
         "wg_public_key":r.get::<_,String>(14)?,
+        "can_purge_binding":r.get::<_,bool>(5)? || (!r.get::<_,bool>(8)? && r.get::<_,Option<i64>>(13)?.is_none_or(|v|v<=now())),
         "preshared_key":r.get::<_,bool>(10)?,
         "management":r.get::<_,Option<String>>(11)?.and_then(|s|serde_json::from_str::<Value>(&s).ok()),
     }))})?.collect::<Result<Vec<_>,_>>()?;

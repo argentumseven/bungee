@@ -8,7 +8,7 @@ GPS/check-in history, recurring history lookup/export, bounded encrypted GPS bac
 
 The alarm uses a 30-second siren at Android's alarm volume. Recovery messages are Android notifications. Optional theft photos need one-time local approval and a visible camera service; three new eligible failed PIN/password entries trigger one attempt while ready. Optional boot recovery needs a separate opt-in and Android's Display over other apps access. After first unlock a brief startup screen restores protection and closes automatically. Physical GrapheneOS camera/restart testing is pending. See [setup and limits](RECOVERY_CONTROLS.md).
 
-The separate **Bungee recovery** launcher works offline without pairing keys. Authenticate locally, stop controls, review cleanup results and use Android app/security settings if needed. The saved local stop survives process/boot/update and prevents automatic reconnect. Clearing it starts no sharing; a manual start is still required. Personal installs remain removable through normal Android administration deactivation and uninstall.
+Open **Pairing & recovery** in the normal Bungee app, or use the independent **Bungee recovery** launcher if app state is damaged. Stop preserves pairing and server history. Reset pairing keeps phone keys by default; select new keys explicitly if they are damaged. Android management repair is a separate confirmed action and preserves pairing data. A saved local stop prevents automatic reconnect; a manual restart does not restore earlier camera/restart approvals. See [the exact recovery boundaries](SAFETY.md#local-recovery).
 
 Managed system DNS/always-on, selected-app suspension, uninstall prevention, forced lock requirements, settings restrictions and remote reboot are unavailable. Their API policy fields are rejected by server and phone. There is no root, wipe, credential reset, kiosk mode, USB/ADB block, bootloader modification or silent OS enrollment.
 
@@ -26,7 +26,7 @@ The server retains legacy DNS rollup/read/erase and forwarding code for prior-ve
 
 ## Legacy device-owner enrollment
 
-Do not create an owner with ADB or OS provisioning. If you independently tested an older version as owner, preserve its original signer and data. Uninstall/clearing data/different-signature replacement can strand the management path. The new recovery entry attempts removal of known restrictions; it cannot guarantee removal of Android's owner role and will not automatically reset the phone. See [legacy boundaries](SAFETY.md#earlier-preview-device-owner-state).
+Do not create an owner with ADB or OS provisioning. If you independently tested an older version as owner, preserve its original signer and data. Uninstall/clearing data/different-signature replacement can strand the management path. Explicit management repair removes known restrictions and asks Android to release Bungee's own device-owner role only after successful cleanup. It verifies the result, cannot guarantee OS acceptance, and never resets the phone or deletes profiles. See [legacy boundaries](SAFETY.md#earlier-preview-device-owner-state).
 
 ## Stable signing and updates
 
