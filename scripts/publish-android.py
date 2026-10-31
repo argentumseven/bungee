@@ -100,7 +100,11 @@ The APK uses the source build's debug signer. Android requires the original sign
         if existing:
             gh('release', 'edit', tag, '--repo', repo, '--draft=true', '--notes-file', str(notes))
         else:
-            gh('release', 'create', tag, '--repo', repo, '--target', sha, '--title', f'Android APK {version} · {sha[:7]}', '--draft', '--notes-file', str(notes))
+            # GITHUB_TOKEN can create tags for its own source commit. Backfills
+            # must use an existing source tag and must not ask the release API
+            # to create a tag at an older workflow revision.
+            target = ('--target', sha) if os.environ.get('GITHUB_SHA') == sha else ('--verify-tag',)
+            gh('release', 'create', tag, '--repo', repo, *target, '--title', f'Android APK {version} · {sha[:7]}', '--draft', '--notes-file', str(notes))
         gh('release', 'upload', tag, *[str(directory / name) for name in assets], '--repo', repo, '--clobber')
         gh('release', 'edit', tag, '--repo', repo, '--draft=false', '--latest')
         url = f'https://github.com/{repo}/releases/latest/download/bungee.apk'
