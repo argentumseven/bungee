@@ -72,6 +72,26 @@ jobs:
           Extract and install `bungee-debug.apk`. GitHub sign-in is required; this build is retained for 14 days.
           In-place updates require the same signing key as the installed app.
           SUMMARY
+  publish-main-apk:
+    if: github.repository == 'argentumseven/bungee' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: android
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    concurrency:
+      group: bungee-android-releases
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Publish Android APK in Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BUNGEE_BUILD_RUN_ID: ${{ github.run_id }}
+        run: python3 scripts/publish-android.py
   container-boundaries:
     runs-on: ubuntu-24.04
     steps:

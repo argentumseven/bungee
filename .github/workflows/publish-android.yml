@@ -1,9 +1,5 @@
 name: Publish Android APK to Releases
 on:
-  workflow_run:
-    workflows: [Build and verify Bungee]
-    types: [completed]
-    branches: [main]
   push:
     branches: [main]
     paths:
@@ -29,5 +25,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          BUNGEE_BUILD_RUN_ID: ${{ github.event.workflow_run.id }}
+          BUNGEE_BUILD_RUN_ID: ''
         run: python3 scripts/publish-android.py
