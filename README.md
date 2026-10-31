@@ -1,6 +1,8 @@
 # Bungee
 
-**[Android APK downloads](https://github.com/argentumseven/bungee/actions/workflows/check.yml?query=branch%3Amain)** · Open the latest completed main build and use its **Android APK download** link. Older builds list **bungee-android-debug** under Artifacts. Extract `bungee-debug.apk` from the ZIP; the checksum is included. GitHub sign-in is required, and development downloads expire after 14 days. [Tagged releases](https://github.com/argentumseven/bungee/releases) have permanent APK assets.
+**[Download Android APK](https://github.com/argentumseven/bungee/releases/latest/download/bungee.apk)** · [SHA-256 checksum](https://github.com/argentumseven/bungee/releases/latest/download/bungee.apk.sha256) · [Release notes and older APKs](https://github.com/argentumseven/bungee/releases)
+
+Open `bungee.apk` on your phone to install it. Every checked main-branch Android build is published in Releases with its source commit; these downloads do not expire or require an Actions login.
 
 <img src="web/public/bungee-mark.png" width="96" alt="Bungee home and location icon">
 
@@ -72,7 +74,7 @@ See [installation and updates](docs/INSTALL.md) for the wizard, network rules an
 
 ## Install and pair a phone
 
-Build the **1.1.4** APK from this checkout or download the matching **bungee-android-debug** artifact from [GitHub Actions](https://github.com/argentumseven/bungee/actions). Published tags provide **bungee-debug.apk** and a SHA-256 checksum in [GitHub Releases](https://github.com/argentumseven/bungee/releases). The installer, server, dashboard and APK use the version in `release.json`.
+Download **[bungee.apk](https://github.com/argentumseven/bungee/releases/latest/download/bungee.apk)** from the latest Android release, or build it yourself. The checksum and exact source commit are on the [release page](https://github.com/argentumseven/bungee/releases/latest). Main-branch Android releases are published automatically after the Android build, unit tests and lint succeed. The installer, server, dashboard and APK use the version in `release.json`.
 
 The CI APK is a signed **debug build**. CI signing keys can change between runs; a different signer requires uninstalling and pairing again. Use [your own stable signing key](docs/MANAGEMENT.md#stable-signing-and-updates) for in-place updates. APKs and private signing keys are kept outside the source tree. Install Bungee as an ordinary personal app; **do not enroll it as device owner**.
 

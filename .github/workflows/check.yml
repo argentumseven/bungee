@@ -217,8 +217,10 @@ jobs:
           [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]
           cd artifacts
           sha256sum --check bungee-debug.apk.sha256
+          cp bungee-debug.apk bungee.apk
+          sha256sum bungee.apk > bungee.apk.sha256
           cat > release-notes.md <<'NOTES'
-          Install **bungee-debug.apk** on a consenting Android 12+ device. Verify the accompanying SHA-256 checksum. The build supports ARM64 and x86_64.
+          Install **bungee.apk** on a consenting Android 12+ device. Verify the accompanying SHA-256 checksum. The build supports ARM64 and x86_64.
 
           Bungee provides retained GPS/check-in/IP history, recurring time lookups and CSV; an encrypted offline GPS queue; household-approved recovery commands; local OpenStreetMap/GeoIP datasets; and an app-contained WireGuard connection that leaves Android's VPN slot free. Runtime map, analytics, DNS and push-provider fallbacks are absent; an optional explicit DNS upstream can be selected.
 
@@ -234,7 +236,7 @@ jobs:
           NOTES
           release_flags=(--prerelease=false)
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then release_flags=(--prerelease); fi
-          gh release create "$GITHUB_REF_NAME" bungee-debug.apk bungee-debug.apk.sha256 \
+          gh release create "$GITHUB_REF_NAME" bungee.apk bungee.apk.sha256 \
             --repo "$GITHUB_REPOSITORY" --verify-tag --draft "${release_flags[@]}" \
             --title "Bungee $GITHUB_REF_NAME" --notes-file release-notes.md
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false "${release_flags[@]}"
