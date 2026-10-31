@@ -748,7 +748,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await page.getByRole("button",{name:"Close dialog"}).click();
     await page.evaluate(async id=>{await fetch(`/api/devices/${id}`,{method:"DELETE"});},original.device_id);
   });
-  await t.test("inactive binding purge frees the same phone key for a fresh invitation", async () => {
+  await t.test("purge requires the current phone key and permits explicit reuse of the old one", async () => {
     const key = randomBytes(32).toString("base64");
     const old = await page.evaluate(async key => {
       const response = await fetch("/api/enrollments", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({name:"Stale binding fixture",wg_public_key:key})});
@@ -761,10 +761,15 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await row.getByRole("button",{name:"Purge binding",exact:true}).click();
     await page.getByRole("heading",{name:"Purge this inactive binding?"}).waitFor();
     await page.getByRole("dialog").getByRole("button",{name:"Purge binding",exact:true}).click();
+    assert.equal(await page.getByLabel("Phone’s WireGuard public key",{exact:true}).inputValue(), "");
+    await page.getByRole("button",{name:"Use previous phone key",exact:true}).click();
     assert.equal(await page.getByLabel("Phone’s WireGuard public key",{exact:true}).inputValue(),key);
+    const currentPhoneKey = randomBytes(32).toString("base64");
+    await page.getByLabel("Phone’s WireGuard public key",{exact:true}).fill(currentPhoneKey);
     await page.getByRole("button",{name:"Create one-time enrollment"}).click();
     await page.getByRole("img",{name:"One-time Bungee enrollment QR code"}).waitFor();
     const next = JSON.parse(await page.getByRole("textbox",{name:"Enrollment bundle",includeHidden:true}).inputValue());
+    assert.equal(next.wireguard.client_public_key,currentPhoneKey);
     assert.notEqual(next.device_id,old.device_id);
     assert.notEqual(next.token,old.token);
     await page.getByRole("button",{name:"Close dialog"}).click();

@@ -130,8 +130,9 @@ function App() {
     [toast, setToast] = useState("");
   const [name, setName] = useState(""),
     [wgKey, setWgKey] = useState(""),
+    [previousWgKey, setPreviousWgKey] = useState(""),
     [bundle, setBundle] = useState(""),
-    [qr, setQr] = useState(""),
+    [qr, setQr] = useState<{ bundle: string; src: string } | null>(null),
     [message, setMessage] = useState(""),
     [lastRefresh, setLastRefresh] = useState<number | null>(null);
   const [clearTarget, setClearTarget] = useState<Device | null>(null);
@@ -167,6 +168,7 @@ function App() {
       setClearTarget(null);
       setBindingTarget(null);
       setBundle("");
+      setPreviousWgKey("");
     };
     window.addEventListener("bungee:session-expired", expire);
     return () => window.removeEventListener("bungee:session-expired", expire);
@@ -189,12 +191,16 @@ function App() {
     return () => clearTimeout(id);
   }, [toast]);
   useEffect(() => {
+    let current = true;
+    setQr(null);
     if (bundle)
       QRCode.toDataURL(bundle, {
         width: 320,
         margin: 2,
         errorCorrectionLevel: "M",
-      }).then(setQr);
+      }).then(src => { if (current) setQr({ bundle, src }); })
+        .catch(() => { if (current) setError("Could not create the QR. Copy the enrollment text instead."); });
+    return () => { current = false; };
   }, [bundle]);
   async function login(e: React.FormEvent) {
     e.preventDefault();
@@ -287,7 +293,8 @@ function App() {
     setModal(null);
     setClearTarget(null);
     setBundle("");
-    setQr("");
+    setQr(null);
+    setPreviousWgKey("");
     setError("");
   }
   if (auth === null)
@@ -486,6 +493,7 @@ function App() {
                 onClick={() => {
                   setName("");
                   setWgKey("");
+                  setPreviousWgKey("");
                   setModal("enroll");
                 }}
               >
@@ -905,7 +913,7 @@ function App() {
                       · {d.capabilities.join(", ") || "Awaiting consent"}
                     </small>
                     {!d.enrolled && d.wg_public_key && (
-                      <button className="text-button" onClick={() => { setName(d.name); setWgKey(d.wg_public_key!); setBundle(""); setModal("enroll"); }}>
+                      <button className="text-button" onClick={() => { setName(d.name); setWgKey(d.wg_public_key!); setPreviousWgKey(""); setBundle(""); setModal("enroll"); }}>
                         Reissue invitation
                       </button>
                     )}
@@ -1013,6 +1021,7 @@ function App() {
                 <p>
                   Open Bungee on the phone and copy its WireGuard public key.
                   The private key never leaves the phone.
+                  If Bungee was reinstalled or new phone keys were generated, copy the new key now; the previous key will not work.
                 </p>
                 <label htmlFor="device-name">Device name</label>
                 <input
@@ -1032,6 +1041,10 @@ function App() {
                   value={wgKey}
                   onChange={(e) => setWgKey(e.target.value)}
                 />
+                {previousWgKey && <p className="fine">
+                  Only reuse the previous key if it still matches the key shown on this phone. Reinstalling Bungee changes it.
+                  <button type="button" className="text-button" onClick={() => setWgKey(previousWgKey)}>Use previous phone key</button>
+                </p>}
                 <p className="fine">
                   The phone user must approve sharing. Reissuing an invitation for
                   an unpaired phone invalidates its earlier invitation and tunnel secret.
@@ -1050,10 +1063,10 @@ function App() {
                   contains a long-lived preshared key. Use a trusted local
                   administrator connection and keep the QR private.
                 </p>
-                {qr && (
+                {qr && qr.bundle === bundle && (
                   <img
                     className="qr"
-                    src={qr}
+                    src={qr.src}
                     alt="One-time Bungee enrollment QR code"
                   />
                 )}
@@ -1170,7 +1183,7 @@ function App() {
                 try {
                   await api(`/devices/${target.id}/binding`, {method:"DELETE"});
                   await load();
-                  setName(target.name); setWgKey(target.wg_public_key || ""); setBundle("");
+                  setName(target.name); setWgKey(""); setPreviousWgKey(target.wg_public_key || ""); setBundle("");
                   setBindingTarget(null); setModal("enroll");
                   setToast("Binding purged. Create a fresh invitation using the phone’s current public key.");
                 } catch(e) { setError((e as Error).message); }

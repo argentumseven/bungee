@@ -79,6 +79,10 @@ Download **[bungee.apk](https://github.com/argentumseven/bungee/releases/latest/
 The CI APK is a signed **debug build**. CI signing keys can change between runs; a different signer requires uninstalling and pairing again. Use [your own stable signing key](docs/MANAGEMENT.md#stable-signing-and-updates) for in-place updates. APKs and private signing keys are kept outside the source tree. Install Bungee as an ordinary personal app; **do not enroll it as device owner**.
 
 1. Open Bungee on the phone and copy its WireGuard public key.
+   After an uninstall/reinstall, clearing app data, or generating new phone keys,
+   copy the key again and make a fresh invitation. An invitation for the previous
+   key will say it belongs to another phone. Purging a binding does not restore
+   the phone's old private key.
 2. In the trusted dashboard, choose **Add a device**, enter a name and paste that key.
 3. Scan the invitation with Bungee, or paste its enrollment text. Review sharing consent and choose **Agree & pair**. Invitations expire after ten minutes and contain a long-lived secret; keep them out of photos, messages and synchronized clipboards.
 4. Grant precise GPS permission and start sharing. Recovery commands need separate approval on the phone. Screen locking also needs removable device administration.
