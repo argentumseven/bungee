@@ -97,6 +97,12 @@ object ManagementAgent {
         val role = role(context)
         if (role == ManagementRole.PROFILE_OWNER || role == ManagementRole.UNKNOWN) return listOf(checkNotNull(role.removalNotice))
         if (role == ManagementRole.DEVICE_OWNER) {
+            // Old owner builds may have left the phone in lock task, hiding Home/Recents/navigation.
+            // Android 6+ exits lock task when the locked package is removed from this allowlist.
+            actions += "Old lock-task mode could not be released; Android navigation may remain restricted." to { dpm.setLockTaskPackages(component, emptyArray()) }
+            actions += "Old status-bar restriction could not be cleared." to { check(dpm.setStatusBarDisabled(component, false)) }
+            actions += "Old Bungee launcher preference could not be cleared." to { dpm.clearPackagePersistentPreferredActivities(component, context.packageName) }
+            actions += "Old keyguard restriction could not be cleared." to { check(dpm.setKeyguardDisabled(component, false)) }
             actions += "Old always-on policy could not be cleared." to { if (dpm.getAlwaysOnVpnPackage(component) == context.packageName) dpm.setAlwaysOnVpnPackage(component, null, false) }
             actions += "Old uninstall protection could not be cleared." to { dpm.setUninstallBlocked(component, context.packageName, false) }
             actions += "Old password-complexity requirement could not be cleared. The actual PIN is never changed." to { dpm.requiredPasswordComplexity = DevicePolicyManager.PASSWORD_COMPLEXITY_NONE }
