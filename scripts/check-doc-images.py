@@ -6,7 +6,7 @@ import subprocess
 from urllib.parse import unquote, urlparse
 
 root=Path(__file__).resolve().parents[1]
-files=subprocess.check_output(['rg','--files','-g','*.md','-g','!work/**'],cwd=root,text=True).splitlines()
+files=[name for name in subprocess.check_output(['git','ls-files','-z','--','*.md'],cwd=root,text=True).split('\0') if name and not name.startswith('work/')]
 count=pinned=0
 for name in files:
     path=root/name

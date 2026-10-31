@@ -1,5 +1,7 @@
 # Bungee
 
+**[Android APK downloads](https://github.com/argentumseven/bungee/actions/workflows/check.yml?query=branch%3Amain)** · Open the latest completed main build and use its **Android APK download** link. Older builds list **bungee-android-debug** under Artifacts. Extract `bungee-debug.apk` from the ZIP; the checksum is included. GitHub sign-in is required, and development downloads expire after 14 days. [Tagged releases](https://github.com/argentumseven/bungee/releases) have permanent APK assets.
+
 <img src="web/public/bungee-mark.png" width="96" alt="Bungee home and location icon">
 
 Bungee is a self-hosted device finder for Android 12+ and GrapheneOS. Pair household phones with your server to save location history, send recovery commands and view optional theft photos.

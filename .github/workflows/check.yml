@@ -55,12 +55,23 @@ jobs:
           cd artifacts
           sha256sum bungee-debug.apk > bungee-debug.apk.sha256
       - uses: actions/upload-artifact@v5
+        id: android_apk
         with:
           name: bungee-android-debug
           path: artifacts/
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
+      - name: Show Android download link
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
+          ## Android APK download
+
+          [Download APK and SHA-256 checksum (ZIP)](${{ steps.android_apk.outputs.artifact-url }})
+
+          Extract and install `bungee-debug.apk`. GitHub sign-in is required; this build is retained for 14 days.
+          In-place updates require the same signing key as the installed app.
+          SUMMARY
   container-boundaries:
     runs-on: ubuntu-24.04
     steps:
