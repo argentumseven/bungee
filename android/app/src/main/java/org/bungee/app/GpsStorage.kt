@@ -17,7 +17,9 @@ object GpsStorage {
         override fun onConfigure(db: SQLiteDatabase) {
             super.onConfigure(db)
             db.execSQL("PRAGMA synchronous=FULL")
-            db.execSQL("PRAGMA secure_delete=ON")
+            db.rawQuery("PRAGMA secure_delete=ON", null).use { cursor ->
+                check(cursor.moveToFirst() && cursor.getInt(0) == 1) { "Could not enable secure deletion for the GPS journal" }
+            }
         }
         override fun onCreate(db: SQLiteDatabase) = GpsJournal.initialize(AndroidDatabase(db))
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = error("Unsupported GPS journal version; original database preserved")
