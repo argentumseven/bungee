@@ -45,6 +45,7 @@ import {
 import { DeviceCare } from "./DeviceCare";
 import { AppearanceControl, useAppearance } from "./Appearance";
 import { RecoveryMessagePreview } from "./RecoveryMessagePreview";
+import { PasswordSettings } from "./PasswordSettings";
 
 type Location = {
   latitude: number;
@@ -111,6 +112,7 @@ function Brand() {
   );
 }
 function App() {
+  const [loginNotice, setLoginNotice] = useState("");
   const appearance = useAppearance();
   const [auth, setAuth] = useState<boolean | null>(null),
     [password, setPassword] = useState(""),
@@ -327,6 +329,7 @@ function App() {
               Enter the administrator password for this server.
             </p>
             <form onSubmit={login}>
+              {loginNotice && <p role="status">{loginNotice}</p>}
               <label htmlFor="password">Server administrator password</label>
               <input
                 id="password"
@@ -353,7 +356,7 @@ function App() {
               </button>
             </form>
             <p className="fine">
-              <LockKeyhole size={13} /> For your first sign-in, read the admin-password file on the server.
+              <LockKeyhole size={13} /> Use the password chosen during installation. Forgotten it? Reset it on the server with the host password command.
             </p>
           </div>
           <div className="login-caption">
@@ -836,6 +839,12 @@ function App() {
           )}
           {page === "Settings" && (
             <div className="settings-grid">
+              <PasswordSettings onChanged={() => {
+                window.dispatchEvent(new Event("bungee:session-expired"));
+                setPassword("");
+                setError("");
+                setLoginNotice("Password changed. Sign in with your new password.");
+              }} />
               <section className="panel settings-card">
                 <ShieldCheck size={26} />
                 <h2>Connection and storage</h2>

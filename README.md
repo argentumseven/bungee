@@ -66,7 +66,7 @@ The wizard asks for ports and mandatory administrator source hosts/prefixes. It 
 
 For phones away from home, the selected WireGuard UDP endpoint must be reachable. Public IPv4 normally requires forwarding that UDP port on your router; CGNAT needs another reachable path. The dashboard can stay on your LAN/VPN. WireGuard provides encryption; it does not create inbound reachability. No relay is included.
 
-See [installation and updates](docs/INSTALL.md) for the wizard, network rules and recovery commands, or [manual Compose deployment](docs/DEPLOYMENT.md). [Map and GeoIP setup](docs/GEOGRAPHY.md) covers local datasets, imports and licenses.
+See [installation and updates](docs/INSTALL.md) for the wizard, network rules and recovery commands, or [manual Compose deployment](docs/DEPLOYMENT.md). To remove the host installation, preview with `bash scripts/uninstall.sh --plan`, then run `sudo bash scripts/uninstall.sh`; add `--purge` to delete local encrypted data and keys. See [uninstall details](docs/INSTALL.md#uninstall-the-serverhost). [Map and GeoIP setup](docs/GEOGRAPHY.md) covers local datasets, imports and licenses.
 
 ## Install and pair a phone
 
@@ -141,7 +141,14 @@ bash scripts/android.sh :app:assembleDebug :app:lintDebug :app:testDebugUnitTest
 
 The development APK is `android/app/build/outputs/apk/debug/app-debug.apk`. `assembleRelease` is unsigned until you configure a signer outside source control. `scripts/build-owner-apk.sh` uses an operator-owned signing key; its historical name does not enable Android ownership.
 
-The server's administrator HTTP listener binds loopback on port 8080; device tests use 8081. Its generated password is `.state/admin-password`, mode 0600. For web hot reload, start Rust with `BUNGEE_PUBLIC_ORIGIN=http://127.0.0.1:5173` and run `npm run dev --prefix web`; use that exact browser origin.
+The server's administrator HTTP listener binds loopback on port 8080; device tests use 8081. Passwords are stored only as salted Argon2id verifiers. Before a first development launch, build the server and initialize a password privately:
+
+```sh
+cargo build --locked --manifest-path server/Cargo.toml
+python3 -c 'import getpass, subprocess; subprocess.run(["server/target/debug/bungee-server", "--set-admin-password"], input=getpass.getpass("Administrator password (at least 16 characters): ").encode(), check=True)'
+```
+
+For web hot reload, start Rust with `BUNGEE_PUBLIC_ORIGIN=http://127.0.0.1:5173` and run `npm run dev --prefix web`; use that exact browser origin. In production, choose the password during installation and change it in **Settings → Administrator password**, or reset it with `python3 /opt/bungee/bungee-host.py password` as root. See [installation](docs/INSTALL.md) for migrating and rebuilding existing containers.
 
 See the [platform matrix](docs/PLATFORM.md), [management guide](docs/MANAGEMENT.md), [recovery requirements](docs/SAFETY.md), [remaining work](docs/ROADMAP.md) and [writing guide](docs/WRITING.md).
 

@@ -785,6 +785,22 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
         .waitFor();
     },
   );
+  await t.test("administrator changes password in Settings and signs back in", async () => {
+    await page.getByRole("button", {name:"Settings", exact:true}).click();
+    const next = "a new browser administrator passphrase";
+    await page.getByLabel("Current password", {exact:true}).fill(password);
+    await page.getByLabel("New password", {exact:true}).fill(next);
+    await page.getByLabel("Confirm new password", {exact:true}).fill("mismatch");
+    await page.getByRole("button", {name:"Change password", exact:true}).click();
+    await page.getByRole("alert").filter({hasText:"New passwords do not match"}).waitFor();
+    await page.getByLabel("Confirm new password", {exact:true}).fill(next);
+    await page.getByRole("button", {name:"Change password", exact:true}).click();
+    await page.getByRole("heading", {name:"Sign in to Bungee"}).waitFor();
+    await page.getByRole("status").filter({hasText:"Password changed"}).waitFor();
+    await page.getByLabel("Server administrator password").fill(next);
+    await page.getByRole("button", {name:"Sign in", exact:true}).click();
+    await page.getByRole("heading", {name:"Settings", exact:true}).waitFor();
+  });
   await t.test("locking the dashboard returns to sign-in", async () => {
     await page.setViewportSize({ width: 1440, height: 1050 });
     await page.getByRole("button", { name: "Lock dashboard" }).click();

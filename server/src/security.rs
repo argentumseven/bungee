@@ -214,6 +214,10 @@ fn administrator_source(ip: IpAddr, networks: &[ipnet::IpNet]) -> bool {
 }
 
 pub fn require_admin(app: &App, headers: &HeaderMap) -> ApiResult<()> {
+    require_admin_db(&app.db.lock().unwrap(), headers)
+}
+
+pub fn require_admin_db(db: &rusqlite::Connection, headers: &HeaderMap) -> ApiResult<()> {
     let cookie = headers
         .get(header::COOKIE)
         .and_then(|v| v.to_str().ok())
@@ -226,7 +230,6 @@ pub fn require_admin(app: &App, headers: &HeaderMap) -> ApiResult<()> {
     if value.len() > 128 {
         return Err(denied());
     }
-    let db = app.db.lock().unwrap();
     let exists: bool = db.query_row(
         "SELECT EXISTS(SELECT 1 FROM sessions WHERE hash=? AND expires>?)",
         params![hash(value), now()],

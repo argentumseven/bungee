@@ -1,4 +1,4 @@
-use crate::{App, security::*, store};
+use crate::{App, credentials, security::*, store};
 use axum::{
     Json,
     body::Bytes,
@@ -36,13 +36,15 @@ pub async fn login(
     if input.password.len() > 1024 {
         return Err(denied());
     }
-    let expected = app.admin_hash.clone();
+    let expected = credentials::current(&app.db.lock().unwrap())?.ok_or_else(denied)?;
+    let checked = expected.clone();
     let permit = LOGIN_WORK
         .try_acquire()
         .map_err(|_| Error(StatusCode::TOO_MANY_REQUESTS, "Please retry later"))?;
     let valid = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        password_matches(&input.password, &expected)
+        let password = zeroize::Zeroizing::new(input.password);
+        password_matches(&password, &checked)
     })
     .await
     .unwrap_or(false);
@@ -51,12 +53,18 @@ pub async fn login(
     }
     let value = token();
     let db = app.db.lock().unwrap();
-    db.execute("DELETE FROM sessions WHERE expires<?", [now()])?;
-    db.execute(
+    let tx = db.unchecked_transaction()?;
+    // A reset/change while Argon2 was running must not issue an old-password session.
+    if credentials::current(&tx)?.as_ref() != Some(&expected) {
+        return Err(denied());
+    }
+    tx.execute("DELETE FROM sessions WHERE expires<?", [now()])?;
+    tx.execute(
         "INSERT INTO sessions(hash,expires) VALUES(?,?)",
         params![hash(&value), now() + 3600 * 8],
     )?;
-    store::audit(&db, "admin.login", None, "")?;
+    store::audit(&tx, "admin.login", None, "")?;
+    tx.commit()?;
     let cookie = format!(
         "bungee_session={value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=28800{}",
         if app.secure_cookie { "; Secure" } else { "" }
@@ -64,6 +72,63 @@ pub async fn login(
     Ok((
         [(header::SET_COOKIE, cookie)],
         Json(json!({"authenticated":true})),
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct PasswordChange {
+    current_password: String,
+    new_password: String,
+}
+
+pub async fn change_password(
+    State(app): State<App>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(input): Json<PasswordChange>,
+) -> ApiResult<impl IntoResponse> {
+    require_admin(&app, &headers)?;
+    rate_limit(&app, RateClass::AdminSource, addr.ip().to_string(), 5)?;
+    rate_limit(&app, RateClass::AdminAggregate, "household".into(), 30)?;
+    let current = zeroize::Zeroizing::new(input.current_password);
+    let new = zeroize::Zeroizing::new(input.new_password);
+    if current.len() > 1024 {
+        return Err(bad("Current password is too long"));
+    }
+    credentials::validate_password(&new).map_err(bad)?;
+    let expected = credentials::current(&app.db.lock().unwrap())?.ok_or_else(denied)?;
+    let checked = expected.clone();
+    let permit = LOGIN_WORK
+        .try_acquire()
+        .map_err(|_| Error(StatusCode::TOO_MANY_REQUESTS, "Please retry later"))?;
+    let replacement = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        if !password_matches(&current, &checked) {
+            return Err(bad("Current password is incorrect"));
+        }
+        if *current == *new {
+            return Err(bad("Choose a different new password"));
+        }
+        password_hash(&new)
+            .map_err(|_| Error(StatusCode::INTERNAL_SERVER_ERROR, "Password hashing failed"))
+    })
+    .await
+    .map_err(|_| Error(StatusCode::INTERNAL_SERVER_ERROR, "Password change failed"))??;
+    let db = app.db.lock().unwrap();
+    require_admin_db(&db, &headers)?;
+    if credentials::current(&db)?.as_ref() != Some(&expected) {
+        return Err(bad("Password changed during this request; sign in again"));
+    }
+    // The verifier and session invalidation commit together, surviving restarts.
+    if !credentials::change(&db, &expected, &replacement)? {
+        return Err(bad("Password changed during this request; sign in again"));
+    }
+    Ok((
+        [(
+            header::SET_COOKIE,
+            "bungee_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0",
+        )],
+        Json(json!({"changed":true})),
     ))
 }
 pub async fn session(State(app): State<App>, headers: HeaderMap) -> ApiResult<Json<Value>> {
@@ -652,7 +717,6 @@ mod privacy_tests {
             db: Arc::new(Mutex::new(db)),
             origin: String::new(),
             secure_cookie: false,
-            admin_hash: String::new(),
             admin_networks: vec!["127.0.0.0/8".parse().unwrap()],
             limiter: Arc::new(Mutex::new(RateLimits::default())),
             state_dir: directory.clone(),

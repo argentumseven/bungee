@@ -2,6 +2,41 @@
 
 Use a Linux host you administer, with systemd, kernel WireGuard, Docker Compose 2.24+, IPv4/IPv6 iptables/conntrack, Python 3, OpenSSL, `cryptsetup`, `e2fsprogs`, `util-linux`, and `age`. On Debian/Ubuntu, install the host tools with `sudo apt-get install cryptsetup e2fsprogs util-linux age openssl python3`. Docker and Compose must already work locally. The installer refuses remote Docker contexts and unencrypted swap. Disable swap or configure encrypted swap first. Keep a provider console or local console available for recovery.
 
+## Uninstall the server/host
+
+Run from this checkout on the server (use `--root` for a custom installation):
+
+```sh
+bash scripts/uninstall.sh --plan
+sudo bash scripts/uninstall.sh
+# Permanently delete the local data, snapshots, certificates and keys as well:
+sudo bash scripts/uninstall.sh --purge
+```
+
+The default keeps `/var/lib/bungee/storage.luks` and `/etc/bungee/` for recovery,
+but unmounts/closes storage and removes its automatic boot configuration. Keep
+the image, storage key and backup identity together in a protected backup. This
+is an offline archive, not a one-command reinstall; the installer will refuse to
+overwrite it. Export needed records before uninstalling.
+
+Uninstall disables Bungee's timer/recovery service, stops and removes its Compose
+containers/network, removes its systemd units, its exact crypttab/fstab entries,
+and its Docker storage dependency. It does not restart Docker, prune images,
+delete unrelated files, change host SSH/firewall settings, remove phone apps,
+erase external backups or remove manually imported CA trust. Remove that trust
+from each client separately if desired. `--purge` deletes files, and does not
+promise forensic erasure of storage or copies.
+
+Use `--yes` for unattended execution after reviewing `--plan`; interactive purge
+requires typing `PURGE`. Preview contacts no services and makes no writes; the
+live operation additionally checks the installation and host configuration.
+An active updater holds a lock and causes uninstall to refuse; let it finish,
+then retry. Cleanup stops on failure and retains keys if storage cannot be
+detached. If a failure occurs after detachment, inspect the reported step and
+remaining boot configuration locally before rebooting; cleanup is not a rollback.
+Older installs can run this checkout's helper even if their installed helper
+does not yet include `uninstall`.
+
 ## New installation
 
 From this checkout run:
@@ -11,6 +46,16 @@ sudo python3 scripts/bungee-host.py install
 ```
 
 Choose an internal management bind IP and HTTPS port, explicit internal administrator prefixes, a separate reachable numeric phone endpoint/custom WireGuard UDP port, optional DNS resolver, encrypted storage capacity, and update preference. Port 51820 and allow-everyone administrator prefixes are rejected. No reverse proxy or load balancer is required: Rust serves HTTPS directly.
+
+After building the images, the installer asks you to choose and confirm an
+administrator password of at least 16 characters. Entry is hidden and supports
+both common Backspace codes. Invalid configuration answers repeat only the
+affected field. The password is sent to an isolated local hashing container
+through stdin; only its salted Argon2id verifier is written to encrypted storage.
+Passwords never go in configuration JSON, command arguments, environment
+variables, or installation output. For unattended installation, combine
+`--config answers.json --password-stdin` with a dedicated secret-manager pipe;
+do not put the password in the shell command itself. `--plan` never asks for it.
 
 For unattended setup, pass `--config answers.json`. Preview without root, Docker, file writes or network access:
 
@@ -46,7 +91,37 @@ All persistent application state, WireGuard/peer secrets, CA/leaf keys, local co
 
 The host generates a private local CA and 90-day leaf certificate without contacting a certificate provider. The public root is `/opt/bungee/root.crt`. Verify its printed SHA-256 fingerprint through the local console or an authenticated channel, then explicitly trust it in the administrator browser/profile. The CA private key remains host-only; Rust receives a read-only leaf directory. Never export private keys or bypass TLS verification.
 
-Use a current browser supporting TLS 1.3 X25519MLKEM768. Classical-only key exchange and TLS 1.2 fail. Read the administrator password locally using the Compose command printed by installation; its file is `/state/admin-password` inside Rust. Sign in to the exact configured HTTPS origin.
+Use a current browser supporting TLS 1.3 X25519MLKEM768. Classical-only key exchange and TLS 1.2 fail. Sign in to the exact configured HTTPS origin with the password you chose during installation. There is no generated default or password-retrieval file.
+
+Change it in **Settings → Administrator password**, supplying your current
+password and confirming the new one. All browser sessions are signed out.
+If forgotten, reset it locally on the host:
+
+```sh
+sudo python3 /opt/bungee/bungee-host.py password
+```
+
+The reset prompts privately, does not require the old password, and takes effect
+without restarting the container. Only a salted Argon2id verifier is stored in
+the private SQLite database on encrypted storage. Existing installs migrate their
+old password once on startup and remove the live `admin-password` file after the
+verifier commits. Your old password continues working until changed. Old encrypted
+snapshots can still contain the previous plaintext credential; migration does not
+rewrite backups or promise forensic erasure. Rotate any exposed old password.
+
+To upgrade the running containers directly from an updated source checkout:
+
+```sh
+cd /usr/local/src/bungee
+git pull --ff-only origin main
+sudo python3 scripts/bungee-host.py rebuild
+sudo python3 /opt/bungee/bungee-host.py status
+```
+
+`rebuild` keeps the existing configuration and pairing/history, builds both images
+before downtime, takes an encrypted cold snapshot, and uses the normal health
+checks and rollback flow before reopening admission. It also refreshes the
+installed host helper. Run it from the source checkout, not `/opt/bungee`.
 
 The daily host timer renews certificates locally even when automatic software updates are disabled. Rust reloads valid certificate replacements every minute. Renewal retains the CA identity; CA expiry/compromise needs a planned replacement and renewed trust on administrator devices.
 

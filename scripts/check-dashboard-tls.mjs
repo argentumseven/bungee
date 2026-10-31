@@ -15,6 +15,7 @@ try {
   const ca=await readFile(join(dir,'tls/root.crt'),'utf8');
   const p=await port(), dp=await port();
   const env={...process.env,BUNGEE_STATE_DIR:join(dir,'state'),BUNGEE_PUBLIC_ORIGIN:`https://127.0.0.1:${p}`,BUNGEE_ADMIN_BIND:`127.0.0.1:${p}`,BUNGEE_ADMIN_SUBNETS:'127.0.0.1/32',BUNGEE_DEVICE_BIND:`127.0.0.1:${dp}`,BUNGEE_TLS_CERT_FILE:join(dir,'tls/issued/current/server.crt'),BUNGEE_TLS_KEY_FILE:join(dir,'tls/issued/current/server.key'),BUNGEE_TRUST_LOOPBACK_PROXY:'false'};
+  execFileSync(resolve('server/target/debug/bungee-server'), ['--set-admin-password'], {env, input:'test-only-tls-password-not-a-secret'});
   server=spawn(resolve('server/target/debug/bungee-server'),[],{env,stdio:['ignore','pipe','pipe']});
   server.stdout.on('data',b=>logs+=b);server.stderr.on('data',b=>logs+=b);
   const request=(localAddress='127.0.0.1',headers={})=>new Promise((res,rej)=>{

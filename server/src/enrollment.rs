@@ -283,7 +283,6 @@ mod tests {
             )),
             origin: "http://127.0.0.1:8080".into(),
             secure_cookie: false,
-            admin_hash: String::new(),
             admin_networks: vec!["127.0.0.0/8".parse().unwrap()],
             limiter: Arc::new(Mutex::new(RateLimits::default())),
             state_dir: directory.clone(),

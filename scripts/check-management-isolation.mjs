@@ -39,6 +39,7 @@ async function until(check, message) {
   throw Error(message);
 }
 try {
+  const verifier = docker(['run','--rm','-i','--network','none','--read-only','--cap-drop','ALL','bungee-server:dev','--hash-admin-password'], 'test-only-container-password-not-a-secret');
   docker(['network', 'create', '--internal', management]);
   // Isolated synthetic addresses, never a production network or phone.
   docker(['network', 'create', '--internal', '--subnet', '10.77.0.0/24', '--gateway', '10.77.0.254', phones]);
@@ -112,7 +113,7 @@ setInterval(()=>{if(!sent&&fs.existsSync('/run/send-after')){sent=true;s.write('
     '-e', `BUNGEE_ADMIN_SUBNETS=${subnet}`, '-e', 'BUNGEE_DEVICE_BIND=10.77.0.1:8081',
     '-e', `BUNGEE_DNS_UPSTREAM_IP=${resolver}`, '-e', 'BUNGEE_DNS_UPSTREAM_PORT=8053',
     '-e', 'BUNGEE_TLS_CERT_FILE=/tls/current/server.crt', '-e', 'BUNGEE_TLS_KEY_FILE=/tls/current/server.key',
-    'bungee-server:dev']);
+    '--entrypoint', 'sh', 'bungee-server:dev', '-ec', 'printf "%s\\n" "$1" > /state/admin-password.hash; exec /usr/local/bin/bungee-server', 'bootstrap', verifier]);
   await until(() => connect(phone, '10.77.0.1', 8081) === 'connected', 'Rust device API did not start');
   assert.equal(connect(phone, '10.77.0.1', 5353), 'connected', 'Optional DNS stays available');
   assert.equal(connect(administrator, managementIp, 8443), 'connected', 'Internal administration remains reachable');

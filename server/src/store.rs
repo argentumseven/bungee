@@ -13,6 +13,7 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
     let tx = db.unchecked_transaction()?;
     tx.execute_batch("
       CREATE TABLE IF NOT EXISTS sessions(hash TEXT PRIMARY KEY, expires INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS admin_credential(id INTEGER PRIMARY KEY CHECK(id=1), hash TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS devices(
         id TEXT PRIMARY KEY, name TEXT NOT NULL, public_key TEXT, wg_key TEXT UNIQUE NOT NULL,
         address TEXT UNIQUE NOT NULL, created INTEGER NOT NULL, last_seen INTEGER,

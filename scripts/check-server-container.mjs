@@ -8,14 +8,15 @@ import https from 'node:https';
 import tls from 'node:tls';
 const name=`bungee-server-check-${process.pid}`;
 const dir=await mkdtemp(join(tmpdir(),'bungee-container-tls-'));
-const docker=args=>execFileSync('docker',args,{encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
+const docker=(args,input)=>execFileSync('docker',args,{input,encoding:'utf8',stdio:[input === undefined ? 'ignore' : 'pipe','pipe','pipe']}).trim();
 try {
+  const verifier = docker(['run','--rm','-i','--network','none','--read-only','--cap-drop','ALL','bungee-server:dev','--hash-admin-password'], 'test-only-container-password-not-a-secret');
   execFileSync('python3',['-c',"import sys;sys.path.insert(0,'scripts');import tls_config;tls_config.ensure(sys.argv[1],'127.0.0.1')",join(dir,'tls')]);
   const issued=join(dir,'tls/issued');
   // Synthetic test-only keys must be readable by the image's UID 10001.
   async function readable(path){await chmod(path,0o755);for(const e of await readdir(path,{withFileTypes:true})){const p=join(path,e.name);if(e.isDirectory())await readable(p);else if(!e.isSymbolicLink())await chmod(p,0o644);}}
   await readable(issued);
-  docker(['run','-d','--rm','--name',name,'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true','--ulimit','core=0','--tmpfs','/state:uid=10001,gid=10001,mode=0700','--tmpfs','/tmp:size=16m','--mount',`type=bind,src=${issued},dst=/tls,readonly`,'-p','127.0.0.1::8443','--health-cmd','curl --fail --silent http://127.0.0.1:8081/healthz','-e','BUNGEE_PUBLIC_ORIGIN=https://127.0.0.1','-e','BUNGEE_ADMIN_BIND=0.0.0.0:8443','-e','BUNGEE_ADMIN_INTERFACE=eth0','-e','BUNGEE_ADMIN_SUBNETS=127.0.0.1/32 172.16.0.0/12 192.168.0.0/16','-e','BUNGEE_DEVICE_BIND=127.0.0.1:8081','-e','BUNGEE_TLS_CERT_FILE=/tls/current/server.crt','-e','BUNGEE_TLS_KEY_FILE=/tls/current/server.key','bungee-server:dev']);
+  docker(['run','-d','--rm','--name',name,'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true','--ulimit','core=0','--tmpfs','/state:uid=10001,gid=10001,mode=0700','--tmpfs','/tmp:size=16m','--mount',`type=bind,src=${issued},dst=/tls,readonly`,'-p','127.0.0.1::8443','--health-cmd','curl --fail --silent http://127.0.0.1:8081/healthz','-e','BUNGEE_PUBLIC_ORIGIN=https://127.0.0.1','-e','BUNGEE_ADMIN_BIND=0.0.0.0:8443','-e','BUNGEE_ADMIN_INTERFACE=eth0','-e','BUNGEE_ADMIN_SUBNETS=127.0.0.1/32 172.16.0.0/12 192.168.0.0/16','-e','BUNGEE_DEVICE_BIND=127.0.0.1:8081','-e','BUNGEE_TLS_CERT_FILE=/tls/current/server.crt','-e','BUNGEE_TLS_KEY_FILE=/tls/current/server.key','--entrypoint','sh','bungee-server:dev','-ec','printf "%s\\n" "$1" > /state/admin-password.hash; exec /usr/local/bin/bungee-server','bootstrap',verifier]);
   const port=Number(docker(['port',name,'8443/tcp']).split(':').at(-1));
   const ca=await readFile(join(issued,'root.crt'),'utf8');
   const query=path=>new Promise((res,rej)=>{const q=https.get({host:'127.0.0.1',port,path,ca,rejectUnauthorized:true,minVersion:'TLSv1.3',ecdhCurve:'X25519MLKEM768'},r=>{let body='';r.on('data',b=>body+=b);r.on('end',()=>res({status:r.statusCode,body}));});q.on('error',rej);q.setTimeout(3000,()=>q.destroy(Error('timeout')));});

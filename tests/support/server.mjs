@@ -10,12 +10,13 @@ async function freePort() {
   const listener=createServer(); await new Promise(r=>listener.listen(0,"127.0.0.1",r));
   const port=listener.address().port; await new Promise(r=>listener.close(r)); return port;
 }
-export async function fixture(t) {
+export async function fixture(t, {legacy = false} = {}) {
   const dir=await mkdtemp(join(tmpdir(),"bungee-review2-"));
   const port=await freePort(), devicePort=await freePort();
   const origin=`http://127.0.0.1:${port}`, deviceOrigin=`http://127.0.0.1:${devicePort}`;
   const password=randomBytes(24).toString("base64url");
-  await writeFile(join(dir,"admin-password"),password,{mode:0o600});
+  const verifier = legacy ? password : execFileSync(resolve("server/target/debug/bungee-server"), ["--hash-admin-password"], {input:password, encoding:"utf8"});
+  await writeFile(join(dir,legacy ? "admin-password" : "admin-password.hash"),verifier,{mode:0o600});
   await mkdir(join(dir,"wireguard"));
   await writeFile(join(dir,"wireguard/server-public-key"),randomBytes(32).toString("base64"));
   let server, logs="", cookie="";
@@ -23,11 +24,11 @@ export async function fixture(t) {
     if(server?.exitCode===null) { const exited=new Promise(r=>server.once("exit",r)); server.kill("SIGINT"); await exited; }
   };
   const admin=(path,method="GET",body,extra={})=>fetch(origin+path,{method,headers:{Origin:origin,Cookie:cookie,"Content-Type":"application/json",...extra},body:body===undefined?undefined:JSON.stringify(body)});
-  const login=async()=>{
-    const response=await admin("/api/session","POST",{password});assert.equal(response.status,200);
+  const login=async(credential=password)=>{
+    const response=await admin("/api/session","POST",{password:credential});assert.equal(response.status,200);
     cookie=response.headers.get("set-cookie").split(";")[0];
   };
-  const launch=async()=>{
+  const launch=async(credential=password)=>{
     server=spawn(resolve("server/target/debug/bungee-server"),[],{env:{...process.env,BUNGEE_STATE_DIR:dir,BUNGEE_ADMIN_BIND:`127.0.0.1:${port}`,BUNGEE_DEVICE_BIND:`127.0.0.1:${devicePort}`,BUNGEE_PUBLIC_ORIGIN:origin,BUNGEE_WG_ENDPOINT:"203.0.113.10:47937"},stdio:["ignore","pipe","pipe"]});
     server.stdout.on("data",b=>logs+=b); server.stderr.on("data",b=>logs+=b);
     let ready=false;
@@ -35,11 +36,11 @@ export async function fixture(t) {
     assert.ok(ready,logs);
     const health=await (await fetch(origin+"/healthz")).json();
     assert.equal(health.version,JSON.parse(await readFile(resolve("release.json"),"utf8")).version);
-    await login();
+    await login(credential);
   };
   t.after(async()=>{await stop();await rm(dir,{recursive:true,force:true});});
   await launch();
   const sql=(statement,parameters=[])=>JSON.parse(execFileSync("python3",["-c","import sqlite3,sys,json; c=sqlite3.connect(sys.argv[1]); r=c.execute(sys.argv[2],json.loads(sys.argv[3])); v=r.fetchall(); c.commit(); print(json.dumps(v))",join(dir,"bungee.sqlite3"),statement,JSON.stringify(parameters)],{encoding:"utf8"}));
   const device=(path,body)=>fetch(deviceOrigin+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-  return {dir,origin,deviceOrigin,admin,device,sql,stop,launch,login,get cookie(){return cookie;},get pid(){return server.pid;},get logs(){return logs;}};
+  return {dir,origin,deviceOrigin,admin,device,sql,stop,launch,login,password,get cookie(){return cookie;},get pid(){return server.pid;},get logs(){return logs;}};
 }

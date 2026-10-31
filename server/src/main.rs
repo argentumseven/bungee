@@ -1,4 +1,5 @@
 mod api;
+mod credentials;
 mod dns;
 mod enrollment;
 mod export;
@@ -29,7 +30,6 @@ pub struct App {
     db: Arc<Mutex<rusqlite::Connection>>,
     origin: String,
     secure_cookie: bool,
-    admin_hash: String,
     admin_networks: Vec<ipnet::IpNet>,
     limiter: Arc<Mutex<security::RateLimits>>,
     state_dir: PathBuf,
@@ -48,6 +48,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // SAFETY: PR_SET_DUMPABLE takes a scalar flag and no pointers.
     if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {
         return Err(std::io::Error::last_os_error().into());
+    }
+    if std::env::args().nth(1).as_deref() == Some("--hash-admin-password") {
+        let password = credentials::read_password()?;
+        println!(
+            "{}",
+            security::password_hash(&password).map_err(|_| "Password hashing failed")?
+        );
+        return Ok(());
     }
     tracing_subscriber::fmt()
         .with_env_filter("bungee_server=info")
@@ -71,20 +79,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !secure_cookie && !origin.starts_with("http://127.0.0.1:") {
         return Err("Use an HTTPS BUNGEE_PUBLIC_ORIGIN for direct Rust TLS".into());
     }
-    let password_file = env::var_os("BUNGEE_ADMIN_PASSWORD_FILE")
-        .map(PathBuf::from)
-        .unwrap_or(dir.join("admin-password"));
-    if !password_file.exists() {
-        security::private_write(&password_file, security::token().as_bytes())?;
-        tracing::info!(path = %password_file.display(), "Generated admin password file; read it locally. Password is never logged.");
-    }
-    let password = zeroize::Zeroizing::new(fs::read_to_string(&password_file)?);
-    if password.trim().len() < 16 {
-        return Err("Admin password must be at least 16 characters".into());
+    if env::var_os("BUNGEE_ADMIN_PASSWORD_FILE").is_some() {
+        return Err("BUNGEE_ADMIN_PASSWORD_FILE is retired; set the administrator password with the host password command".into());
     }
     let db_path = dir.join("bungee.sqlite3");
     let db = store::open(&db_path)?;
     security::private_file(&db_path)?;
+    if std::env::args().nth(1).as_deref() == Some("--set-admin-password") {
+        let password = credentials::read_password()?;
+        let hash = security::password_hash(&password).map_err(|_| "Password hashing failed")?;
+        credentials::replace(&db, &hash)?;
+        credentials::initialize(&db, &dir)?;
+        println!("Administrator password changed. All sessions signed out.");
+        return Ok(());
+    }
+    credentials::initialize(&db, &dir)?;
     let wg_endpoint = env::var("BUNGEE_WG_ENDPOINT").ok();
     if let Some(endpoint) = &wg_endpoint {
         let address: SocketAddr = endpoint.parse().map_err(|_| "BUNGEE_WG_ENDPOINT must be a literal IP:port (IPv6 uses [IP]:port); no provider DNS lookup")?;
@@ -103,8 +112,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         db: Arc::new(Mutex::new(db)),
         origin,
         secure_cookie,
-        admin_hash: security::password_hash(password.trim())
-            .map_err(|_| "Password hashing failed")?,
         admin_networks,
         limiter: Arc::new(Mutex::new(security::RateLimits::default())),
         state_dir: dir,
@@ -112,7 +119,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         dns,
         geography: Arc::new(geography::Geography::load()?),
     };
-    drop(password);
     // Expire sessions across restarts, including snapshots of the development machine.
     app.db.lock().unwrap().execute("DELETE FROM sessions", [])?;
     let housekeeping = app.clone();
@@ -131,6 +137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dist = env::var("BUNGEE_WEB_DIR").unwrap_or("web/dist".into());
     let admin = Router::new()
         .route("/healthz", get(api::health))
+        .route("/api/password", post(api::change_password))
         .route(
             "/api/session",
             get(api::session).post(api::login).delete(api::logout),

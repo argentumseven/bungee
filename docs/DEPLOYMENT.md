@@ -62,7 +62,17 @@ Settings → Erase saved history clears GPS history, check-in logs and the last-
 
 ## Administrator credential rotation
 
-The server reads the password file at startup and keeps an Argon2id verifier in memory. Stop Rust, replace /state/admin-password securely with a high-entropy password of at least 16 characters (UID 10001, mode 0600), then restart. Sessions invalidate on restart. Alternatively mount a private file through BUNGEE_ADMIN_PASSWORD_FILE; keep its value out of source, Compose YAML and logs.
+Choose the administrator password privately during installation. Only a salted
+Argon2id verifier is stored in the private SQLite database on encrypted storage.
+Change it in **Settings → Administrator password** using the current password,
+or reset it from the host with `sudo python3 /opt/bungee/bungee-host.py password`.
+Both invalidate all browser sessions without restarting the server.
+
+Existing local `admin-password` files migrate once and are removed after the
+verifier commits; old snapshots are not rewritten. `BUNGEE_ADMIN_PASSWORD_FILE`
+is retired and explicitly rejected. Manual/development deployments must initialize
+a credential with the server's `--set-admin-password` command using a dedicated
+stdin pipe; missing credentials fail startup instead of generating plaintext.
 
 ## Optional management and home DNS
 

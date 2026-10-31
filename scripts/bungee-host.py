@@ -19,6 +19,13 @@ import ssl
 import subprocess
 import sys
 import time
+import termios
+
+# GNU readline handles both common terminal erase codes and cursor editing.
+try:
+    import readline
+except ImportError:
+    readline = None
 
 # Sibling modules are copied with this helper during installation.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -388,32 +395,108 @@ class Host:
         print('Update accepted:', metadata['version'])
 
 
+def edit_backspaces(value):
+    result = []
+    for char in value:
+        if char in ('\b', '\x7f'):
+            if result: result.pop()
+        else: result.append(char)
+    return ''.join(result)
+
+
 def ask(prompt, default=None):
-    value = input(prompt + (f' [{default}]' if default is not None else '') + ': ').strip()
+    value = edit_backspaces(input(prompt + (f' [{default}]' if default is not None else '') + ': ')).strip()
     return value or default or ''
+
+
+def field(prompt, default, parse):
+    while True:
+        try: return parse(ask(prompt, default))
+        except ValueError as exc: print('Please correct:', exc)
+
+
+def choice(*values):
+    def parse(value):
+        if value not in values: raise ValueError('Choose ' + ' or '.join(values))
+        return value
+    return parse
+
+
+def storage_size(value):
+    value = int(value)
+    if not 2 <= value <= 1048576: raise ValueError('Storage size must be 2–1048576 GiB')
+    return value
+
+
+def read_secret(prompt):
+    # Read from the controlling terminal, never stdin (which may contain a script).
+    # Handle both BS and DEL ourselves, including multibyte UTF-8 characters.
+    try: fd = os.open('/dev/tty', os.O_RDWR | os.O_NOCTTY)
+    except OSError as exc: raise ValueError('A terminal is required for password entry; use --password-stdin for automation') from exc
+    previous = termios.tcgetattr(fd)
+    settings = termios.tcgetattr(fd)
+    settings[3] &= ~(termios.ECHO | termios.ICANON)
+    settings[6][termios.VMIN] = 1
+    settings[6][termios.VTIME] = 0
+    data = bytearray()
+    try:
+        termios.tcsetattr(fd, termios.TCSAFLUSH, settings)
+        os.write(fd, prompt.encode())
+        while True:
+            char = os.read(fd, 1)
+            if char in (b'\n', b'\r'): return data.decode('utf-8')
+            if char in (b'', b'\x04'): raise EOFError('Password entry cancelled')
+            if char == b'\x15': data.clear()
+            elif char in (b'\x08', b'\x7f'):
+                if data:
+                    last = data.pop()
+                    while last & 0xc0 == 0x80 and data: last = data.pop()
+            else:
+                data.extend(char)
+                if len(data) > 65536: raise ValueError('Password input is too long')
+    finally:
+        data[:] = b'\0' * len(data)
+        termios.tcsetattr(fd, termios.TCSAFLUSH, previous)
+        os.write(fd, b'\n')
+        os.close(fd)
+
+
+def validate_password(password):
+    if len(password) < 16 or len(password.encode('utf-8')) > 1024 or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in password):
+        raise ValueError('Use at least 16 characters, at most 1024 UTF-8 bytes, and no control characters')
+    return password
+
+
+def password_input(from_stdin=False):
+    if from_stdin:
+        # A dedicated stdin stream, never a command argument, environment variable or JSON field.
+        return validate_password(sys.stdin.buffer.read(1025).decode('utf-8').removesuffix('\n').removesuffix('\r'))
+    while True:
+        password = read_secret('New administrator password (at least 16 characters): ')
+        try: validate_password(password)
+        except ValueError as exc:
+            print(exc)
+            continue
+        if password == read_secret('Confirm administrator password: '): return password
+        print('Passwords do not match. Try again.')
 
 
 def guided(existing=None):
     c = existing or {}
     print('Bungee local setup. No router settings, phone ownership or host firewall will be changed.')
-    while True:
-        try:
-            wg = network.port(ask('WireGuard UDP port (51820 forbidden)', c.get('wg_port')), True)
-            web = network.port(ask('Dashboard HTTPS TCP port', c.get('web_port', 8443)))
-            endpoint = network.address(ask('Numeric home-server address reachable by phones', c.get('endpoint_ip')), endpoint=True)
-            bind = network.management_address(ask('Internal management bind IP; 127.0.0.1 means local/SSH access only', c.get('bind_ip', '127.0.0.1')))
-            host = network.hostname(ask('Dashboard address used in your browser (no port)', c.get('web_host', bind if bind not in ('0.0.0.0', '::') else None)))
-            print('Use only your internal management IPs/prefixes. They must not overlap the phone C2 subnet.')
-            nets = network.admin_networks(ask('Allowed internal administrator networks', ' '.join(c['admin_subnets']) if c.get('admin_subnets') else None))
-            dns_value = ask('Optional DNS resolver IP (type off to disable)', c.get('dns_upstream_ip', ''))
-            dns = network.dns_upstream('' if dns_value == 'off' else dns_value)
-            dns_port = network.port(ask('DNS resolver port', c.get('dns_upstream_port', 53))) if dns else 53
-            size = int(ask('Encrypted storage capacity in GiB (new installations)', c.get('storage_size_gib', 8)))
-            channel = ask('Update channel: stable or preview', c.get('channel', 'stable'))
-            auto = ask('Check daily for tested images in that channel? yes/no', 'yes' if c.get('auto_updates', True) else 'no')
-            if auto not in ('yes', 'no'): raise ValueError('Answer yes or no')
-            return network.validate({**({'geodata': c['geodata']} if c.get('geodata') else {}), 'wg_port': wg, 'web_port': web, 'endpoint_ip': endpoint, 'bind_ip': bind, 'web_host': host, 'admin_subnets': nets, 'channel': channel, 'auto_updates': auto == 'yes', 'dns_upstream_ip': dns, 'dns_upstream_port': dns_port, 'storage_size_gib': size})
-        except ValueError as exc: print('Please correct:', exc)
+    wg = field('WireGuard UDP port (51820 forbidden)', c.get('wg_port'), lambda value: network.port(value, True))
+    web = field('Dashboard HTTPS TCP port', c.get('web_port', 8443), network.port)
+    endpoint = field('Numeric home-server address reachable by phones', c.get('endpoint_ip'), lambda value: network.address(value, endpoint=True))
+    bind = field('Internal management bind IP; 127.0.0.1 means local/SSH access only', c.get('bind_ip', '127.0.0.1'), network.management_address)
+    host = field('Dashboard address used in your browser (no port)', c.get('web_host', bind), network.hostname)
+    print('Use only your internal management IPs/prefixes. They must not overlap the phone C2 subnet.')
+    nets = field('Allowed internal administrator networks', ' '.join(c['admin_subnets']) if c.get('admin_subnets') else None, network.admin_networks)
+    dns = field('Optional DNS resolver IP (type off to disable)', c.get('dns_upstream_ip', ''), lambda value: network.dns_upstream('' if value == 'off' else value))
+    dns_port = field('DNS resolver port', c.get('dns_upstream_port', 53), network.port) if dns else 53
+    size = field('Encrypted storage capacity in GiB (new installations)', c.get('storage_size_gib', 8), storage_size)
+    channel = field('Update channel: stable or preview', c.get('channel', 'stable'), choice('stable', 'preview'))
+    auto = field('Check daily for tested images in that channel? yes/no', 'yes' if c.get('auto_updates', True) else 'no', choice('yes', 'no'))
+    return network.validate({**({'geodata': c['geodata']} if c.get('geodata') else {}), 'wg_port': wg, 'web_port': web, 'endpoint_ip': endpoint, 'bind_ip': bind, 'web_host': host, 'admin_subnets': nets, 'channel': channel, 'auto_updates': auto == 'yes', 'dns_upstream_ip': dns, 'dns_upstream_port': dns_port, 'storage_size_gib': size})
 
 
 def preflight(root, installing=False, config=None):
@@ -446,34 +529,140 @@ def preflight(root, installing=False, config=None):
                 sock.bind((config['bind_ip'] if protocol == socket.SOCK_STREAM else ('::' if ':' in config['bind_ip'] else '0.0.0.0'), number))
 
 
+SYSTEMD = Path('/etc/systemd/system')
+BOOT_FILES = (Path('/etc/crypttab'), Path('/etc/fstab'))
+UNITS = ('bungee-update.timer', 'bungee-update.service', 'bungee-recover.service')
+
+
+def uninstall_plan(root, purge=False):
+    if not root.is_absolute() or root == Path('/') or '..' in root.parts:
+        raise ValueError('Use the absolute Bungee installation root')
+    return {'root': str(root), 'stop': list(UNITS),
+            'remove': ['Bungee Compose containers and network', 'Bungee systemd units and Docker storage dependency',
+                       'Bungee crypttab/fstab entries'],
+            'storage': 'DELETE encrypted storage, local snapshots and keys' if purge else 'Unmount and close; preserve encrypted storage and keys',
+            'preserve': ['Docker and unrelated workloads', 'Docker images', 'external backups', 'phone apps and imported CA trust']}
+
+
+def uninstall(root, purge=False):
+    preflight(root)
+    host = Host(root)
+    generation = host.current()
+    # Validate every shared host file before stopping anything. Never remove a
+    # different installation's entries or follow symlinks into unrelated files.
+    expected = (f'bungee {secure_storage.IMAGE} {secure_storage.KEY} luks',
+                f'/dev/mapper/bungee {root} ext4 defaults,nodev,nosuid,noexec 0 2')
+    edits = []
+    for path, line in zip(BOOT_FILES, expected):
+        if path.is_symlink(): raise ValueError(f'Refusing symlink: {path}')
+        old = path.read_text()
+        matches = [row for row in old.splitlines() if row.split() == line.split()]
+        if len(matches) != 1: raise ValueError(f'Expected exactly one installer-owned entry in {path}')
+        edits.append((path, ''.join(row for row in old.splitlines(keepends=True) if row.split() != line.split())))
+    dropin = SYSTEMD / 'docker.service.d/bungee-storage.conf'
+    if dropin.is_symlink() or dropin.read_text() != f'[Unit]\nRequiresMountsFor={root}\nAfter=systemd-cryptsetup@bungee.service\n':
+        raise ValueError('Docker storage dependency differs from the installer; inspect it locally')
+    for name in UNITS:
+        path = SYSTEMD / name
+        if path.is_symlink(): raise ValueError(f'Refusing symlink: {path}')
+        content = path.read_text()
+        if (name.endswith('.service') and f'ExecStart=/usr/bin/python3 {root}/bungee-host.py ' not in content) or 'Bungee' not in content:
+            raise ValueError(f'Unit does not belong to this installation: {path}')
+    # A running updater owns this lock. Refuse instead of killing a transaction.
+    with (root / 'host.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        run(['systemctl', 'disable', '--now', 'bungee-update.timer'])
+        run(['systemctl', 'disable', 'bungee-recover.service'])
+        run(['systemctl', 'stop', 'bungee-update.service', 'bungee-recover.service'])
+        host.engine.hold(True)
+        host.engine.no_restart(generation)
+        host.engine.stop_helpers()
+        host.engine.down(generation)
+        if run(['docker', 'ps', '--all', '--quiet', '--filter', 'label=com.docker.compose.project=bungee']):
+            raise ValueError('Bungee containers remain; preserving storage and boot configuration')
+    # Do not detach storage until the runtime is gone. An open host.lock would
+    # itself keep the mount busy; release it before the normal (never lazy) unmount.
+    run(['umount', root])
+    run(['cryptsetup', 'close', secure_storage.MAPPER])
+    for path, content in edits:
+        # Keep system file permissions; atomic() deliberately creates private files.
+        mode = path.stat().st_mode & 0o777
+        atomic(path, content)
+        path.chmod(mode)
+    dropin.unlink()
+    for name in UNITS: (SYSTEMD / name).unlink()
+    run(['systemctl', 'daemon-reload'])
+    if purge:
+        secure_storage.IMAGE.unlink()
+        secure_storage.KEY.unlink()
+        (secure_storage.KEY.parent / 'backup-identity').unlink(missing_ok=True)
+    # Only empty directories are removed, never recursively delete the mountpoint.
+    for path in (root, dropin.parent, secure_storage.IMAGE.parent, secure_storage.KEY.parent):
+        try: path.rmdir()
+        except OSError: pass
+    print('Bungee host uninstalled. ' + ('Local encrypted storage and keys deleted.' if purge else
+          f'Encrypted data retained at {secure_storage.IMAGE}; keep {secure_storage.KEY.parent} with it for recovery.'))
+    print('Docker images, external backups, phone apps and imported CA trust were preserved.')
+
+
 def systemd(root):
     command = f'/usr/bin/python3 {root}/bungee-host.py'
     units = {
         'bungee-recover.service': f'[Unit]\nDescription=Recover an interrupted Bungee update\nRequires=docker.service\nRequiresMountsFor={root}\nAfter=docker.service\nBefore=bungee-update.service\n[Service]\nType=oneshot\nNoNewPrivileges=yes\nPrivateTmp=yes\nProtectSystem=full\nUMask=0077\nLimitCORE=0\nExecStart={command} recover --root {root}\nTimeoutStartSec=900\n[Install]\nWantedBy=multi-user.target\n',
         'bungee-update.service': f'[Unit]\nDescription=Check and transactionally update Bungee\nRequires=docker.service\nRequiresMountsFor={root}\nAfter=docker.service bungee-recover.service\nOnFailure=bungee-recover.service\n[Service]\nType=oneshot\nNoNewPrivileges=yes\nPrivateTmp=yes\nProtectSystem=full\nUMask=0077\nLimitCORE=0\nExecStart={command} update --root {root}\nTimeoutStartSec=1800\n',
         'bungee-update.timer': '[Unit]\nDescription=Daily Bungee security update check\n[Timer]\nOnBootSec=15min\nOnCalendar=daily\nRandomizedDelaySec=1h\nPersistent=true\n[Install]\nWantedBy=timers.target\n'}
-    for name, content in units.items(): atomic(Path('/etc/systemd/system') / name, content)
+    for name, content in units.items(): atomic(SYSTEMD / name, content)
     run(['systemctl', 'daemon-reload'])
     run(['systemctl', 'enable', 'bungee-recover.service'])
     run(['systemctl', 'enable', '--now', 'bungee-update.timer'])
 
 
-def install(root, config):
+def install_helpers(root):
+    for source, target in ((Path(__file__), root / 'bungee-host.py'), (module_path, root / 'network_config.py'), (release_path, root / 'release.json'), (HERE / 'secure_storage.py', root / 'secure_storage.py'), (HERE / 'tls_config.py', root / 'tls_config.py')):
+        atomic(target, source.read_text())
+
+
+def build_images():
+    if not (SOURCE / 'Dockerfile').is_file(): raise ValueError('Run this command from a source checkout')
+    tag = 'local-' + secrets.token_hex(8)
+    run(['docker', 'build', '--pull', '-t', f'bungee-gateway:{tag}', '-f', 'deploy/wireguard/Dockerfile', 'deploy'], cwd=SOURCE, timeout=3600)
+    run(['docker', 'build', '--pull', '-t', f'bungee-server:{tag}', '.'], cwd=SOURCE, timeout=3600)
+    return {name: json.loads(run(['docker', 'image', 'inspect', f'bungee-{name}:{tag}']))[0]['Id'] for name in ('gateway', 'server')}
+
+
+def rebuild(host):
+    host.recover()
+    old = host.current()
+    if any(host.metadata(old)[key] != RELEASE[key] for key in ('host_api', 'data_contract')):
+        raise ValueError('This checkout requires a separate host/data migration')
+    images = build_images()
+    metadata = {'format': 1, 'host_api': RELEASE['host_api'], 'data_contract': RELEASE['data_contract'], 'version': VERSION, 'published_at': int(time.time()), 'images': images}
+    host.apply(read(host.root / 'generations' / old / 'config.json'), metadata)
+    install_helpers(host.root)
+    print('Local rebuild installed:', VERSION)
+
+
+def install(root, config, from_stdin=False):
     preflight(root, installing=True, config=config)
-    # Invocation-specific tags prevent two first-install builds from mixing images.
-    install_tag = 'install-' + secrets.token_hex(8)
-    run(['docker', 'build', '--pull', '-t', f'bungee-gateway:{install_tag}', '-f', 'deploy/wireguard/Dockerfile', 'deploy'], cwd=SOURCE)
-    run(['docker', 'build', '--pull', '-t', f'bungee-server:{install_tag}', '.'], cwd=SOURCE)
-    run(['docker', 'run', '--rm', '--network', 'none', '--cap-drop', 'ALL', '--cap-add', 'NET_ADMIN', '--entrypoint', 'sh', f'bungee-gateway:{install_tag}', '-ec', 'ip link add bungee-check type wireguard; ip link delete bungee-check'])
+    images = build_images()
+    password = password_input(from_stdin)
+    try:
+        verifier = run(['docker', 'run', '--rm', '-i', '--network', 'none', '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true', images['server'], '--hash-admin-password'], input=password)
+    finally:
+        del password
+    if not verifier.startswith('$argon2id$'): raise ValueError('Server did not return an Argon2id verifier')
+    run(['docker', 'run', '--rm', '--network', 'none', '--cap-drop', 'ALL', '--cap-add', 'NET_ADMIN', '--entrypoint', 'sh', images['gateway'], '-ec', 'ip link add bungee-check type wireguard; ip link delete bungee-check'])
     secure_storage.provision(root, config.get('storage_size_gib', 8))
     run(['age-keygen', '-o', secure_storage.KEY.parent / 'backup-identity'])
     (secure_storage.KEY.parent / 'backup-identity').chmod(0o600)
     with (root / 'host.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         atomic(root / 'control/status', 'closed\n')
-        for source, target in ((Path(__file__), root / 'bungee-host.py'), (module_path, root / 'network_config.py'), (release_path, root / 'release.json'), (HERE / 'secure_storage.py', root / 'secure_storage.py'), (HERE / 'tls_config.py', root / 'tls_config.py')):
-            atomic(target, source.read_text())
-        images = {name: json.loads(run(['docker', 'image', 'inspect', f'bungee-{name}:{install_tag}']))[0]['Id'] for name in ('gateway', 'server')}
+        install_helpers(root)
+        credential = root / 'volumes/server-data/admin-password.hash'
+        credential.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        atomic(credential, verifier + '\n')
+        os.chown(credential, 10001, 10001)
         metadata = {'format': 1, 'host_api': RELEASE['host_api'], 'data_contract': RELEASE['data_contract'], 'version': VERSION, 'published_at': 0, 'images': images}
         host = Host(root)
         generation = host.stage(config, metadata)
@@ -499,15 +688,18 @@ def install(root, config):
     print('Public CA certificate:', root / 'root.crt')
     print('Trust the local CA using an authenticated channel before signing in. No TLS-verification bypass is provided.')
     print(f'Local operations: sudo python3 {root}/bungee-host.py status --root {root}')
-    print('Read the password locally with docker compose -p bungee -f', root / 'generations' / generation / 'compose.json', 'exec -T server cat /state/admin-password')
+    print('Sign in with the administrator password you chose. Change it in Settings → Administrator password.')
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['install', 'configure', 'update', 'recover', 'status', 'datasets'])
+    parser.add_argument('command', choices=['install', 'configure', 'update', 'recover', 'status', 'datasets', 'uninstall', 'password', 'rebuild'])
+    parser.add_argument('--password-stdin', action='store_true', help='With install/password: read the new password from a dedicated stdin pipe')
     parser.add_argument('--root', type=Path, default=Path('/opt/bungee'))
     parser.add_argument('--config', type=Path, help='Explicit JSON answers for unattended installation/configuration')
     parser.add_argument('--plan', action='store_true', help='Validate answers and print a plan; write nothing and contact no services')
+    parser.add_argument('--purge', action='store_true', help='With uninstall: also delete local encrypted storage, snapshots and keys')
+    parser.add_argument('--yes', action='store_true', help='With uninstall: apply without an interactive confirmation')
     parser.add_argument('--start', action='store_true', help='With recover: explicitly start a stopped/unfinished installation')
     parser.add_argument('--manual', action='store_true', help='With update: explicitly check even if automatic checks are disabled')
     parser.add_argument('--maps', type=Path, help='With datasets: local raster OpenStreetMap MBTiles file')
@@ -515,6 +707,8 @@ if __name__ == '__main__':
     parser.add_argument('--clear-maps', action='store_true', help='With datasets: remove the basemap from the active generation')
     parser.add_argument('--clear-geoip', action='store_true', help='With datasets: disable future GeoIP enrichment; saved history remains')
     args = parser.parse_args()
+    if args.password_stdin and args.command not in ('install', 'password'): parser.error('--password-stdin requires install/password')
+    if (args.purge or args.yes) and args.command != 'uninstall': parser.error('--purge/--yes require uninstall')
     if any((args.maps, args.geoip, args.clear_maps, args.clear_geoip)) and args.command != 'datasets': parser.error('Dataset options require datasets')
     if args.command == 'datasets' and (not any((args.maps, args.geoip, args.clear_maps, args.clear_geoip)) or (args.maps and args.clear_maps) or (args.geoip and args.clear_geoip)): parser.error('Choose datasets to import or clear, without conflicting options')
     if args.start and args.command != 'recover': parser.error('--start is only valid with recover')
@@ -526,6 +720,14 @@ if __name__ == '__main__':
         parser.error('Cannot disable host helper process dumps')
     try:
         root = args.root.absolute()
+        if args.command == 'uninstall':
+            print(json.dumps(uninstall_plan(root, args.purge), indent=2))
+            if args.plan: sys.exit(0)
+            confirmation = 'PURGE' if args.purge else 'UNINSTALL'
+            if not args.yes and ask(f'Type {confirmation} to continue') != confirmation:
+                sys.exit('No changes made')
+            uninstall(root, args.purge)
+            sys.exit(0)
         host = Host(root)
         if args.command in ('install', 'configure'):
             existing = read(root / 'generations' / host.current() / 'config.json') if args.command == 'configure' else None
@@ -535,7 +737,7 @@ if __name__ == '__main__':
             if not args.config and ask('Apply this configuration? Type INSTALL' if args.command == 'install' else 'Apply this configuration? Type APPLY') != ('INSTALL' if args.command == 'install' else 'APPLY'):
                 sys.exit('No changes made')
         elif args.plan: raise ValueError('--plan is for install/configure only')
-        if args.command == 'install': install(root, CONFIG)
+        if args.command == 'install': install(root, CONFIG, args.password_stdin)
         else:
             preflight(root)
             with (root / 'host.lock').open('a') as lock:
@@ -545,6 +747,14 @@ if __name__ == '__main__':
                     host.renew_tls()
                     if args.start and not (root / 'transaction.json').exists():
                         host.engine.up(host.current()); host.engine.healthy(host.current()); systemd(root); host.finish(host.current())
+                elif args.command == 'password':
+                    host.recover()
+                    password = password_input(args.password_stdin)
+                    try:
+                        print(run(['docker', 'compose', '--project-name', 'bungee', '--file', root / 'generations' / host.current() / 'compose.json', 'exec', '-T', 'server', '/usr/local/bin/bungee-server', '--set-admin-password'], input=password))
+                    finally:
+                        del password
+                elif args.command == 'rebuild': rebuild(host)
                 elif args.command == 'update': host.update(manual=args.manual)
                 elif args.command == 'datasets': host.datasets(args.maps, args.geoip, args.clear_maps, args.clear_geoip)
                 elif args.command == 'configure': host.apply(CONFIG, host.metadata(host.current()))
@@ -553,5 +763,5 @@ if __name__ == '__main__':
                     print('Maintenance:', (root / 'control/status').read_text().strip())
                     print('Interrupted transaction:', (root / 'transaction.json').exists())
                     print(host.engine.compose(host.current(), 'ps', '--all'))
-    except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
+    except (ValueError, OSError, RuntimeError, EOFError, subprocess.SubprocessError) as exc:
         sys.exit(f'Bungee operation failed: {exc}. Inspect local status; phone configuration was not changed.')

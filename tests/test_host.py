@@ -119,6 +119,23 @@ class TransactionTests(unittest.TestCase):
         self.engine.old = self.old
         host.atomic(self.root / 'current.json', {'generation': self.old})
         host.atomic(self.root / 'control/status', 'open')
+    def test_local_rebuild_preserves_configuration_and_refreshes_helper_after_acceptance(self):
+        images = {service: 'sha256:' + 'b' * 64 for service in ('server', 'gateway')}
+        with patch.object(host, 'build_images', return_value=images), patch.object(host, 'install_helpers') as helper:
+            host.rebuild(self.host)
+        self.assertNotEqual(self.host.current(), self.old)
+        self.assertEqual(self.host.metadata(self.host.current())['images'], images)
+        self.assertEqual(host.read(self.root / 'generations' / self.host.current() / 'config.json'), CONFIG)
+        self.assertIn('backup', self.engine.events)
+        self.assertEqual(self.engine.events[-1], 'open')
+        helper.assert_called_once_with(self.root)
+    def test_failed_local_rebuild_rolls_back_without_replacing_installed_helper(self):
+        self.engine.fail = 'healthy-new'
+        with patch.object(host, 'build_images', return_value=metadata()['images']), patch.object(host, 'install_helpers') as helper:
+            with self.assertRaises(RuntimeError): host.rebuild(self.host)
+        self.assertEqual(self.host.current(), self.old)
+        self.assertIn('restore', self.engine.events)
+        helper.assert_not_called()
     def test_download_failure_causes_no_downtime_or_backup(self):
         self.engine.fail = 'pull'
         with self.assertRaises(RuntimeError): self.host.apply(CONFIG, metadata())
