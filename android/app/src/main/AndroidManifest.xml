@@ -21,7 +21,7 @@
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
         </activity>
         <activity android:name=".CameraRecoveryActivity" android:exported="false" android:excludeFromRecents="true" android:noHistory="true" android:taskAffinity="org.bungee.app.cameraRecovery"/>
-        <activity android:name=".LocalRecoveryActivity" android:label="Bungee recovery" android:exported="true">
+        <activity android:name=".LocalRecoveryActivity" android:label="Bungee recovery" android:icon="@mipmap/ic_recovery" android:exported="true">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
         </activity>
         <service android:name="com.wireguard.android.backend.GoBackend$VpnService" tools:node="remove"/>
