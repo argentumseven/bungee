@@ -6,6 +6,7 @@ mod export;
 mod geography;
 mod history;
 mod management;
+mod maps;
 mod photos;
 mod recurrence;
 mod release;
@@ -144,6 +145,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/geography", get(geography::status))
         .route("/api/maps/archive.pmtiles", get(geography::vector_archive))
+        .route("/api/maps/regions/{id}/archive.pmtiles", get(maps::archive))
+        .route("/api/maps/manage", get(maps::status))
+        .route("/api/maps/jobs", post(maps::queue))
+        .route("/api/maps/jobs/{id}", delete(maps::cancel))
         .route("/api/maps/{z}/{x}/{y}", get(geography::tile))
         .route("/api/devices", get(api::devices))
         .route("/api/enrollments", post(enrollment::create_enrollment))
@@ -205,6 +210,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/v1/commands", post(api::poll))
         .route("/v1/command-check", post(api::check_command))
+        .route("/v1/dns-check", post(dns::check_path))
         .route("/v1/ack", post(api::ack))
         .route("/v1/sync", post(management::sync))
         .layer(middleware::from_fn_with_state(

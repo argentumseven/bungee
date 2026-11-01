@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import secure_storage
 import tls_config
 import regional_maps
+import map_manager
 
 HERE = Path(__file__).resolve().parent
 SOURCE = HERE.parent
@@ -180,7 +181,7 @@ def compose(config, images, root):
             healthcheck={'test': ['CMD', 'wg', 'show', 'wg0'], 'interval': '10s', 'timeout': '3s', 'retries': 5}),
         'server': service(images['server'], network_mode='service:gateway', depends_on={'gateway': {'condition': 'service_healthy'}},
             environment={**PRIVATE_ENV, **dns, 'BUNGEE_PUBLIC_ORIGIN': network.origin(c), 'BUNGEE_ADMIN_BIND': '0.0.0.0:8443', 'BUNGEE_ADMIN_INTERFACE': 'eth0', 'BUNGEE_ADMIN_SUBNETS': ' '.join(c['admin_subnets']), 'BUNGEE_DEVICE_BIND': '10.77.0.1:8081', 'BUNGEE_WG_ENDPOINT': f"{network.bracket(c['endpoint_ip'])}:{c['wg_port']}", 'BUNGEE_TLS_CERT_FILE': '/tls/current/server.crt', 'BUNGEE_TLS_KEY_FILE': '/tls/current/server.key'},
-            tmpfs=['/tmp:size=16m'], volumes=[bind('server-data', '/state'), bind('gateway-peers', '/state/wireguard'), bind('tls-data/issued', '/tls', True), {'type': 'bind', 'source': str(dataset), 'target': '/datasets', 'read_only': True, 'bind': {'create_host_path': False}}])
+            tmpfs=['/tmp:size=16m'], volumes=[bind('server-data', '/state'), bind('gateway-peers', '/state/wireguard'), bind('tls-data/issued', '/tls', True), {'type': 'bind', 'source': str(dataset), 'target': '/datasets', 'read_only': True, 'bind': {'create_host_path': False}}, *[{'type':'bind','source':str(root/source),'target':target,'read_only':readonly,'bind':{'create_host_path':False}} for source,target,readonly in [('maps','/maps',True),('map-control/status','/map-control/status',True),('map-control/requests','/map-control/requests',False)]]])
     }}
 
 
@@ -292,6 +293,7 @@ class Host:
         return gen
     def metadata(self, gen): return read(self.root / 'generations' / gen / 'release.json')
     def stage(self, config, metadata):
+        map_manager.setup(self.root)
         for name in VOLUMES:
             (self.root / 'volumes' / name).mkdir(parents=True, exist_ok=True, mode=0o700)
         dataset = self.root / 'datasets' / config.get('geodata', 'empty')
@@ -534,6 +536,38 @@ def password_input(from_stdin=False):
         print('Passwords do not match. Try again.')
 
 
+def choose_maps(selected=None):
+    catalog=regional_maps.region_catalog(default_basemap().parent/'regions.json')
+    chosen=set(selected or [])
+    groups=list(dict.fromkeys(item['group'] for item in catalog.values()))
+    print('\nRegional street maps. Sizes shown here are rough; exact sizes are planned before download.')
+    while True:
+        print('Selected total: approximately %.2f GiB (%d regions)' % (sum(catalog[key]['estimated_bytes'] for key in chosen)/1024**3,len(chosen)))
+        for index,group in enumerate(groups,1): print(f'  {index}. {group}')
+        group=ask('Choose a group number, or done to finish','1' if not chosen else 'done')
+        if group=='done':
+            if chosen or field('No street maps selected. Continue with overview only? yes/no','no',choice('yes','no'))=='yes':
+                return sorted(chosen)
+            continue
+        if not group.isdecimal() or not 1<=int(group)<=len(groups): print('Choose a listed group.');continue
+        rows=[item for item in catalog.values() if item['group']==groups[int(group)-1]]
+        while True:
+            for index,item in enumerate(rows,1): print(f'  [{"x" if item["id"] in chosen else " "}] {index}. {item["name"]} · ~{item["estimated_bytes"]/1024**3:.2f} GiB')
+            print('Combined selection: ~%.2f GiB. Maximum 24 regions / 25 GB of installed street maps.' % (sum(catalog[key]['estimated_bytes'] for key in chosen)/1024**3))
+            answer=ask('Numbers to toggle (commas/spaces), or back/done','back')
+            if answer=='done':
+                if chosen or field('No street maps selected. Continue with overview only? yes/no','no',choice('yes','no'))=='yes': return sorted(chosen)
+                continue
+            if answer=='back': break
+            try:
+                numbers=[int(value) for value in re.split('[, ]+',answer)]
+                if any(value<1 or value>len(rows) for value in numbers): raise ValueError()
+                updated=chosen.symmetric_difference(rows[value-1]['id'] for value in numbers)
+                if len(updated)>24: raise ValueError()
+                chosen=updated
+            except ValueError: print('Choose listed numbers, up to 24 regions overall.')
+
+
 def guided(existing=None):
     c = existing or {}
     print('Bungee local setup. No router settings, phone ownership or host firewall will be changed.')
@@ -547,12 +581,15 @@ def guided(existing=None):
     dns = field('Optional DNS resolver IP (type off to disable)', c.get('dns_upstream_ip', ''), lambda value: network.dns_upstream('' if value == 'off' else value))
     dns_port = field('DNS resolver port', c.get('dns_upstream_port', 53), network.port) if dns else 53
     size = field('Encrypted storage capacity in GiB (new installations)', c.get('storage_size_gib', 32), storage_size)
+    maps = choose_maps(c.get('map_regions',[]))
     channel = field('Update channel: stable or preview', c.get('channel', 'stable'), choice('stable', 'preview'))
     auto = field('Check daily for tested images in that channel? yes/no', 'yes' if c.get('auto_updates', True) else 'no', choice('yes', 'no'))
-    return network.validate({**({'geodata': c['geodata']} if c.get('geodata') else {}), 'wg_port': wg, 'web_port': web, 'endpoint_ip': endpoint, 'bind_ip': bind, 'web_host': host, 'admin_subnets': nets, 'channel': channel, 'auto_updates': auto == 'yes', 'dns_upstream_ip': dns, 'dns_upstream_port': dns_port, 'storage_size_gib': size})
+    return network.validate({**({'geodata': c['geodata']} if c.get('geodata') else {}), 'wg_port': wg, 'web_port': web, 'endpoint_ip': endpoint, 'bind_ip': bind, 'web_host': host, 'admin_subnets': nets, 'channel': channel, 'auto_updates': auto == 'yes', 'dns_upstream_ip': dns, 'dns_upstream_port': dns_port, 'storage_size_gib': size,'map_regions':maps})
 
 
 def preflight(root, installing=False, config=None):
+    if installing and config and config.get('map_regions'):
+        regional_maps.selection(regional_maps.region_catalog(default_basemap().parent/'regions.json'),config['map_regions'])
     if sys.platform != 'linux' or os.geteuid() != 0: raise ValueError('Run on the local Linux server with sudo. --plan needs no root or Docker access')
     if not re.fullmatch(r'/[A-Za-z0-9_./-]+', str(root)) or '..' in root.parts:
         raise ValueError('Use an absolute installation path without spaces or parent traversal')
@@ -584,7 +621,7 @@ def preflight(root, installing=False, config=None):
 
 SYSTEMD = Path('/etc/systemd/system')
 BOOT_FILES = (Path('/etc/crypttab'), Path('/etc/fstab'))
-UNITS = ('bungee-update.timer', 'bungee-update.service', 'bungee-recover.service')
+UNITS = ('bungee-update.timer', 'bungee-maps.service', 'bungee-update.service', 'bungee-recover.service')
 
 
 def uninstall_plan(root, purge=False):
@@ -664,22 +701,30 @@ def systemd(root):
         'bungee-recover.service': f'[Unit]\nDescription=Recover an interrupted Bungee update\nRequires=docker.service\nRequiresMountsFor={root}\nAfter=docker.service\nBefore=bungee-update.service\n[Service]\nType=oneshot\nNoNewPrivileges=yes\nPrivateTmp=yes\nProtectSystem=full\nUMask=0077\nLimitCORE=0\nExecStart={command} recover --root {root}\nTimeoutStartSec=900\n[Install]\nWantedBy=multi-user.target\n',
         'bungee-update.service': f'[Unit]\nDescription=Check and transactionally update Bungee\nRequires=docker.service\nRequiresMountsFor={root}\nAfter=docker.service bungee-recover.service\nOnFailure=bungee-recover.service\n[Service]\nType=oneshot\nNoNewPrivileges=yes\nPrivateTmp=yes\nProtectSystem=full\nUMask=0077\nLimitCORE=0\nExecStart={command} update --root {root}\nTimeoutStartSec=1800\n',
         'bungee-update.timer': '[Unit]\nDescription=Daily Bungee security update check\n[Timer]\nOnBootSec=15min\nOnCalendar=daily\nRandomizedDelaySec=1h\nPersistent=true\n[Install]\nWantedBy=timers.target\n'}
+    units['bungee-maps.service']=f'[Unit]\nDescription=Bungee regional map downloads\nRequiresMountsFor={root}\nAfter=docker.service\n[Service]\nType=simple\nNoNewPrivileges=yes\nPrivateTmp=yes\nProtectSystem=full\nUMask=0077\nLimitCORE=0\nMemoryMax=1G\nTasksMax=128\nExecStart={command} map-worker --root {root}\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=15\n[Install]\nWantedBy=multi-user.target\n'
     for name, content in units.items(): atomic(SYSTEMD / name, content)
     run(['systemctl', 'daemon-reload'])
     run(['systemctl', 'enable', 'bungee-recover.service'])
     run(['systemctl', 'enable', '--now', 'bungee-update.timer'])
+    run(['systemctl', 'enable', '--now', 'bungee-maps.service'])
 
 
 def install_helpers(root):
     for source, target in ((Path(__file__), root / 'bungee-host.py'), (module_path, root / 'network_config.py'), (release_path, root / 'release.json'), (HERE / 'secure_storage.py', root / 'secure_storage.py'), (HERE / 'tls_config.py', root / 'tls_config.py')):
         atomic(target, source.read_text())
     copy_public_file(HERE / 'regional_maps.py', root / 'regional_maps.py')
+    copy_public_file(HERE / 'map_manager.py', root / 'map_manager.py')
     source = default_basemap()
     for name in ('geoip.json','dbip-city-ipv4.mmdb.gz','dbip-city-ipv6.mmdb.gz'):
         copy_public_file(source.parent / name,root / 'basemap' / name)
     copy_public_file(source.parent / 'us.geojson', root / 'basemap/us.geojson')
+    copy_public_file(source.parent / 'regions.json', root / 'basemap/regions.json')
     copy_public_file(source, root / 'basemap/world.mbtiles')
     atomic(root / 'basemap/world.mbtiles.sha256', source.with_suffix('.mbtiles.sha256').read_text())
+    map_manager.setup(root)
+    if (root/'current.json').exists():
+        systemd(root)
+        run(['systemctl','restart','bungee-maps.service'])
 
 
 def build_images():
@@ -730,23 +775,31 @@ def install_default_geodata(host):
         else: print('Existing map and GeoIP datasets preserved. This step does not install street detail.')
 
 
-def install_us_maps(host):
+def install_selected_maps(host, identifiers, plan_only=False):
     host.recover()
-    config = read(host.root / 'generations' / host.current() / 'config.json')
-    current = host.root / 'datasets' / config.get('geodata', 'empty')
-    # This command is explicit, but never silently replaces an operator's custom dataset.
-    if (current / 'map.pmtiles').exists():
-        print('A street-map archive is already installed. Use datasets --maps for an explicit replacement.'); return
-    existing=current / 'map.mbtiles'
-    if existing.exists() and checksum(existing)!=checksum(default_basemap()):
-        raise ValueError('Custom map preserved; import a new archive explicitly with datasets --maps')
-    import tempfile
-    with tempfile.TemporaryDirectory(prefix='us-import-',dir=host.root/'datasets') as work:
-        archive=Path(work)/'us.pmtiles'
-        metadata=regional_maps.acquire(host.root,default_basemap().parent/'us.geojson',archive)
-        host.datasets(maps=archive)
-        atomic(host.root/'datasets'/read(host.root/'generations'/host.current()/'config.json')['geodata']/'source.json',metadata)
-    print('US street map installed locally. Open Tracking in the dashboard.')
+    if version(host.metadata(host.current())['version']) < version('1.1.8'):
+        raise ValueError('Update the server with this checkout before installing regional maps: python3 scripts/bungee-host.py rebuild')
+    map_manager.setup(host.root)
+    with (host.root/'maps.lock').open('a') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        catalog_path=default_basemap().parent/'regions.json'
+        installed={item['id'] for item in map_manager.library(host.root)['regions']}
+        wanted=[identifier for identifier in identifiers if identifier not in installed]
+        if not wanted:
+            print('All selected regional street maps are already installed.');return
+        progress=lambda message: print(message,flush=True)
+        plan=map_manager.plan_selection(host.root,catalog_path,wanted,progress)
+        disk=map_manager.capacity(host.root)
+        print('Combined planned download: %.2f GiB; safe free capacity: %.2f GiB after reserves.' % (plan['planned_bytes']/1024**3,disk['available_bytes']/1024**3),flush=True)
+        if not plan_only:
+            map_manager.install_plan(host.root,catalog_path,plan,progress)
+            map_manager.public_status(host.root,catalog_path,{'job':{'state':'completed','message':'Regional street maps installed.'}})
+            print('US street map installed locally. Open Tracking in the dashboard.' if all(value.startswith('us-') for value in wanted) else 'Regional street maps installed locally. Open Tracking in the dashboard.')
+
+
+def install_us_maps(host, plan_only=False):
+    identifiers=[key for key in regional_maps.region_catalog(default_basemap().parent/'regions.json') if key.startswith('us-')]
+    install_selected_maps(host,identifiers,plan_only)
 
 
 def install(root, config, from_stdin=False):
@@ -772,6 +825,11 @@ def install(root, config, from_stdin=False):
         os.chown(credential, 10001, 10001)
         metadata = {'format': 1, 'host_api': RELEASE['host_api'], 'data_contract': RELEASE['data_contract'], 'version': VERSION, 'published_at': 0, 'images': images}
         host = Host(root)
+        if args.command == 'map-worker':
+            secure_storage.check(root)
+            while True:
+                map_manager.tick(root,default_basemap().parent/'regions.json')
+                time.sleep(3)
         generation = host.stage(config, metadata)
         atomic(root / 'current.json', {'generation': generation})
         os.chown(root / 'volumes/server-data', 10001, 10001)
@@ -792,10 +850,11 @@ def install(root, config, from_stdin=False):
     try:
         with (root / 'host.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            install_us_maps(host)
+            if config.get('map_regions'): install_selected_maps(host,config['map_regions'])
+            else: print('Overview only selected. Add regional street maps in Settings → Maps & storage.')
     except Exception as error:
-        print('US street-map download did not complete:', error)
-        print('The server is running with its world overview and GeoIP. Retry: python3 /opt/bungee/bungee-host.py maps-us')
+        print('Selected street-map downloads did not complete:', error)
+        print('The server is running. Retry the selected maps in Settings → Maps & storage, or use the maps command.')
     print('Installed:', network.origin(config))
     fingerprint = hashlib.sha256(ssl.PEM_cert_to_DER_cert(certificate)).hexdigest().upper()
     print('Local CA SHA-256 fingerprint:', ':'.join(fingerprint[i:i+2] for i in range(0, len(fingerprint), 2)))
@@ -807,11 +866,11 @@ def install(root, config, from_stdin=False):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['install', 'configure', 'update', 'recover', 'status', 'datasets', 'basemap', 'geodata', 'maps-us', 'uninstall', 'password', 'rebuild'])
+    parser.add_argument('command', choices=['install', 'configure', 'update', 'recover', 'status', 'datasets', 'basemap', 'geodata', 'maps-us', 'maps', 'map-worker', 'uninstall', 'password', 'rebuild'])
     parser.add_argument('--password-stdin', action='store_true', help='With install/password: read the new password from a dedicated stdin pipe')
     parser.add_argument('--root', type=Path, default=Path('/opt/bungee'))
     parser.add_argument('--config', type=Path, help='Explicit JSON answers for unattended installation/configuration')
-    parser.add_argument('--plan', action='store_true', help='Validate answers and print a plan; write nothing and contact no services')
+    parser.add_argument('--plan', action='store_true', help='With install/configure/uninstall: offline plan. With maps/maps-us: query provider sizes without installing archives')
     parser.add_argument('--purge', action='store_true', help='With uninstall: also delete local encrypted storage, snapshots and keys')
     parser.add_argument('--yes', action='store_true', help='With uninstall: apply without an interactive confirmation')
     parser.add_argument('--start', action='store_true', help='With recover: explicitly start a stopped/unfinished installation')
@@ -820,7 +879,9 @@ if __name__ == '__main__':
     parser.add_argument('--geoip', type=Path, help='With datasets: local City MMDB file')
     parser.add_argument('--clear-maps', action='store_true', help='With datasets: remove the basemap from the active generation')
     parser.add_argument('--clear-geoip', action='store_true', help='With datasets: disable future GeoIP enrichment; saved history remains')
+    parser.add_argument('--regions', help='With maps: comma-separated region IDs; omitted opens the regional checklist')
     args = parser.parse_args()
+    if args.regions and args.command != 'maps': parser.error('--regions requires maps')
     if args.password_stdin and args.command not in ('install', 'password'): parser.error('--password-stdin requires install/password')
     if (args.purge or args.yes) and args.command != 'uninstall': parser.error('--purge/--yes require uninstall')
     if any((args.maps, args.geoip, args.clear_maps, args.clear_geoip)) and args.command != 'datasets': parser.error('Dataset options require datasets')
@@ -870,9 +931,12 @@ if __name__ == '__main__':
                         del password
                 elif args.command == 'rebuild': rebuild(host)
                 elif args.command == 'geodata': install_default_geodata(host)
+                elif args.command == 'maps':
+                    selected_maps=args.regions.split(',') if args.regions else choose_maps()
+                    if selected_maps: install_selected_maps(host,selected_maps,args.plan)
                 elif args.command == 'maps-us':
                     install_default_geodata(host)
-                    install_us_maps(host)
+                    install_us_maps(host,args.plan)
                 elif args.command == 'basemap':
                     install_basemap(host)
                 elif args.command == 'update': host.update(manual=args.manual)

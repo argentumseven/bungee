@@ -5,12 +5,13 @@ import { api } from "./api";
 type Photo = { id: string; device_id?: string; device_name?: string; captured_at: number; received_at: number; failed_attempts: number; reason: "failed_unlock" | "local_test" };
 type Album = { photos: Photo[]; next_before: number | null };
 export function RecoveryPhotos({ deviceId }: { deviceId?: string }) {
-  const [open, setOpen] = useState(false), [before, setBefore] = useState<number | null>(null);
+  const [open, setOpen] = useState(true), [before, setBefore] = useState<number | null>(null);
   const [album, setAlbum] = useState<Album | null>(null), [reload, setReload] = useState(0);
   const [error, setError] = useState(""), [confirm, setConfirm] = useState(false), [busy, setBusy] = useState(false);
   const path = deviceId ? `/devices/${encodeURIComponent(deviceId)}/photos` : "/photos";
   const imagePath = (photo: Photo) => `/devices/${encodeURIComponent(deviceId || photo.device_id || "")}/photos/${encodeURIComponent(photo.id)}`;
   useEffect(()=>{setAlbum(null);},[path,open,before]);
+  useEffect(()=>{setBefore(null);},[path]);
   useEffect(() => {
     if (!open) return;
     const abort = new AbortController();

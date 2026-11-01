@@ -22,6 +22,13 @@ pub async fn vector_archive(
         .pmtiles
         .as_ref()
         .ok_or(Error(StatusCode::NOT_FOUND, "No street map installed"))?;
+    serve_vector(path, request).await
+}
+
+pub async fn serve_vector(
+    path: &std::path::Path,
+    request: axum::extract::Request,
+) -> ApiResult<axum::response::Response> {
     // PMTiles uses bounded byte ranges, never a full-world response in memory.
     let range = request
         .headers()
@@ -227,7 +234,9 @@ fn public_ip(ip: IpAddr) -> bool {
 }
 pub async fn status(State(app): State<App>, headers: HeaderMap) -> ApiResult<Json<Value>> {
     require_admin(&app, &headers)?;
-    Ok(Json(app.geography.status.clone()))
+    let mut status = app.geography.status.clone();
+    status["regions"] = crate::maps::installed()?;
+    Ok(Json(status))
 }
 pub async fn tile(
     State(app): State<App>,

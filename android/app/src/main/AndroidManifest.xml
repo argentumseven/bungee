@@ -23,9 +23,7 @@
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
         </activity>
         <activity android:name=".CameraRecoveryActivity" android:exported="false" android:excludeFromRecents="true" android:noHistory="true" android:taskAffinity="org.bungee.app.cameraRecovery"/>
-        <activity android:name=".LocalRecoveryActivity" android:label="Bungee recovery" android:icon="@mipmap/ic_recovery" android:exported="true">
-            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
-        </activity>
+        <activity android:name=".LocalRecoveryActivity" android:label="Bungee recovery" android:exported="false"/>
         <service android:name="com.wireguard.android.backend.GoBackend$VpnService" tools:node="remove"/>
         <service android:name=".TelemetryService" android:exported="false" android:foregroundServiceType="location|specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-visible private household recovery connection while location is paused"/>

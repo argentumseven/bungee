@@ -142,3 +142,11 @@ The [first review](REVIEW-2026-10.md), [second review](REVIEW-2026-10-SECOND.md)
 ## Removal and ownership failures
 
 [REMOVAL_AUDIT.md](REMOVAL_AUDIT.md) records the role guards, asynchronous administration removal, pairing cancellation and recovery limits. Android Settings disables force-stop while administration remains active. Deactivate ordinary administration first; owner roles have separate OS removal rules.
+
+## Regional-map host boundary and action stops
+
+The regional-map worker is installed by the guided host installer/rebuild. The app container receives read-only map archives and host status, plus a dedicated writable request directory. Only authenticated same-origin administrators can queue plan/install/remove jobs. The root worker independently limits input size, uses no-follow regular/single-link file reads, validates actions/region IDs against its bundled catalogue, and never accepts a caller-supplied URL, local path or executable command. The external extraction binary is pinned and checksummed. Downloads have file-size/time/process-memory limits and live disk-capacity checks; publication uses verified files and an atomic local manifest. A map request cannot obtain Docker access or modify phone state. Public map-library files are separate from phone data snapshots.
+
+Stop-all cancels earlier outstanding commands and lost mode in one server transaction before urgent delivery. The phone's independent stop path cancels remote action work, sound and torch and fences stale management responses. It does not erase data, revoke pairing, reset credentials or undo an Android lock already performed. Camera failure monitoring retains local consent/failure-count/rate limits and reports OS refusals rather than asserting a capture occurred.
+
+The signed DNS path diagnostic forwards only a fixed test query and requires no retired owner consent. Upstream completion rechecks device revocation before recording. DNS rollups explicitly identify the synthetic test; current personal enrollment still cannot route other applications' DNS through the app-only tunnel. Android-reported DNS configuration is labelled as configuration, not browsing/capture evidence. No Android VPN service or system resolver override was added.

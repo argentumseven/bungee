@@ -15,7 +15,7 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.*
 
-/** Independent entry for damaged app state; the same panel also lives in ordinary Bungee. */
+/** Internal offline fallback for damaged state; recovery is reached through the main Bungee app. */
 class LocalRecoveryActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         AppearancePreference.applyTo(this)

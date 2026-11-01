@@ -12,3 +12,5 @@ Neither fixture is installed in production images or sent to a provider.
 use it instead of a person's image. It is never bundled with the production app.
 
 `recovery-detail-test.jpg` is a deterministic, synthetic 2048×1536 colour/noise detail pattern, encoded at JPEG quality 90. It contains no person, EXIF or real camera capture. The maintainer-only `make_recovery_detail.py` reproduces it with Pillow; tests read the checked-in JPEG and need no image library.
+
+`vector_map.py --detail` builds a deterministic synthetic PMTiles/MVT archive with a z15 road named “Synthetic Main Street” near 33,-80. The managed-map browser test exercises the real local renderer and street-label lookup using it. Its internal directories/metadata use gzip, matching production Protomaps extraction. It contains no real travel/location data and is not evidence of a provider's coverage or a verified postal address.

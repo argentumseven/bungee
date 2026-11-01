@@ -24,6 +24,7 @@ type Policy = {
   recovery_message: string;
 };
 type Report = {
+  system_dns?:{available:boolean;servers:string[];private_dns_active:boolean;private_dns_name:string|null;captured_by_bungee:false}|null;
   owner: boolean;
   consent: boolean;
   recovery_consent: boolean;
@@ -421,7 +422,7 @@ export function DeviceCare({
             <div className="panel-heading">
               <h2>
                 <Globe size={18} />
-                DNS at a glance
+                Bungee DNS diagnostics
               </h2>
               <div className="dns-tools">
                 <select
@@ -442,8 +443,11 @@ export function DeviceCare({
                 </button>
               </div>
             </div>
+            <p className="notice">Phone-wide DNS is not routed through Bungee. Its tunnel carries only this app; it leaves Android’s VPN slot unused. Browser DNS needs Wi-Fi DNS or Android Private DNS configured for AdGuard separately. A path test below proves forwarding only for Bungee’s fixed diagnostic query.</p>
+            {report?.system_dns&&<p className="fine">{report.system_dns.available?`Android-reported DNS: ${report.system_dns.servers.join(", ")||"none reported"}. Private DNS: ${report.system_dns.private_dns_active?report.system_dns.private_dns_name||"active (automatic)":"not active"}. These are OS settings, not evidence that a browser query passed through Bungee.`:"Android DNS settings were unavailable at the last report."}</p>}
             {dns ? (
               <>
+                <p className="fine">{dns.configured?"A home DNS upstream is configured. Run Test DNS path on the device page to verify phone → Bungee → resolver. AdGuard sees these forwarded queries from the Bungee server address.":"No home DNS upstream is configured. Set the resolver address during server configuration before testing."}</p>
                 <div className="dns-totals">
                   <div>
                     <strong>{dns.domains.toLocaleString()}</strong>

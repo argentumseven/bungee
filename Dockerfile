@@ -17,7 +17,7 @@ RUN --mount=type=secret,id=build_ca if [ -s /run/secrets/build_ca ]; then export
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install --yes --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 bungee && useradd --uid 10001 --gid 10001 --no-create-home bungee \
-    && mkdir -p /state && chown bungee:bungee /state
+    && mkdir -p /state /maps /map-control/status /map-control/requests && chown bungee:bungee /state
 COPY --from=server /build/server/target/release/bungee-server /usr/local/bin/bungee-server
 COPY --from=web /build/web/dist /app/web
 USER 10001:10001

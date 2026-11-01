@@ -57,8 +57,10 @@ def provision(root, size_gib=8):
         private(parent, directory=True)
     if root.exists() or IMAGE.exists() or KEY.exists() or Path('/dev/mapper/' + MAPPER).exists():
         raise ValueError('Storage already exists; refusing to overwrite it. Preserve it for local recovery')
-    if shutil.disk_usage(IMAGE.parent).free < (size_gib + 1) * 1024**3:
-        raise ValueError('Insufficient host space for allocated encrypted storage plus 1 GiB')
+    swap_line=next((line for line in Path('/proc/meminfo').read_text().splitlines() if line.startswith('SwapTotal:')),'SwapTotal: 0 kB')
+    swap_growth_gib=2 if int(swap_line.split()[1]) else 1
+    if shutil.disk_usage(IMAGE.parent).free < (size_gib + 2 + swap_growth_gib) * 1024**3:
+        raise ValueError('Insufficient host space for encrypted storage plus system and swap-growth reserves')
     # O_EXCL/O_NOFOLLOW prevents replacing an existing key or backing image.
     for path, content in ((KEY, secrets.token_bytes(64)), (IMAGE, b'')):
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)

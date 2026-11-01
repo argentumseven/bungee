@@ -2,7 +2,7 @@
 
 Applies to the current release and to versions from alpha.6 onward. Earlier versions with device-owner controls do not meet this contract.
 
-A Bungee fault, unavailable server, lost app key or failed update must leave local stop and ordinary Android removal available. The independent recovery entry works without the server or pairing identity. These requirements apply to Bungee controls; Android, storage and hardware faults can still prevent recovery.
+A Bungee fault, unavailable server, lost app key or failed update must leave local stop and ordinary Android removal available. The recovery panel works without the server or pairing identity. These requirements apply to Bungee controls; Android, storage and hardware faults can still prevent recovery.
 
 ## Supported installation and authority
 
@@ -29,8 +29,8 @@ A server outage does not execute a fallback device policy. It preserves timestam
 ## Local recovery
 
 **Pairing & recovery** is available inside the normal Bungee phone app, including
-when its saved identity cannot be opened. The separate recovery launcher remains
-an independent entry to the same panel. It needs no pairing key, server response,
+when its saved identity cannot be opened. One launcher icon leads to the main app;
+Pairing & recovery is a button on both its main screen and app lock screen. It needs no pairing key, server response,
 QR decoder or newly initialized native transport to open. Local biometric/device
 credentials authorize changes; an unlocked phone without a screen lock uses an
 explicit confirmation. Intent extras cannot trigger changes.

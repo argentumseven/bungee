@@ -1,9 +1,56 @@
 use crate::{App, management, security::*};
 use axum::{
     Json,
+    body::Bytes,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
 };
+use std::str::FromStr;
+
+/// A fixed, signed diagnostic. No browser interception, owner role or VPN slot.
+pub async fn check_path(
+    State(app): State<App>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResult<Json<Value>> {
+    let id = verify_device(&app, &headers, "/v1/dns-check", &body)?;
+    if body.as_ref() != b"{}" {
+        return Err(bad("Expected empty DNS diagnostic request"));
+    }
+    rate_limit(&app, RateClass::Dns, format!("check:{id}"), 12)?;
+    let config = app.dns.as_ref().ok_or(Error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "No home DNS upstream configured",
+    ))?;
+    let mut query = Message::new();
+    query
+        .set_id(rand::random())
+        .set_recursion_desired(true)
+        .add_query(hickory_proto::op::Query::query(
+            hickory_proto::rr::Name::from_str("example.com.").unwrap(),
+            RecordType::A,
+        ));
+    let response = upstream(config, &query, false).await;
+    let code = response
+        .as_ref()
+        .map(|reply| reply.response_code())
+        .unwrap_or(ResponseCode::ServFail);
+    let reachable = response.is_ok();
+    let db = app.db.lock().unwrap();
+    // A revoked identity cannot complete an in-flight check or add a record.
+    let active: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM devices WHERE id=? AND revoked=0 AND public_key IS NOT NULL)",
+        [&id],
+        |r| r.get(0),
+    )?;
+    if !active {
+        return Err(denied());
+    }
+    record(&db, &id, "[Bungee DNS path test]", RecordType::A, code)?;
+    Ok(Json(
+        json!({"reachable":reachable,"upstream":config.upstream.to_string(),"query":"example.com","response_code":code.to_string(),"answers":response.as_ref().map(|reply|reply.answers().len()).unwrap_or(0),"phone_dns_routed":false,"routing":"app_only","server_time":now()}),
+    ))
+}
 use hickory_proto::{
     op::{Message, MessageType, OpCode, ResponseCode},
     rr::{DNSClass, RecordType, rdata::opt::EdnsCode},
@@ -342,7 +389,7 @@ pub async fn summary(
     let records=q.query_map(params![id,range.from/300*300,range.to/300*300],|r|Ok(json!({"domain":r.get::<_,String>(0)?,"queries":r.get::<_,i64>(1)?,"activities":r.get::<_,i64>(2)?,"first_at":r.get::<_,i64>(3)?,"last_at":r.get::<_,i64>(4)?,"answers":r.get::<_,i64>(5)?,"nxdomain":r.get::<_,i64>(6)?,"errors":r.get::<_,i64>(7)?,"types":{"A":r.get::<_,i64>(8)?,"AAAA":r.get::<_,i64>(9)?,"HTTPS":r.get::<_,i64>(10)?,"other":r.get::<_,i64>(11)?}})))?.collect::<Result<Vec<_>,_>>()?;
     let totals:(i64,i64,i64)=db.query_row("SELECT COALESCE(SUM(queries),0),COALESCE(SUM(activities),0),COUNT(DISTINCT domain) FROM dns_summary WHERE device_id=? AND bucket>=? AND bucket<=?",params![id,range.from/300*300,range.to/300*300],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
     Ok(Json(
-        json!({"records":records,"queries":totals.0,"activities":totals.1,"domains":totals.2,"from":range.from/300*300,"to":(range.to/300*300).saturating_add(299),"resolution_seconds":300,"configured":app.dns.is_some()}),
+        json!({"records":records,"queries":totals.0,"activities":totals.1,"domains":totals.2,"from":range.from/300*300,"to":(range.to/300*300).saturating_add(299),"resolution_seconds":300,"configured":app.dns.is_some(),"upstream":app.dns.as_ref().map(|config|config.upstream.to_string()),"phone_dns_routed":false,"routing":"app_only"}),
     ))
 }
 pub async fn erase(

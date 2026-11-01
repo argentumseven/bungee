@@ -77,7 +77,7 @@ func TestWireGuardRoundTripAndRequestBoundaries(t *testing.T) {
 			<-release
 			return
 		}
-		if (r.URL.Path != "/v1/telemetry" && r.URL.Path != "/v1/command-check") || r.Method != "POST" || r.Header.Get("X-Bungee-Nonce") != "test-nonce" {
+		if (r.URL.Path != "/v1/telemetry" && r.URL.Path != "/v1/command-check" && r.URL.Path != "/v1/dns-check") || r.Method != "POST" || r.Header.Get("X-Bungee-Nonce") != "test-nonce" {
 			t.Error("unexpected request")
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -100,6 +100,9 @@ func TestWireGuardRoundTripAndRequestBoundaries(t *testing.T) {
 	}
 	if _, e = Exchange("/v1/command-check", `{}`, `{"X-Bungee-Nonce":"test-nonce"}`); e != nil {
 		t.Fatal("cancellation check could not traverse the fixed-home transport", e)
+	}
+	if _, e = Exchange("/v1/dns-check", `{}`, `{"X-Bungee-Nonce":"test-nonce"}`); e != nil {
+		t.Fatal("DNS path check could not traverse the fixed-home transport", e)
 	}
 	photoBody := `{"photo":"` + strings.Repeat("p", 1_398_104) + `"}`
 	id, err := ReserveRequest()

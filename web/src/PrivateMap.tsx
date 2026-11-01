@@ -29,6 +29,7 @@ type Point = {
   observed_at?: number;
 };
 type Geography = {
+  regions?:import("./VectorMap").MapRegion[];
   vector?:null|{min_zoom:number;max_zoom:number;format:string};
   maps: null | {
     min_zoom: number;
@@ -66,15 +67,17 @@ export function PrivateMap({
   const ignored = gpsTrail(points).ignored;
   useEffect(() => {
     const abort = new AbortController();
-    api<Geography>("/geography", { signal: abort.signal })
-      .then(setStatus)
+    const load=()=>api<Geography>("/geography", { signal: abort.signal })
+      .then(value=>{setStatus(old=>JSON.stringify(old)===JSON.stringify(value)?old:value);setError("");})
       .catch((e) => {
         if (!abort.signal.aborted) setError(e.message);
       });
-    return () => abort.abort();
+    void load();
+    const timer=window.setInterval(load,10000);
+    return () => {abort.abort();window.clearInterval(timer);};
   }, []);
   useEffect(() => {
-    if (!container.current || !status || status.vector) return;
+    if (!container.current || !status || status.vector || status.regions?.length) return;
     const m = L.map(container.current, {
       attributionControl: false,
       scrollWheelZoom: false,
@@ -160,9 +163,10 @@ export function PrivateMap({
     };
     // Dataset or observation changes replace the map; unrelated dashboard polls do not reset the view.
   }, [status, signature]);
-  if(status?.vector)return <Suspense fallback={<p>Loading local street map…</p>}><VectorMap points={points} selected={selected} network={network} label={label}/></Suspense>;
+  if(status?.vector||status?.regions?.length)return <Suspense fallback={<p>Loading local street map…</p>}><VectorMap points={points} selected={selected} network={network} label={label} legacy={!!status.vector} regions={status.regions} overview={!!status.maps?.overview}/></Suspense>;
   return (
     <div className="private-map-wrap">
+      {status?.maps?.overview&&<div className="map-setup-notice"><strong>Street detail is not installed.</strong><span>This world overview shows countries and major places. Your GPS point is still available.</span><button className="secondary" type="button" onClick={()=>window.dispatchEvent(new Event("bungee:maps"))}>Choose regional street maps</button></div>}
       <div
         className="private-map"
         ref={container}

@@ -46,6 +46,7 @@ class MainActivity : FragmentActivity() {
     private var locked by mutableStateOf(false)
     private var error by mutableStateOf<String?>(null)
     private var busy by mutableStateOf(false)
+    private var dnsResult by mutableStateOf("")
     private var enrolled by mutableStateOf(false)
     private var locallyStopped by mutableStateOf(false)
     private var pendingBundle: String? = null
@@ -211,7 +212,7 @@ class MainActivity : FragmentActivity() {
             Spacer(Modifier.height(26.dp)); Text("Bungee is locked", fontSize = 29.sp, fontWeight = FontWeight.SemiBold)
             Text("Unlock to view this phone’s Bungee settings.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(vertical = 13.dp))
             Button(onClick = { unlock() }, modifier = Modifier.fillMaxWidth().padding(top = 20.dp), shape = RoundedCornerShape(13.dp)) { Text("Unlock Bungee", Modifier.padding(7.dp)) }
-            TextButton(onClick = { openRecovery() }) { Text("Pairing & recovery · works offline") }
+            OutlinedButton(onClick = { openRecovery() }, modifier=Modifier.fillMaxWidth()) { Text("Pairing & recovery · works offline") }
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(top = 15.dp)) }
         }
     }
@@ -225,6 +226,14 @@ class MainActivity : FragmentActivity() {
         var commands by remember { mutableStateOf(identity.allowCommands) }
         var recovery by remember { mutableStateOf(identity.recoveryMessage) }
         var resume by remember { mutableStateOf(LocalSafety.isRestartAllowed(this)) }
+        DisposableEffect(identity) {
+            val preferences=getSharedPreferences("identity",Context.MODE_PRIVATE)
+            val listener=SharedPreferences.OnSharedPreferenceChangeListener { _,key ->
+                if(key==null || key=="recovery_message") recovery=runCatching { identity.recoveryMessage }.getOrNull()
+            }
+            preferences.registerOnSharedPreferenceChangeListener(listener)
+            onDispose { preferences.unregisterOnSharedPreferenceChangeListener(listener) }
+        }
         fun saveRestart(enabled: Boolean) { runCatching { LocalSafety.setRestartAllowed(this@MainActivity, enabled) }.onSuccess { resume = enabled }.onFailure { error = "Restart preference could not be saved." } }
         Column(Modifier.fillMaxSize().systemBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 25.dp)) {
             Row(Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 35.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -235,6 +244,7 @@ class MainActivity : FragmentActivity() {
             Text("SELF-HOSTED DEVICE FINDER", letterSpacing = 2.sp, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
             Text(if (enrolled) "This phone" else "Pair with your\nhome server", fontSize = 30.sp, lineHeight = 37.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 12.dp))
             Text(if (enrolled) "Location sharing and recovery settings for this phone." else "Connect to a Bungee server to share location\nand receive recovery commands.", fontSize = 12.sp, lineHeight = 21.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 13.dp, bottom = 26.dp))
+            OutlinedButton(onClick = { openRecovery() }, modifier=Modifier.fillMaxWidth().padding(bottom=18.dp)) { Text("Pairing & recovery") }
             if (!enrolled) {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), shape = RoundedCornerShape(20.dp)) {
                     Column(Modifier.padding(22.dp)) {
@@ -329,6 +339,29 @@ class MainActivity : FragmentActivity() {
                         SettingRow("Removable device administration", "Optional screen locking and failed-unlock detection; Android confirms enabling it", deviceAdminEnabled, enabled = deviceAdminKnown && !deviceAdminChanging) { enabled -> changeDeviceAdmin(enabled) }
                     }
                 }
+                if (enrolled) Card(Modifier.fillMaxWidth().padding(top = 18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                    Column(Modifier.padding(18.dp)) {
+                        Text("Home DNS", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Text(DnsPathStatus.describe(DnsPathStatus.report(this@MainActivity)),fontSize=11.sp,lineHeight=19.sp,modifier=Modifier.padding(top=8.dp))
+                        Text("Bungee does not intercept other apps’ DNS and does not use Android’s VPN slot. Browser DNS needs Wi-Fi DNS or Android Private DNS configured for AdGuard. Private DNS requires its TLS hostname, not an IP address.", fontSize = 11.sp, lineHeight = 19.sp)
+                        OutlinedButton(enabled = status.connected && !busy, onClick = {
+                            scope.launch {
+                                busy=true;dnsResult="Testing Bungee → home DNS…"
+                                try {
+                                    val reply=withContext(Dispatchers.IO) { HomeApi(identity).request("/v1/dns-check") }
+                                    dnsResult=if(reply.getBoolean("reachable")) "Home DNS replied through ${reply.getString("upstream")}: ${reply.getString("response_code")}. Other apps’ DNS is unchanged."
+                                              else "Bungee reached home, but DNS upstream ${reply.getString("upstream")} did not reply."
+                                } catch(e:Exception) { dnsResult=if(e is HomeApiException) "Home DNS check failed (HTTP ${e.status}). Check the configured upstream on the server." else "Bungee could not complete the DNS path test: ${e.javaClass.simpleName}" }
+                                finally { busy=false }
+                            }
+                        }, modifier=Modifier.fillMaxWidth().padding(top=12.dp)) { Text("Test home DNS path") }
+                        if(dnsResult.isNotEmpty())Text(dnsResult,fontSize=11.sp,lineHeight=18.sp,modifier=Modifier.padding(top=8.dp))
+                        OutlinedButton(onClick = {
+                            runCatching { startActivity(Intent("android.settings.PRIVATE_DNS_SETTINGS")) }
+                                .onFailure { startActivity(Intent(android.provider.Settings.ACTION_WIRELESS_SETTINGS)) }
+                        }, modifier=Modifier.fillMaxWidth()) { Text("Android Private DNS settings") }
+                    }
+                }
                 Card(Modifier.fillMaxWidth().padding(top = 18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                     Column(Modifier.padding(18.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Outlined.PhotoCamera, null, Modifier.size(19.dp), tint = MaterialTheme.colorScheme.primary); Text("  Automatic theft photos", fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
@@ -366,6 +399,7 @@ class MainActivity : FragmentActivity() {
                     Column(Modifier.padding(18.dp)) {
                         Text("Pairing & recovery", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                         Text("Stop without unpairing, or reset only Bungee and create a fresh invitation. Android management repair is a separate action.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp)
+                        Button(onClick = { openRecovery() }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) { Text("Open pairing & recovery") }
                     }
                 }
                 if (recovery != null) Card(Modifier.fillMaxWidth().padding(top = 15.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
@@ -390,7 +424,6 @@ class MainActivity : FragmentActivity() {
                     }
                 }
             }
-            TextButton(onClick = { openRecovery() }) { Text("Pairing & recovery") }
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 20.dp), color = MaterialTheme.colorScheme.primary)
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 18.dp)) }
             Row(Modifier.fillMaxWidth().padding(vertical = 32.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {

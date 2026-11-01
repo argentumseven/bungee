@@ -15,6 +15,14 @@ import org.json.JSONObject
 
 /** This build cannot create owner restrictions. The only owner mutations below remove legacy policy. */
 object ManagementAgent {
+    @Synchronized fun stopActions(context: Context, identity: Identity) {
+        identity.recoveryMessage = null
+        context.getSystemService(NotificationManager::class.java).cancel(2)
+        val state = identity.state("management")
+        state.put("lost_mode_active", false).put("haste", false)
+        state.optJSONObject("policy")?.put("lost_mode", false)?.put("haste", false)?.put("recovery_message", "")
+        identity.saveState("management", state)
+    }
     fun role(context: Context) = ManagementRole.inspect(
         { context.getSystemService(DevicePolicyManager::class.java).isDeviceOwnerApp(context.packageName) },
         { context.getSystemService(DevicePolicyManager::class.java).isProfileOwnerApp(context.packageName) }
@@ -54,7 +62,7 @@ object ManagementAgent {
             .put("camera", cameraReport).put("connection_health", ConnectionHealth.report(context))
             .put("delivery", identity.backlogReport().put("reported_at", System.currentTimeMillis()/1000).put("gps_access", TelemetryService.status.value.gpsAccess))
             .put("recovery_consent", identity.allowCommands && !LocalSafety.isStopped(context)).put("revision", state.optLong("revision", 0))
-            .put("dns_active", false).put("always_on", role == ManagementRole.DEVICE_OWNER && runCatching { dpm.getAlwaysOnVpnPackage(admin(context)) == context.packageName }.getOrDefault(false))
+            .put("dns_active", false).put("system_dns",DnsPathStatus.report(context)).put("always_on", role == ManagementRole.DEVICE_OWNER && runCatching { dpm.getAlwaysOnVpnPackage(admin(context)) == context.packageName }.getOrDefault(false))
             .put("uninstall_blocked", role == ManagementRole.DEVICE_OWNER && runCatching { dpm.isUninstallBlocked(admin(context), context.packageName) }.getOrDefault(false))
             .put("protection_active", false).put("strong_lock_required", false).put("blocked_apps", JSONArray())
             .put("lost_mode_active", state.optBoolean("lost_mode_active") && identity.allowCommands)

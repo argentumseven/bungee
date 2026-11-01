@@ -213,6 +213,8 @@ const CAPABILITIES: &[&str] = &[
     "ring_flash",
     "flash",
     "stop_ringing",
+    "stop_all",
+    "dns_check",
     "message",
     "clear_message",
     "lock",
@@ -551,20 +553,26 @@ pub async fn command(
     if !caps.contains(&input.kind) {
         return Err(bad("The phone has not granted this capability"));
     }
-    let pending:i64=db.query_row("SELECT count(*) FROM commands WHERE device_id=? AND status IN ('pending','delivered') AND expires>?",params![id,now()],|r|r.get(0))?;
+    let tx = db.unchecked_transaction()?;
+    if input.kind == "stop_all" {
+        // Stop requests bypass a full queue and invalidate old offers in the same commit.
+        tx.execute("UPDATE commands SET status='canceled',canceled_at=?,canceled_after_offer=(status='delivered'),result='Canceled by Stop all actions' WHERE device_id=? AND status IN ('pending','delivered')",params![now(),id])?;
+        tx.execute("INSERT INTO device_policies(device_id,revision,policy) VALUES(?,1,?) ON CONFLICT(device_id) DO UPDATE SET revision=revision+1,policy=excluded.policy",params![id,serde_json::to_string(&crate::management::Policy::default()).unwrap()])?;
+    }
+    let pending:i64=tx.query_row("SELECT count(*) FROM commands WHERE device_id=? AND status IN ('pending','delivered') AND expires>?",params![id,now()],|r|r.get(0))?;
     if pending >= 10 {
         return Err(bad("Too many commands awaiting delivery"));
     }
     let cmd = uuid::Uuid::new_v4().to_string();
     let payload = json!({"message":text}).to_string();
-    db.execute(
+    let expires = now() + if input.kind == "stop_all" { 86400 } else { 300 };
+    tx.execute(
         "INSERT INTO commands(id,device_id,kind,payload,created,expires) VALUES(?,?,?,?,?,?)",
-        params![cmd, id, input.kind, payload, now(), now() + 300],
+        params![cmd, id, input.kind, payload, now(), expires],
     )?;
-    store::audit(&db, "command.queued", Some(&id), &input.kind)?;
-    Ok(Json(
-        json!({"id":cmd,"status":"pending","expires":now()+300}),
-    ))
+    store::audit(&tx, "command.queued", Some(&id), &input.kind)?;
+    tx.commit()?;
+    Ok(Json(json!({"id":cmd,"status":"pending","expires":expires})))
 }
 pub async fn cancel_command(
     State(app): State<App>,
@@ -626,14 +634,20 @@ pub async fn poll(
     body: Bytes,
 ) -> ApiResult<Json<Value>> {
     let id = verify_device(&app, &headers, "/v1/commands", &body)?;
-    if body.as_ref() != b"{}" {
-        return Err(bad("Expected empty object"));
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Poll {
+        #[serde(default)]
+        only_stop: bool,
     }
+    let input: Poll = serde_json::from_slice(&body).map_err(|_| bad("Invalid command poll"))?;
     let db = app.db.lock().unwrap();
     db.execute("UPDATE commands SET status='rejected',result='Disabled by reversibility policy' WHERE device_id=? AND kind='reboot' AND status IN ('pending','delivered')", [&id])?;
-    let mut q=db.prepare("SELECT id,kind,payload,expires FROM commands WHERE device_id=? AND status IN ('pending','delivered') AND expires>? ORDER BY created LIMIT 10")?;
-    let list=q.query_map(params![id,now()],|r|Ok(json!({"id":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"payload":serde_json::from_str::<Value>(&r.get::<_,String>(2)?).unwrap_or(json!({})),"expires":r.get::<_,i64>(3)?})))?.collect::<Result<Vec<_>,_>>()?;
-    db.execute("UPDATE commands SET status='delivered' WHERE device_id=? AND status='pending' AND expires>?",params![id,now()])?;
+    let mut q=db.prepare("SELECT id,kind,payload,expires FROM commands WHERE device_id=? AND status IN ('pending','delivered') AND expires>? AND (?=0 OR kind='stop_all') ORDER BY (kind='stop_all') DESC,created LIMIT 10")?;
+    let list=q.query_map(params![id,now(),input.only_stop],|r|Ok(json!({"id":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"payload":serde_json::from_str::<Value>(&r.get::<_,String>(2)?).unwrap_or(json!({})),"expires":r.get::<_,i64>(3)?})))?.collect::<Result<Vec<_>,_>>()?;
+    for command in &list {
+        db.execute("UPDATE commands SET status='delivered' WHERE id=? AND device_id=? AND status='pending'",params![command["id"].as_str(),id])?;
+    }
     // Messages and command results are deleted after 24h; retain only bounded metadata in audit.
     db.execute("DELETE FROM commands WHERE created<?", [now() - 86400])?;
     let epoch: String = db.query_row(

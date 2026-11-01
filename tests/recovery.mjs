@@ -67,3 +67,25 @@ test("bundled production GeoIP decodes both address families and map byte ranges
  assert.equal((await f.admin(path,"GET",undefined,{Range:"bytes=0-999999999"})).status,400);
  const r=await f.admin(path,"GET",undefined,{Range:"bytes=0-126"});assert.equal(r.status,206);assert.equal(r.headers.get("cache-control"),"no-store");assert.match(r.headers.get("content-range"),/^bytes 0-126/);assert.equal((await r.arrayBuffer()).byteLength,127);
 });
+
+test("Stop all bypasses a full queue, invalidates offers, resets lost mode, and gets urgent delivery",async t=>{
+ const f=await fixture(t),p=await phone(f);
+ assert.equal((await p.request("/v1/telemetry",{battery:70,charging:false,device_owner:false,capabilities:["locate","ring","stop_all"]})).status,200);
+ assert.equal((await p.request("/v1/sync",{report:{recovery_consent:true}})).status,200);
+ assert.equal((await f.admin(`/api/devices/${p.id}/policy`,"POST",{expected_revision:0,policy:{lost_mode:true,haste:true,recovery_message:"Find this phone"}})).status,200);
+ const ids=[];
+ for(let n=0;n<10;n++){const r=await f.admin(`/api/devices/${p.id}/commands`,"POST",{kind:"ring"});assert.equal(r.status,200);ids.push((await r.json()).id);}
+ assert.deepEqual((await (await p.request("/v1/commands",{only_stop:true})).json()).commands,[]);
+ assert.equal(f.sql("SELECT COUNT(*) FROM commands WHERE status='pending'")[0][0],10);
+ assert.equal((await (await p.request("/v1/commands",{})).json()).commands.length,10);
+ assert.equal((await (await p.request("/v1/command-check",{id:ids[0]})).json()).allowed,true);
+ assert.equal((await f.admin(`/api/devices/${p.id}/commands`,"POST",{kind:"stop_all"}, {Origin:"https://evil.invalid"})).status,403);
+ const r=await f.admin(`/api/devices/${p.id}/commands`,"POST",{kind:"stop_all"});assert.equal(r.status,200);const stop=await r.json();
+ assert.equal((await (await p.request("/v1/command-check",{id:ids[0]})).json()).allowed,false);
+ assert.equal(f.sql("SELECT COUNT(*) FROM commands WHERE status='canceled'")[0][0],10);
+ const policy=await (await f.admin(`/api/devices/${p.id}/policy`)).json();assert.equal(policy.policy.lost_mode,false);assert.equal(policy.policy.haste,false);assert.equal(policy.policy.recovery_message,"");
+ const urgent=await (await p.request("/v1/commands",{only_stop:true})).json();assert.deepEqual(urgent.commands.map(c=>c.id),[stop.id]);
+ assert.equal(urgent.commands[0].kind,"stop_all");
+ assert.equal((await (await p.request("/v1/ack",{id:stop.id,status:"executed",result:"Bungee actions stopped",attempted_at:Math.floor(Date.now()/1000)})).json()).accepted,true);
+ assert.deepEqual((await (await p.request("/v1/commands",{})).json()).commands,[]);
+});

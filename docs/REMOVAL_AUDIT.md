@@ -56,7 +56,7 @@ The supported installation is an ordinary personal app. Root/system installation
 
 ## Stop, re-pair or remove
 
-Open **Pairing & recovery** in Bungee or the separate recovery launcher. **Stop
+Open the **Pairing & recovery** button in Bungee (also available on its app lock screen). **Stop
 Bungee** preserves pairing and server history and changes no Android policy.
 To reconnect from scratch, confirm **Reset pairing**; select fresh phone keys
 only if desired or if the old keys cannot be opened. Ordinary administration

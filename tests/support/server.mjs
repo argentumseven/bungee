@@ -10,9 +10,10 @@ async function freePort() {
   const listener=createServer(); await new Promise(r=>listener.listen(0,"127.0.0.1",r));
   const port=listener.address().port; await new Promise(r=>listener.close(r)); return port;
 }
-export async function fixture(t, {legacy = false, geodata = undefined} = {}) {
+export async function fixture(t, {legacy = false, geodata = undefined, dns = undefined} = {}) {
   const dir=await mkdtemp(join(tmpdir(),"bungee-review2-"));
   const port=await freePort(), devicePort=await freePort();
+  const dnsPort=dns?await freePort():null;
   const origin=`http://127.0.0.1:${port}`, deviceOrigin=`http://127.0.0.1:${devicePort}`;
   const password=randomBytes(24).toString("base64url");
   const verifier = legacy ? password : execFileSync(resolve("server/target/debug/bungee-server"), ["--hash-admin-password"], {input:password, encoding:"utf8"});
@@ -29,7 +30,7 @@ export async function fixture(t, {legacy = false, geodata = undefined} = {}) {
     cookie=response.headers.get("set-cookie").split(";")[0];
   };
   const launch=async(credential=password)=>{
-    server=spawn(resolve("server/target/debug/bungee-server"),[],{env:{...process.env,BUNGEE_STATE_DIR:dir,...(geodata?{BUNGEE_GEODATA_DIR:geodata}:{}),BUNGEE_ADMIN_BIND:`127.0.0.1:${port}`,BUNGEE_DEVICE_BIND:`127.0.0.1:${devicePort}`,BUNGEE_PUBLIC_ORIGIN:origin,BUNGEE_WG_ENDPOINT:"203.0.113.10:47937"},stdio:["ignore","pipe","pipe"]});
+    server=spawn(resolve("server/target/debug/bungee-server"),[],{env:{...process.env,BUNGEE_STATE_DIR:dir,BUNGEE_MAP_CONTROL_DIR:join(dir,"map-control"),BUNGEE_MAPS_DIR:join(dir,"maps"),...(dns?{BUNGEE_DNS_UPSTREAM_IP:dns.ip,BUNGEE_DNS_UPSTREAM_PORT:String(dns.port),BUNGEE_DNS_BIND:`127.0.0.1:${dnsPort}`} :{}),...(geodata?{BUNGEE_GEODATA_DIR:geodata}:{}),BUNGEE_ADMIN_BIND:`127.0.0.1:${port}`,BUNGEE_DEVICE_BIND:`127.0.0.1:${devicePort}`,BUNGEE_PUBLIC_ORIGIN:origin,BUNGEE_WG_ENDPOINT:"203.0.113.10:47937"},stdio:["ignore","pipe","pipe"]});
     server.stdout.on("data",b=>logs+=b); server.stderr.on("data",b=>logs+=b);
     let ready=false;
     for(let n=0;n<200;n++) { try { if((await fetch(origin+"/healthz")).ok) {ready=true;break;} } catch {} if(server.exitCode!==null)throw Error(logs); await pause(25); }

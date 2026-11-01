@@ -68,6 +68,7 @@ pub fn safe_package(p: &str) -> bool {
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Report {
+    pub system_dns: Option<SystemDns>,
     pub camera: Option<CameraReport>,
     pub connection_health: Option<ConnectionHealth>,
     pub owner: bool,
@@ -90,6 +91,29 @@ pub struct Report {
     pub failed_unlocks: u32,
     pub last_failed_at: Option<i64>,
     pub delivery: Option<DeliveryReport>,
+}
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SystemDns {
+    pub available: bool,
+    pub servers: Vec<String>,
+    pub private_dns_active: bool,
+    pub private_dns_name: Option<String>,
+    pub captured_by_bungee: bool,
+}
+impl SystemDns {
+    fn valid(&self) -> bool {
+        !self.captured_by_bungee
+            && self.servers.len() <= 4
+            && self
+                .servers
+                .iter()
+                .all(|value| value.len() <= 80 && !value.chars().any(char::is_control))
+            && self
+                .private_dns_name
+                .as_ref()
+                .is_none_or(|value| value.len() <= 253 && !value.chars().any(char::is_control))
+    }
 }
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -287,6 +311,7 @@ pub async fn sync(
             || c.reported_at > now() + 120
     }) || r.delivery.as_ref().is_some_and(|d| !d.valid())
         || r.connection_health.as_ref().is_some_and(|c| !c.valid())
+        || r.system_dns.as_ref().is_some_and(|value| !value.valid())
         || r.revision < 0
         || r.errors.len() > 20
         || r.errors.iter().any(|e| e.len() > 160)

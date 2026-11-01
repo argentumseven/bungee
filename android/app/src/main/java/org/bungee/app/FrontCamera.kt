@@ -33,10 +33,11 @@ object FrontCamera {
         var meter: ImageReader? = null
         var finished = false
         fun close() { runCatching { session?.close() }; runCatching { camera?.close() }; runCatching { reader?.close() }; runCatching { meter?.close() } }
-        fun finish(bytes: ByteArray? = null) {
+        fun finish(bytes: ByteArray? = null, reason: String = "Camera interrupted or unavailable") {
             if (finished) return
             finished = true; close()
-            if (bytes == null) continuation.cancel(java.util.concurrent.CancellationException("Front camera unavailable or capture interrupted"))
+            if (!continuation.isActive) return
+            if (bytes == null) continuation.resumeWith(Result.failure(IllegalStateException(reason)))
             else continuation.resumeWith(Result.success(bytes))
         }
         continuation.invokeOnCancellation { handler.post { finish() } }
@@ -97,7 +98,7 @@ object FrontCamera {
                                                     set(CaptureRequest.JPEG_QUALITY,95.toByte())
                                                 }.build()
                                                 configured.capture(request,object:CameraCaptureSession.CaptureCallback() {
-                                                    override fun onCaptureFailed(s:CameraCaptureSession,r:CaptureRequest,f:CaptureFailure){finish()}
+                                                    override fun onCaptureFailed(s:CameraCaptureSession,r:CaptureRequest,f:CaptureFailure){finish(reason="Android rejected still capture (reason ${f.reason})")}
                                                 },handler)
                                             } catch(_:Exception){finish()}
                                         }
@@ -130,15 +131,19 @@ object FrontCamera {
                                         failed.close()
                                         if(finished || !continuation.isActive)return
                                         if(withMeter) { runCatching {meter?.close()};meter=null;runCatching{configure(false)}.onFailure{finish()} }
-                                        else finish()
+                                        else finish(reason="Android could not configure the front camera")
                                     }
                                 }))
                             }
                             configure(meter!=null)
                         } catch (_: Exception) { finish() }
                     }
-                    override fun onDisconnected(device: CameraDevice) { device.close(); finish() }
-                    override fun onError(device: CameraDevice, error: Int) { device.close(); finish() }
+                    override fun onDisconnected(device: CameraDevice) { device.close(); finish(reason="Front camera disconnected") }
+                    override fun onError(device: CameraDevice, error: Int) { device.close(); finish(reason=when(error) {
+                        ERROR_CAMERA_IN_USE, ERROR_MAX_CAMERAS_IN_USE -> "Camera busy in another app"
+                        ERROR_CAMERA_DISABLED -> "Android disabled camera access while locked or by policy"
+                        else -> "Android camera error $error"
+                    }) }
                 }, handler)
             } catch (_: Exception) { finish() }
         }

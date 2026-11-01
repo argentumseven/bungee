@@ -89,9 +89,13 @@ def dns_upstream(value):
 
 
 def validate(config):
-    if not isinstance(config, dict) or set(config) - {'geodata', 'dns_upstream_ip', 'dns_upstream_port', 'storage_size_gib'} != {'wg_port', 'web_port', 'endpoint_ip', 'web_host', 'bind_ip', 'admin_subnets', 'auto_updates', 'channel'}:
+    if not isinstance(config, dict) or set(config) - {'geodata', 'dns_upstream_ip', 'dns_upstream_port', 'storage_size_gib', 'map_regions'} != {'wg_port', 'web_port', 'endpoint_ip', 'web_host', 'bind_ip', 'admin_subnets', 'auto_updates', 'channel'}:
         raise ValueError("Configuration has missing or unknown fields")
     result = dict(config)
+    if 'map_regions' in config:
+        regions=config['map_regions']
+        if not isinstance(regions,list) or len(regions)>24 or any(not isinstance(value,str) or not re.fullmatch('[a-z][a-z0-9-]{1,47}',value) for value in regions) or len(set(regions))!=len(regions):
+            raise ValueError('Choose up to 24 distinct map region IDs')
     if 'dns_upstream_ip' in config: result['dns_upstream_ip'] = dns_upstream(config['dns_upstream_ip'])
     if 'dns_upstream_port' in config: result['dns_upstream_port'] = port(config['dns_upstream_port'])
     if 'storage_size_gib' in config and (type(config['storage_size_gib']) is not int or not 2 <= config['storage_size_gib'] <= 1048576):

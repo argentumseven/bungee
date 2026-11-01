@@ -1,14 +1,19 @@
 """Explicit host-side US extract acquisition. Runtime containers never download maps."""
 import hashlib
+import contextlib
+import ctypes
 import json
 from pathlib import Path
 import platform
+import os
 import re
 import resource
+import signal
 import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import urllib.request
 import urllib.error
 from urllib.parse import urlsplit
@@ -111,3 +116,127 @@ def acquire(root, region, destination):
 
 def file_digest(path):
     with path.open('rb') as stream: return hashlib.file_digest(stream,'sha256').hexdigest()
+
+
+def region_catalog(path):
+    data=json.loads(Path(path).read_text())
+    regions=data['regions']
+    if data.get('format')!=1 or len(regions)>512: raise ValueError('Invalid region catalogue')
+    result={}
+    for item in regions:
+        identifier=item['id']
+        if not re.fullmatch('[a-z][a-z0-9-]{1,47}',identifier) or identifier in result:
+            raise ValueError('Invalid or duplicate map region')
+        result[identifier]=item
+    return result
+
+
+@contextlib.contextmanager
+def extraction_tool(progress=lambda message: None):
+    machine=platform.machine()
+    if machine not in BINARIES: raise ValueError('Map downloads support Linux amd64/arm64 hosts')
+    with tempfile.TemporaryDirectory(prefix='bungee-map-tool-') as directory:
+        work=Path(directory)
+        arch='arm64' if machine=='aarch64' else 'x86_64'
+        asset=f'go-pmtiles_{VERSION}_Linux_{arch}.tar.gz'
+        archive=work/asset
+        progress('Downloading and verifying the map extraction tool')
+        if download(f'https://github.com/protomaps/go-pmtiles/releases/download/v{VERSION}/{asset}',archive,32*1024**2)!=BINARIES[machine]:
+            raise ValueError('Map extraction tool checksum failed')
+        binary=work/'pmtiles'
+        with tarfile.open(archive) as tar:
+            member=next(m for m in tar.getmembers() if m.name=='pmtiles')
+            if not member.isfile(): raise ValueError('Unexpected map tool archive')
+            with tar.extractfile(member) as src,binary.open('xb') as dst: shutil.copyfileobj(src,dst)
+        binary.chmod(0o700)
+        yield binary,work
+
+
+def published_build():
+    with open_download(CATALOG_URL,'Street-map catalogue download',timeout=60) as response:
+        content=response.read(2*1024**2+1)
+    if len(content)>2*1024**2: raise ValueError('Map catalogue exceeded 2 MiB')
+    try: return current_build(json.loads(content))['key']
+    except (ValueError,UnicodeError) as error: raise ValueError('No usable compatible street-map build in the catalogue') from error
+
+
+def selection(catalog, identifiers):
+    if not isinstance(identifiers,list) or not 1<=len(identifiers)<=24 or any(not isinstance(value,str) for value in identifiers) or len(set(identifiers))!=len(identifiers):
+        raise ValueError('Select 1–24 distinct map regions')
+    if any(not isinstance(identifier,str) or identifier not in catalog for identifier in identifiers):
+        raise ValueError('Unknown map region')
+    return [catalog[identifier] for identifier in identifiers]
+
+
+def _child_limits(max_bytes=None):
+    parent=os.getpid()
+    def guard():
+        if max_bytes is not None: resource.setrlimit(resource.RLIMIT_FSIZE,(max_bytes,max_bytes))
+        if ctypes.CDLL(None,use_errno=True).prctl(1,signal.SIGKILL,0,0,0)!=0 or os.getppid()!=parent:
+            os._exit(125)
+    return guard
+
+
+def make_plan(catalog_path, identifiers, progress=lambda message: None):
+    regions=selection(region_catalog(catalog_path),identifiers)
+    progress('Reading the street-map catalogue')
+    build=published_build()
+    entries=[]
+    with extraction_tool(progress) as (binary,work):
+        for item in regions:
+            progress(f'Calculating download size: {item["name"]}')
+            boundary=work/(item['id']+'.geojson')
+            boundary.write_text(json.dumps(item['geometry']))
+            command=[str(binary),'extract','https://build.protomaps.com/'+build,str(work/'plan.pmtiles'),
+                     '--region',str(boundary),'--maxzoom','15','--download-threads','4','--dry-run']
+            try:
+                output=subprocess.run(command,check=True,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=600,preexec_fn=_child_limits()).stdout
+            except subprocess.CalledProcessError as error:
+                raise RuntimeError(f'Map size check failed for {item["name"]}: {(error.stdout or "")[-2048:].strip()}') from error
+            entries.append({key:item[key] for key in ('id','name','group','bounds','max_zoom')}|{'planned_bytes':archive_size(output)})
+    return {'build':build,'created_at':int(time.time()),'regions':entries,'planned_bytes':sum(item['planned_bytes'] for item in entries)}
+
+
+def extract_regions(catalog_path, plan, staging, progress, available, cancelled=lambda:False):
+    """Download regional ranges only; keep a hard file limit and monitor live free space."""
+    if not re.fullmatch(r'\d{8}\.pmtiles',plan['build']): raise ValueError('Invalid planned map build')
+    catalog=region_catalog(catalog_path)
+    selection(catalog,[entry['id'] for entry in plan['regions']])
+    results=[]
+    with extraction_tool(progress) as (binary,work):
+        for entry in plan['regions']:
+            if cancelled(): raise ValueError('Map download canceled')
+            item=catalog[entry['id']]
+            limit=entry['planned_bytes']
+            if type(limit) is not int or not 0<limit<=LIMIT or available()<limit:
+                raise ValueError('Not enough safe free space for the planned map; existing maps preserved')
+            boundary=work/(item['id']+'.geojson');boundary.write_text(json.dumps(item['geometry']))
+            target=Path(staging)/(item['id']+'.pmtiles')
+            command=[str(binary),'extract','https://build.protomaps.com/'+plan['build'],str(target),
+                     '--region',str(boundary),'--maxzoom','15','--download-threads','4']
+            progress(f'Downloading {item["name"]}')
+            log=work/'extract.log'
+            with log.open('w+') as output,subprocess.Popen(command,stdout=output,stderr=subprocess.STDOUT,preexec_fn=_child_limits(limit)) as process:
+                started=time.monotonic()
+                try:
+                    while process.poll() is None:
+                        if cancelled(): raise ValueError('Map download canceled')
+                        if available()<0: raise ValueError('Free space fell below the system/swap reserve; download stopped')
+                        if time.monotonic()-started>6*3600: raise ValueError('Map download timed out')
+                        written=target.stat().st_size if target.exists() else 0
+                        progress(f'Downloading {item["name"]}: {written/1024**2:.0f} / {limit/1024**2:.0f} MiB')
+                        time.sleep(2)
+                    if process.returncode:
+                        output.seek(max(0,output.tell()-2048))
+                        raise RuntimeError(f'Map extraction failed: {output.read()[-2048:].strip()}')
+                finally:
+                    if process.poll() is None:
+                        process.terminate()
+                        try: process.wait(timeout=10)
+                        except subprocess.TimeoutExpired: process.kill();process.wait()
+            progress(f'Verifying {item["name"]}')
+            subprocess.run([str(binary),'verify',str(target)],check=True,timeout=600,stdout=subprocess.DEVNULL,preexec_fn=_child_limits())
+            if target.stat().st_size>limit: raise ValueError('Downloaded map exceeded its planned bound')
+            results.append({key:entry[key] for key in ('id','name','group','bounds','max_zoom')}|
+                           {'bytes':target.stat().st_size,'sha256':file_digest(target),'build':plan['build'],'path':str(target)})
+    return results

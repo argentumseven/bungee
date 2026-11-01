@@ -33,15 +33,16 @@ class StorageTests(unittest.TestCase):
             with self.assertRaises(ValueError):secure_storage.private(path)
             link=Path(directory)/'alias';link.symlink_to(path)
             with self.assertRaises(ValueError):secure_storage.private(link)
-    def test_archive_helper_dies_with_its_updater(self):
+    def helper_dies_with_parent(self, guard):
         code="""import os,sys,subprocess,time
 sys.path.insert(0,'scripts')
 import importlib.util
 s=importlib.util.spec_from_file_location('h','scripts/bungee-host.py');h=importlib.util.module_from_spec(s);s.loader.exec_module(h)
-p=subprocess.Popen(['sleep','60'],preexec_fn=h.child_guard(os.getpid()))
+import regional_maps
+p=subprocess.Popen(['sleep','60'],preexec_fn=GUARD)
 print(p.pid,flush=True)
 time.sleep(60)
-"""
+""".replace("GUARD",guard)
         parent=subprocess.Popen([sys.executable,'-c',code],stdout=subprocess.PIPE,text=True)
         child=int(parent.stdout.readline())
         try:
@@ -50,11 +51,15 @@ time.sleep(60)
                 stat=Path(f'/proc/{child}/stat')
                 if not stat.exists() or stat.read_text().split()[2]=='Z':break
                 time.sleep(.01)
-            else:self.fail('Archive helper survived its updater')
+            else:self.fail('Child helper survived its parent')
         finally:
             parent.stdout.close()
             try:os.kill(child,signal.SIGKILL)
             except ProcessLookupError:pass
+    def test_archive_helper_dies_with_its_updater(self):
+        self.helper_dies_with_parent('h.child_guard(os.getpid())')
+    def test_map_extractor_dies_with_its_downloader(self):
+        self.helper_dies_with_parent('regional_maps._child_limits(1024)')
     def test_resolver_configuration_accepts_selected_public_or_lan_and_rejects_loops(self):
         for ip in ['1.1.1.1','8.8.8.8','192.168.1.53','fd00::53','2606:4700:4700::1111']:
             self.assertEqual(host.network.dns_upstream(ip),ip)

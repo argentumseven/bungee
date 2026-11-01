@@ -549,8 +549,6 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await page.getByRole("button",{name:"Device care",exact:true}).click();
     await page.getByText(/Armed at last report/).waitFor();
     const gallery = page.locator("section.recovery-photos");
-    assert.equal(await gallery.locator("img").count(),0);
-    await gallery.getByRole("button",{name:"View saved photos",exact:true}).click();
     const image = gallery.getByRole("img",{name:"Labelled local camera test"});
     await image.waitFor();
     await page.waitForFunction(() => { const image=document.querySelector(".recovery-photos img");return image?.complete && image.naturalWidth===320; });
@@ -612,7 +610,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
         .waitFor();
       await page
         .getByRole("img", {
-          name: "Saved GPS trail, longitude horizontally and latitude vertically",
+          name: "OpenStreetMap GPS history",
         })
         .waitFor();
       await page.getByText(/Selected:.*37.780000, -122.420000/).waitFor();
@@ -657,7 +655,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       await page.getByText(/Showing the closest saved record/).waitFor();
       await page
         .getByRole("img", {
-          name: "Saved GPS trail, longitude horizontally and latitude vertically",
+          name: "OpenStreetMap GPS history",
         })
         .waitFor();
       await page.evaluate(() => scrollTo(0, 0));
@@ -763,6 +761,8 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await row.getByRole("button",{name:"Purge binding",exact:true}).click();
     await page.getByRole("heading",{name:"Purge this inactive binding?"}).waitFor();
     await page.getByRole("dialog").getByRole("button",{name:"Purge binding",exact:true}).click();
+    await page.getByRole("dialog").waitFor({state:"hidden"});
+    await page.getByRole("button",{name:"Create another invitation",exact:true}).click();
     assert.equal(await page.getByLabel("Phone’s WireGuard public key",{exact:true}).inputValue(), "");
     await page.getByRole("button",{name:"Use previous phone key",exact:true}).click();
     assert.equal(await page.getByLabel("Phone’s WireGuard public key",{exact:true}).inputValue(),key);

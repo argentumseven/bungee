@@ -54,7 +54,7 @@ class InputTests(unittest.TestCase):
 
     def test_invalid_answer_only_repeats_that_field(self):
         answers = ['10000', '8443', '203.0.113.5', '10.10.201.27', '10.10.201.27', '10.10.10.0/24', 'off', 'oops', '20', 'stable', 'yes']
-        with patch.object(host, 'ask', side_effect=answers) as ask:
+        with patch.object(host, 'ask', side_effect=answers) as ask, patch.object(host,'choose_maps',return_value=[]):
             config = host.guided()
         prompts = [call.args[0] for call in ask.call_args_list]
         self.assertEqual(sum('WireGuard UDP' in p for p in prompts), 1)

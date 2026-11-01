@@ -1,0 +1,240 @@
+"""Allowlisted host map jobs. The app container never runs Docker or downloads providers."""
+import contextlib
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import shutil
+import stat
+import tempfile
+import time
+import regional_maps
+
+GIB=1024**3
+OVERHEAD=128*1024**2
+JOB_ID=re.compile(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}')
+
+
+def atomic(path, value):
+    path=Path(path)
+    temporary=path.with_name(path.name+'.'+secrets.token_hex(8))
+    try:
+        fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o644)
+        with os.fdopen(fd,'w') as stream:
+            json.dump(value,stream,separators=(',',':'));stream.write('\n');stream.flush();os.fsync(stream.fileno())
+        os.replace(temporary,path)
+        fd=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY)
+        try: os.fsync(fd)
+        finally: os.close(fd)
+    finally: temporary.unlink(missing_ok=True)
+
+
+def setup(root):
+    root=Path(root)
+    for relative in ('maps','maps/archives','map-control','map-control/status','map-control/requests'):
+        path=root/relative
+        if path.is_symlink(): raise ValueError('Map control directories cannot be symlinks')
+        path.mkdir(exist_ok=True)
+        path.chmod(0o700 if relative.endswith('requests') else 0o755)
+    if os.geteuid()==0: os.chown(root/'map-control/requests',10001,10001)
+    if not (root/'maps/library.json').exists(): atomic(root/'maps/library.json',{'format':1,'regions':[]})
+
+
+def free_bytes(path):
+    info=os.statvfs(path)
+    return info.f_bavail*info.f_frsize,info.f_blocks*info.f_frsize
+
+
+def capacity(root):
+    root=Path(root)
+    free,total=free_bytes(root)
+    memory={}
+    for line in Path('/proc/meminfo').read_text().splitlines():
+        key,value=line.split(':',1);memory[key]=int(value.split()[0])*1024
+    swap=memory.get('SwapTotal',0);used=swap-memory.get('SwapFree',0)
+    swap_growth=2*GIB if swap else GIB
+    # Existing swap files and old map generations already reduce f_bavail.
+    # Never subtract their allocation twice. Keep additional growth headroom.
+    backing=Path('/var/lib/bungee')
+    if not backing.exists(): backing=root
+    backing_free,backing_total=free_bytes(backing)
+    shared=os.stat(backing).st_dev==os.stat(root).st_dev
+    history_reserve=max(2*GIB,min(8*GIB,total//20))
+    # Cold tar/age snapshots need another full logical copy of private volumes.
+    # Sparse files are counted logically because the archive may materialize them.
+    snapshot_bytes=0;entries=0
+    for path in (root/'volumes').rglob('*'):
+        entries+=1
+        if entries>10000: raise ValueError('Too many private-volume files to budget a safe map download')
+        try: info=path.lstat()
+        except FileNotFoundError: continue # SQLite may retire a WAL between observations.
+        if stat.S_ISREG(info.st_mode): snapshot_bytes+=info.st_size
+    snapshot_reserve=int(snapshot_bytes*1.05)+OVERHEAD if snapshot_bytes else 0
+    target_reserve=history_reserve+snapshot_reserve+(swap_growth if shared else 0)
+    return {'total_bytes':total,'free_bytes':free,'reserve_bytes':target_reserve,
+            'available_bytes':max(0,free-target_reserve-OVERHEAD),'swap_total_bytes':swap,'swap_used_bytes':used,
+            'swap_growth_reserve_bytes':swap_growth,'backing_free_bytes':backing_free,'backing_total_bytes':backing_total,
+            'snapshot_reserve_bytes':snapshot_reserve,
+            'backing_has_tool_space':shared or backing_free>=swap_growth+OVERHEAD,
+            'note':'Existing swap files and retained datasets are already counted as used space. Additional headroom protects a fresh private-data snapshot, history, staging and swap growth.'}
+
+
+def library(root):
+    return json.loads((Path(root)/'maps/library.json').read_text())
+
+
+def legacy_bytes(root):
+    try:
+        current=json.loads((root/'current.json').read_text())['generation']
+        config=json.loads((root/'generations'/current/'config.json').read_text())
+        path=root/'datasets'/config.get('geodata','empty')/'map.pmtiles'
+        return path.stat().st_size if path.exists() else 0
+    except (OSError,KeyError,ValueError): return 0
+
+
+def check_plan(root, plan):
+    disk=capacity(root)
+    planned=plan['planned_bytes']
+    current=library(root)['regions']
+    if len(current)+len(plan['regions'])>24: raise ValueError('At most 24 regions can be installed; remove unused regions first')
+    installed=sum(item['bytes'] for item in current)+legacy_bytes(root)
+    if planned+installed>regional_maps.LIMIT: raise ValueError('Selected and installed street maps exceed the 25 GB map limit; remove maps or select fewer regions')
+    if planned>disk['available_bytes'] or not disk['backing_has_tool_space']:
+        raise ValueError('Selected maps exceed safe free space after staging, history and swap reserves')
+    return disk
+
+
+def public_status(root, catalog_path, state):
+    catalog=regional_maps.region_catalog(catalog_path)
+    value={**state,'updated_at':int(time.time()),'disk':capacity(root),'installed':library(root)['regions'],
+           'legacy_map_bytes':legacy_bytes(root),'map_limit_bytes':regional_maps.LIMIT,
+           'catalog':[{key:item[key] for key in ('id','name','group','estimated_bytes','bounds','max_zoom')} for item in catalog.values()]}
+    atomic(root/'map-control/status/state.json',value)
+    return value
+
+
+def read_request(path):
+    with os.fdopen(os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)) as stream:
+        info=os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1 or info.st_size>16384 or info.st_uid not in (0,10001,os.getuid()):
+            raise ValueError('Invalid map request file')
+        value=json.loads(stream.read(16385))
+    if not isinstance(value,dict) or set(value)-{'action','regions','plan_id'} or value.get('action') not in ('plan','install','remove'):
+        raise ValueError('Invalid map request')
+    return value
+
+
+def plan_selection(root, catalog_path, identifiers, progress):
+    catalog=regional_maps.region_catalog(catalog_path)
+    regional_maps.selection(catalog,identifiers)
+    disk=capacity(root)
+    if disk['available_bytes']<=0 or not disk['backing_has_tool_space']:
+        raise ValueError('Insufficient safe space even for map planning/tool downloads; existing maps preserved')
+    installed={item['id'] for item in library(root)['regions']}
+    wanted=[identifier for identifier in identifiers if identifier not in installed]
+    if not wanted: raise ValueError('The selected regions are already installed')
+    plan=regional_maps.make_plan(catalog_path,wanted,progress)
+    check_plan(root,plan)
+    return plan
+
+
+def install_plan(root,catalog_path,plan,progress,cancelled=lambda:False):
+    check_plan(root,plan)
+    existing=library(root)
+    if any(item['id'] in {r['id'] for r in existing['regions']} for item in plan['regions']):
+        raise ValueError('Installed maps changed; calculate the selection again')
+    # Staging and final archive are on the same encrypted filesystem: atomic
+    # rename publishes validated files without a second multi-GB import copy.
+    with tempfile.TemporaryDirectory(prefix='.staging-',dir=root/'maps') as staging:
+        def remaining():
+            disk=capacity(root)
+            return disk['free_bytes']-disk['reserve_bytes'] if disk['backing_has_tool_space'] else -1
+        results=regional_maps.extract_regions(catalog_path,plan,staging,progress,
+                    remaining,cancelled)
+        progress('Validating maps before publishing')
+        for item in results:
+            with Path(item['path']).open('rb') as stream: header=stream.read(127)
+            if len(header)!=127 or header[:8]!=b'PMTiles\x03' or header[99]!=1 or not header[100]<=header[101]<=22 or header[101]<14 or header[97] not in (1,2) or header[98] not in (1,2):
+                raise ValueError('Downloaded archive does not contain street-level vector maps')
+        published=[]
+        try:
+            for item in results:
+                source=Path(item.pop('path'))
+                filename=f'{item["id"]}-{item["sha256"][:16]}.pmtiles'
+                destination=root/'maps/archives'/filename
+                os.chmod(source,0o644)
+                os.replace(source,destination)
+                with destination.open('rb') as stream: os.fsync(stream.fileno())
+                published.append(destination)
+                item['filename']=filename
+            fd=os.open(root/'maps/archives',os.O_RDONLY|os.O_DIRECTORY)
+            try: os.fsync(fd)
+            finally: os.close(fd)
+            atomic(root/'maps/library.json',{'format':1,'regions':existing['regions']+results})
+        except Exception:
+            referenced={item['filename'] for item in library(root)['regions']}
+            for path in published:
+                if path.name not in referenced: path.unlink(missing_ok=True)
+            raise
+
+
+def remove_regions(root, identifiers):
+    value=library(root)
+    removed=[item for item in value['regions'] if item['id'] in identifiers]
+    if not removed: raise ValueError('No selected installed maps to remove')
+    for item in removed:
+        filename=item['filename']
+        if not re.fullmatch(r'[a-z][a-z0-9-]{1,47}-[a-f0-9]{16}\.pmtiles',filename): raise ValueError('Invalid stored map filename')
+    atomic(root/'maps/library.json',{'format':1,'regions':[item for item in value['regions'] if item['id'] not in identifiers]})
+    for item in removed:
+        filename=item['filename']
+        (root/'maps/archives'/filename).unlink(missing_ok=True)
+
+
+def tick(root, catalog_path):
+    root=Path(root);setup(root)
+    with (root/'maps.lock').open('a') as lock:
+        try: fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError: return
+        # The lock excludes a live CLI/worker download before cleanup runs.
+        for stale in (root/'maps').glob('.staging-*'):
+            if stale.is_dir() and not stale.is_symlink(): shutil.rmtree(stale)
+        state={}
+        with contextlib.suppress(OSError,ValueError): state=json.loads((root/'map-control/status/state.json').read_text())
+        state={key:state[key] for key in ('job','last_plan') if key in state}
+        if state.get('job',{}).get('state')=='running':
+            state['job'].update(state='failed',message='Map worker restarted; existing maps were preserved. Plan and retry the selection.')
+        paths=sorted(p for p in (root/'map-control/requests').iterdir() if JOB_ID.fullmatch(p.stem) and p.suffix=='.json')
+        if not paths: public_status(root,catalog_path,state);return
+        path=paths[0];job_id=path.stem
+        cancel=root/'map-control/requests'/('cancel-'+job_id)
+        state['job']={'id':job_id,'state':'running','message':'Checking map selection'}
+        def progress(message):
+            state['job']['message']=message
+            public_status(root,catalog_path,state)
+        try:
+            request=read_request(path)
+            regional_maps.selection(regional_maps.region_catalog(catalog_path),request.get('regions'))
+            public_status(root,catalog_path,state)
+            path.unlink()
+            if request['action']=='plan':
+                state['last_plan']=plan_selection(root,catalog_path,request['regions'],progress)|{'id':job_id}
+                message='Download plan ready. Review the total and available space before installing.'
+            elif request['action']=='install':
+                plan=state.get('last_plan',{})
+                if plan.get('id')!=request.get('plan_id') or int(time.time())-plan.get('created_at',0)>3600 or sorted(request['regions'])!=sorted(item['id'] for item in plan.get('regions',[])):
+                    raise ValueError('Download plan expired or selection changed; calculate sizes again')
+                install_plan(root,catalog_path,plan,progress,cancel.exists)
+                state.pop('last_plan',None)
+                message='Street maps installed. Tracking maps refresh automatically.'
+            else:
+                remove_regions(root,request['regions']);state.pop('last_plan',None)
+                message='Selected maps removed.'
+            state['job'].update(state='completed',message=message)
+        except Exception as error:
+            state['job'].update(state='failed',message=str(error)[:2048])
+        finally:
+            path.unlink(missing_ok=True);cancel.unlink(missing_ok=True)
+            public_status(root,catalog_path,state)

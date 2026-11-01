@@ -49,7 +49,7 @@ class SetupTests(unittest.TestCase):
         self.assertGreater(manifest['android_version_code'], 0)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for source, target in [(host.HERE / 'bungee-host.py', 'bungee-host.py'), (host.module_path, 'network_config.py'), (host.release_path, 'release.json'), (host.HERE / 'secure_storage.py', 'secure_storage.py'), (host.HERE / 'tls_config.py', 'tls_config.py'), (host.HERE / 'regional_maps.py', 'regional_maps.py')]:
+            for source, target in [(host.HERE / 'bungee-host.py', 'bungee-host.py'), (host.module_path, 'network_config.py'), (host.release_path, 'release.json'), (host.HERE / 'secure_storage.py', 'secure_storage.py'), (host.HERE / 'tls_config.py', 'tls_config.py'), (host.HERE / 'regional_maps.py', 'regional_maps.py'), (host.HERE / 'map_manager.py', 'map_manager.py')]:
                 (root / target).write_text(source.read_text())
             script = "import importlib.util,sys; s=importlib.util.spec_from_file_location('installed',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.VERSION)"
             result = subprocess.check_output(['python3', '-c', script, str(root / 'bungee-host.py')], text=True)
@@ -230,7 +230,7 @@ class DatasetTests(unittest.TestCase):
     def test_forbidden_street_map_download_does_not_interrupt_running_server(self):
         old = self.host.current()
         before = list(self.engine.events)
-        with patch.object(host.regional_maps, 'acquire', side_effect=RuntimeError('Street-map catalogue download: HTTP 403')):
+        with patch.object(self.host,'metadata',return_value={**metadata(),'version':'1.1.8'}), patch.object(host.map_manager, 'plan_selection', side_effect=RuntimeError('Street-map catalogue download: HTTP 403')):
             with self.assertRaisesRegex(RuntimeError, 'catalogue download: HTTP 403'):
                 host.install_us_maps(self.host)
         self.assertEqual(self.host.current(), old)
@@ -249,8 +249,9 @@ class DatasetTests(unittest.TestCase):
             self.assertEqual((dataset / 'geoip.mmdb').read_bytes(), data.read_bytes())
             self.assertEqual(dataset.stat().st_mode & 0o777, 0o755)
             service = host.read(self.root / 'generations' / self.host.current() / 'compose.json')['services']['server']
-            self.assertTrue(service['volumes'][-1]['read_only'])
-            self.assertEqual(service['volumes'][-1]['source'], str(dataset))
+            mount=next(value for value in service['volumes'] if value['target']=='/datasets')
+            self.assertTrue(mount['read_only'])
+            self.assertEqual(mount['source'], str(dataset))
     def test_invalid_dataset_causes_no_downtime_or_current_pointer_change(self):
         with tempfile.TemporaryDirectory() as directory:
             data = Path(directory) / 'invalid.mmdb'; data.write_bytes(b'bad')
@@ -267,4 +268,4 @@ class DatasetTests(unittest.TestCase):
             with self.assertRaises(RuntimeError): self.host.datasets(geoip=data)
             self.assertEqual(self.host.current(), self.old)
             config = host.read(self.root / 'generations' / self.old / 'compose.json')
-            self.assertTrue(config['services']['server']['volumes'][-1]['source'].endswith('/empty'))
+            self.assertTrue(next(value for value in config['services']['server']['volumes'] if value['target']=='/datasets')['source'].endswith('/empty'))

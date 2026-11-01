@@ -10,7 +10,7 @@ Bungee is a self-hosted device finder for Android 12+ and GrapheneOS. Pair house
 
 The Kotlin app connects through an app-contained WireGuard tunnel to a Rust server and web dashboard. Only Bungee traffic uses that tunnel; Android's VPN slot remains available. Phone records stay on your server until you erase them or revoke the device.
 
-**Version 1.1.7.** Physical GrapheneOS testing and an independent security audit are pending. See the [validation record](docs/VALIDATION.md) for completed checks and [security design](docs/SECURITY.md) for the trust model.
+**Version 1.1.8.** Physical GrapheneOS testing and an independent security audit are pending. See the [validation record](docs/VALIDATION.md) for completed checks and [security design](docs/SECURITY.md) for the trust model.
 
 ![Bungee dashboard in dark mode](docs/screenshots/dashboard.png)
 
@@ -23,13 +23,13 @@ The Kotlin app connects through an app-contained WireGuard tunnel to a Rust serv
 | Dashboard | Multiple named phones, enrollment state, last contact, battery/charging, dated last-known GPS and accuracy, manual refresh, mobile layout, sign-out |
 | GPS history | Saved observations and check-in logs; inclusive time ranges; pagination; point selection and coordinate trail; CSV downloads with cancellation and server resource limits |
 | Recurring lookups | All records, newest per 5 minutes/hour/custom 1–1,440 minutes, or nearest to a daily time in an IANA timezone; configurable ±0–120 minute tolerance; matching CSV; originals preserved. Interval ranges: 366 days/10,000 buckets; daily ranges: 366 days |
-| Maps | Local OpenStreetMap PNG/JPEG MBTiles, authenticated same-origin tiles, pan/zoom, coordinates when coverage is missing; no public tile fallback |
+| Maps | Regional OpenStreetMap vector PMTiles and raster MBTiles, local street labels, one map for GPS/current/history views, installed-map picker and capacity checks; no public tile fallback |
 | IP history | Authenticated WireGuard endpoint observations, IPv4/IPv6, offline City MMDB estimates with radius/database age, separate time/recurrence lookup and CSV; IP estimates stay separate from GPS |
 | Dataset imports | Validated local map/GeoIP imports, read-only files, rollback on failed trials, explicit removal; no runtime provider downloads or accounts |
 | Offline GPS | Independent sampling, individually AES-GCM encrypted SQLite records, up to 10,080 unique unsent fixes, bounded uploads, deduplication, transactional legacy-queue migration and capacity-loss counts |
 | Poor connectivity | Network-aware exponential backoff/jitter, adaptive 1–100-point catch-up, command priority, encrypted receipt retries, late receipt reconciliation and separate contact/telemetry ages. [DDIL details](docs/DDIL.md) |
 | Last-known location | Retained through outages, missing fixes and server restarts; older backfills cannot replace a newer point |
-| Recovery commands | Fresh GPS request, alarm/stop sound, post/clear recovery message and screen lock with removable Android device administration; five-minute expiry and phone-reported outcomes |
+| Recovery commands | Fresh GPS, alarm/flash, messages, normal Android screen lock and Stop all actions; cancellation of current actions and queued offers; five-minute normal expiry, 24-hour stop expiry and phone-reported outcomes |
 | Alarm | Bundled rising/falling siren, at most 30 seconds, phone alarm volume and interruption settings, local stop controls, two-second browser preview |
 | Messages | Up to 240 characters in Android recovery notifications; lock-screen and heads-up illustrations in the dashboard; normal credential entry remains accessible |
 | Lost mode | Saved state survives outages, one lock attempt per revision when permitted, contact notification and more frequent check-ins |
@@ -42,7 +42,7 @@ The Kotlin app connects through an app-contained WireGuard tunnel to a Rust serv
 | Appearance | System/Light/Dark themes on web and Android, saved local choices, slate/charcoal/teal palettes and pink home/location icon |
 | VPN coexistence | Userspace WireGuard/TCP carries the fixed home API without OS routes, root or VpnService. Other VPNs can route or filter the outer UDP socket |
 | Device status | Desired/applied policy revision and errors, Android/security-patch version, screen-lock state, eligible failed-credential counts, lost mode and dated queue/camera reports |
-| Legacy DNS summaries | Read/erase earlier managed-DNS data: site groups, query types/results, five-minute rollups and folded ten-second activity windows. Raw subdomains, answer IPs and payloads are not retained. New managed-DNS enrollment is disabled |
+| DNS diagnostics | Signed phone → Bungee → configured home resolver test; Android-reported DNS/Private DNS settings; labelled diagnostic rollups and legacy summary erasure. Browser DNS is not captured; Android’s VPN slot stays unused |
 | Recovery safeguards | Server/client reject persistent policy fields and remote reboot; device/profile ownership blocks operation; owner provisioning disabled; no app suspension, uninstall blocks, forced credentials, kiosk or recovery-settings restrictions |
 | Pairing | Phone-generated identity, one-use ten-minute invitation bound to its public key, safe unpaired-invitation reissue, P-256 proof/signatures, replay protection and unique random 256-bit WireGuard PSK |
 | Network setup | Operator-chosen numeric endpoint and UDP port; 51820 rejected; only `10.77.0.1/32` routed inside Bungee; no default internet route |
@@ -53,7 +53,7 @@ The Kotlin app connects through an app-contained WireGuard tunnel to a Rust serv
 | Server updates | Host systemd timer with Compose image replacement, immutable two-image bundles, staged downloads, admission closed during trials, coherent encrypted cold snapshots, failed-trial recovery and three retained snapshots |
 | Builds | ARM64/x86_64 APK, coordinated `release.json`, CI checks and checksums, operator-owned stable signing option, source and synthetic test fixtures |
 
-Bungee does not support device-owner/work-profile management, forced system DNS, app suspension, hidden launchers, lock-screen overlays, airplane-mode cycling, radio schedules, power-off/reboot/wipe, credential reset, arbitrary scripts or software deployment. Powered-off finding, a crowdsourced offline network, relay/NAT traversal, household roles/MFA and hardware attestation are also unavailable. Guided installs include a world overview and DB-IP Lite City data, then download a US street-map extract if storage and connectivity permit.
+Bungee does not support device-owner/work-profile management, forced system DNS, app suspension, hidden launchers, lock-screen overlays, airplane-mode cycling, radio schedules, power-off/reboot/wipe, credential reset, arbitrary scripts or software deployment. Powered-off finding, a crowdsourced offline network, relay/NAT traversal, household roles/MFA and hardware attestation are also unavailable. Guided installs include the world overview and DB-IP Lite City data and offer a regional street-map checklist. Settings → Maps & storage offers the same regional downloads, planned sizes, installed maps and safe free capacity.
 
 ## Install the server
 
@@ -108,7 +108,11 @@ For restoration after reboot or an app update, separately enable **Automatic rec
 
 ![Recovery gallery with a synthetic test image](docs/screenshots/recovery-photos.png)
 
-**Pairing & recovery** lives inside the normal phone app, with **Bungee recovery** as an independent offline entry. Stop preserves pairing and server history; reset pairing separately clears Bungee's local connection and queued records. Phone keys are kept unless you explicitly select fresh keys for a damaged identity. Android management repair is a separate confirmed action and never wipes a phone or removes a profile. Resume sharing in the main app; clearing a stop restores no camera/restart consent.
+**Stop all Bungee actions** stops an already playing siren and blinking flashlight, restores alarm volume, cancels remote work and older queued commands, clears the recovery notification, and turns off lost mode/haste. The phone must be reachable; a separate stop check runs while actions are active. Ordinary sharing and pairing stay intact. **Lock device** uses Android's standard screen lock: it does not change the credential or wipe anything. A stop can cancel a lock before it executes but cannot unlock Android afterward; unlock normally on the phone.
+
+Browser DNS does **not** enter Bungee's app-only tunnel. To use AdGuard for phone-wide DNS without taking Android's VPN slot, configure Wi-Fi DNS or Android Private DNS with AdGuard's reachable TLS hostname. **Test DNS path** verifies only the Bungee → home resolver forwarding path, and the phone shows its OS-reported DNS configuration. An empty Bungee DNS log is not evidence of captured browsing traffic.
+
+**Pairing & recovery** is a visible button inside the normal phone app, including its lock screen. There is one launcher icon; the recovery panel works offline even when pairing keys cannot be opened. Stop preserves pairing and server history; reset pairing separately clears Bungee's local connection and queued records. Phone keys are kept unless you explicitly select fresh keys for a damaged identity. Android management repair is a separate confirmed action and never wipes a phone or removes a profile. Resume sharing in the main app; clearing a stop restores no camera/restart consent.
 
 To reuse a phone public key after a failed or deleted pairing, open **Settings → Inactive pairings** in the manager and purge the revoked record or expired, unused invitation. Revoke a previously paired device first. Create a fresh invitation afterward; old tokens and secrets never become valid again. Offline paired devices are protected from purge.
 
@@ -169,3 +173,17 @@ See the [platform matrix](docs/PLATFORM.md), [management guide](docs/MANAGEMENT.
 AGPL-3.0-only. See [LICENSE](LICENSE).
 
 Server deployment now uses direct Rust HTTPS, LUKS2 persistent storage with host-key unattended unlock, and age-encrypted cold backups. Optional DNS forwards only to an explicit numeric LAN/home or public resolver over UDP/TCP; general phone forwarding stays disabled. See [installation](docs/INSTALL.md), [VPS routing](docs/DEPLOYMENT.md), and [1.1.4 migration](docs/MIGRATION-1.1.4.md).
+
+## Regional maps
+
+Choose maps in the server installer or **Settings → Maps & storage**. The catalogue has 248 choices: eight US regions (including Alaska/Hawaii) and country regions grouped by continent. Checkboxes show rough sizes and a combined estimate; **Calculate download sizes** obtains a current extraction plan before **Download selected maps**. Up to 24 regions / 25 GB of street maps can be installed. Free-space checks count existing data/rollback copies and leave system, staging and swap-growth headroom. Downloads are verified and become available in all tracking views without restarting the server.
+
+The same picker is available locally:
+
+```sh
+python3 /opt/bungee/bungee-host.py maps
+```
+
+For a scripted selection, use `maps --regions us-pacific,us-mountain`; add `--plan` to fetch sizes without installing archives. `maps-us` remains an alias for all eight US regions. Full postal-address reverse geocoding is not bundled; nearby mapped street names are explicitly approximate.
+
+![Regional map picker and storage capacity](docs/screenshots/maps-storage.png)

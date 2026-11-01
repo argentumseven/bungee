@@ -33,6 +33,9 @@ class TelemetryService : Service() {
     private var worker: Job? = null
     private lateinit var recoveryAlarm: RecoveryAlarm
     private var ringJob: Job? = null
+    private var remoteAction: Deferred<Unit>? = null
+    private val actionsLock = Any()
+    private var actionGeneration = 0L
     private var sampler: Job? = null
     private data class Observation(val point: JSONObject, val epoch: String, val stamp: DisclosureFence.Stamp)
     @Volatile private var network: Network? = null
@@ -107,6 +110,22 @@ class TelemetryService : Service() {
         updateLocationStatus()
         if (worker?.isActive == true) return if (LocalSafety.isConnectionRestartAllowed(this)) START_STICKY else START_NOT_STICKY
         status.value = status.value.copy(running = true, connected = false, text = "Connecting to your household", nextRetryAt = null)
+        // A GPS wait or photo upload must not hold up an emergency stop.
+        scope.launch {
+            val urgent = HomeApi(identity)
+            while (isActive) {
+                delay(2000)
+                if (!identity.enrolled || !identity.allowCommands || !status.value.connected ||
+                    (ringJob?.isActive != true && remoteAction?.isActive != true &&
+                     !identity.state("management").optBoolean("lost_mode_active") && identity.recoveryMessage == null)) continue
+                try {
+                    val response = withContext(Dispatchers.IO) { urgent.request("/v1/commands", JSONObject().put("only_stop", true)) }
+                    val stops = response.getJSONArray("commands")
+                    for (n in 0 until stops.length()) execute(urgent, stops.getJSONObject(n), elapsed()+20_000)
+                } catch (e: CancellationException) { throw e }
+                catch (_: Exception) { /* The ordinary connection loop owns reconnect/backoff. */ }
+            }
+        }
         // Sampling is independent: a long network timeout/backoff cannot suspend the GPS trail.
         sampler = scope.launch {
             while (isActive && !LocalSafety.isStopped(this@TelemetryService) && !ManagementAgent.blocksPersonalOperation(this@TelemetryService)) {
@@ -156,21 +175,26 @@ class TelemetryService : Service() {
                     // Commands and saved receipts take precedence over bulk GPS catch-up on a short link.
                     val probeStarted = elapsed()
                     val polled = try { withContext(Dispatchers.IO) { api.request("/v1/commands") }.also { ConnectionHealth.success(elapsed()-probeStarted) } } catch (e: Exception) { ConnectionHealth.failed(); throw e }
+                    status.value = status.value.copy(connected = true)
                     withContext(Dispatchers.IO) { identity.reconcileGpsEpoch(polled.getString("gps_epoch")) }
                     polled.optString("photo_epoch").takeIf { it.isNotEmpty() }?.let { epoch -> withContext(Dispatchers.IO) { identity.reconcilePhotoEpoch(epoch) } }
                     val batch = polled.getJSONArray("commands")
                     val deadline = elapsed() + 90_000
+                    val generation = synchronized(actionsLock) { actionGeneration }
                     if (elapsed() < deadline) { withContext(Dispatchers.IO) {
                         val desired = api.request("/v1/sync", JSONObject().put("report", ManagementAgent.report(this@TelemetryService, identity)))
                         identity.reconcileGpsEpoch(desired.getString("gps_epoch"))
-                        ManagementAgent.apply(this@TelemetryService, identity, desired.getLong("revision"), desired.getJSONObject("policy"))
+                        synchronized(actionsLock) { if (generation == actionGeneration)
+                            ManagementAgent.apply(this@TelemetryService, identity, desired.getLong("revision"), desired.getJSONObject("policy")) }
                     } }
                     flushReceipts(api, deadline)
                     // Act on already offered short recovery commands before a larger photo upload.
                     for (n in 0 until batch.length()) {
                         if (elapsed() >= deadline) break
                         val command=batch.getJSONObject(n)
-                        if(command.getString("kind") !in listOf("locate","best_guess")) execute(api,command,deadline)
+                        if(command.getString("kind") !in listOf("locate","best_guess")) {
+                            if(command.getString("kind")=="stop_all") execute(api,command,deadline) else executeTracked(api,command,deadline)
+                        }
                     }
                     if (elapsed() < deadline && elapsed() >= nextPhotoAttempt) {
                         try { uploadPhoto(api, deadline) }
@@ -184,7 +208,7 @@ class TelemetryService : Service() {
                     for (n in 0 until batch.length()) {
                         if (elapsed() >= deadline) break
                         val command=batch.getJSONObject(n)
-                        if(command.getString("kind") in listOf("locate","best_guess")) execute(api,command,deadline)
+                        if(command.getString("kind") in listOf("locate","best_guess")) executeTracked(api,command,deadline)
                     }
                     if (elapsed() < deadline && (elapsed() >= nextTelemetry || status.value.queuedFixes > 0)) {
                         upload(api, limit = retry.batchSize)
@@ -343,6 +367,12 @@ class TelemetryService : Service() {
         val response = withContext(Dispatchers.IO) { api.request("/v1/ack", receipt) }
         if (ReceiptOutbox.confirmed(response)) withContext(Dispatchers.IO) { identity.settleReceipt(receipt.getString("id")) }
     }
+    private suspend fun executeTracked(api: HomeApi, command: JSONObject, deadline: Long) = supervisorScope {
+        val running = async { execute(api,command,deadline) }
+        remoteAction = running
+        try { running.await() } catch (e: CancellationException) { currentCoroutineContext().ensureActive() }
+        finally { if (remoteAction === running) remoteAction = null }
+    }
     private suspend fun execute(api: HomeApi, command: JSONObject, deadline: Long) {
         if (LocalSafety.isStopped(this) || ManagementAgent.blocksPersonalOperation(this)) return
         val id = command.getString("id")
@@ -391,6 +421,20 @@ class TelemetryService : Service() {
                         "Alarm started for up to 30 seconds; previous alarm volume restored afterward"
                     }
                     "stop_ringing" -> { identity.ifCommandsAllowed { stopRinging() }; "Sound stopped" }
+                    "dns_check" -> {
+                        val reply=withContext(Dispatchers.IO) { api.request("/v1/dns-check") }
+                        check(reply.getBoolean("reachable")) { "No reply from home DNS upstream ${reply.getString("upstream")}" }
+                        "DNS path verified: phone → Bungee → ${reply.getString("upstream")}; example.com: ${reply.getString("response_code")}. Other apps' DNS is not routed."
+                    }
+                    "stop_all" -> {
+                        remoteAction?.cancel()
+                        stopRinging()
+                        synchronized(actionsLock) {
+                            actionGeneration++
+                            ManagementAgent.stopActions(this, identity)
+                        }
+                        "Bungee actions stopped: sound, flashlight, remote GPS and recovery message; lost mode ended. Android stays locked if already locked."
+                    }
                     "message" -> identity.ifCommandsAllowed {
                         val text = command.getJSONObject("payload").getString("message").take(240)
                         identity.recoveryMessage = text
@@ -408,7 +452,7 @@ class TelemetryService : Service() {
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            receipt.put("status", "failed").put("result", "Device could not complete this command")
+            receipt.put("status", "failed").put("result", if(kind=="dns_check") "DNS test failed: ${(e.message ?: e.javaClass.simpleName).take(210)}" else "Device could not complete this command")
         }
         withContext(Dispatchers.IO) { identity.saveResult(id, receipt, expires) }
         sendReceipt(api, receipt)
@@ -456,7 +500,7 @@ class TelemetryService : Service() {
             if (LocalSafety.isStopped(context) || ManagementAgent.blocksPersonalOperation(context)) return@buildList
             if (identity.allowCommands) {
                 if (identity.allowLocate && hasLocation(context) && status.value.gpsAccess in listOf("foreground", "background")) addAll(listOf("locate", "best_guess"))
-                addAll(listOf("ring", "stop_ringing"))
+                addAll(listOf("ring", "stop_ringing", "stop_all", "dns_check"))
                 if (RecoveryAlarm.flashCamera(context) != null) addAll(listOf("flash", "ring_flash"))
                 if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) addAll(listOf("message", "clear_message"))
                 if (context.getSystemService(DevicePolicyManager::class.java).isAdminActive(ComponentName(context, BungeeAdminReceiver::class.java))) add("lock")

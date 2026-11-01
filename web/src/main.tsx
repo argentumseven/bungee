@@ -47,6 +47,7 @@ import { AppearanceControl, useAppearance } from "./Appearance";
 import { RecoveryMessagePreview } from "./RecoveryMessagePreview";
 import { PasswordSettings } from "./PasswordSettings";
 import { RecoveryPhotos } from "./RecoveryPhotos";
+import { MapManager } from "./MapManager";
 
 type Location = {
   latitude: number;
@@ -145,6 +146,7 @@ function App() {
     [lastRefresh, setLastRefresh] = useState<number | null>(null);
   const [clearTarget, setClearTarget] = useState<Device | null>(null);
   const [bindingTarget, setBindingTarget] = useState<Device | null>(null);
+  const [purgedBinding,setPurgedBinding]=useState<Device|null>(null);
   const active = devices.filter((d) => !d.revoked),
     device = active.find((d) => d.id === selected) || active[0];
   const load = async () => {
@@ -165,6 +167,11 @@ function App() {
       .then(() => setAuth(true))
       .catch(() => setAuth(false));
   }, []);
+  useEffect(()=>{
+    const show=()=>{setPage("Settings");window.setTimeout(()=>document.getElementById("map-downloads")?.scrollIntoView({behavior:"smooth",block:"start"}),0);};
+    window.addEventListener("bungee:maps",show);
+    return()=>window.removeEventListener("bungee:maps",show);
+  },[]);
   useEffect(() => {
     const expire = () => {
       setAuth(false);
@@ -177,6 +184,7 @@ function App() {
       setModal(null);
       setClearTarget(null);
       setBindingTarget(null);
+      setPurgedBinding(null);
       setBundle("");
       setPreviousWgKey("");
     };
@@ -566,6 +574,8 @@ function App() {
                       {device ? device.name : "SELECT A PAIRED DEVICE"}
                     </span>
                   </div>
+                  <button className="stop-actions" disabled={busy || !device?.enrolled || !device.capabilities.includes("stop_all")} onClick={() => send("stop_all")}><VolumeX size={18}/> Stop all Bungee actions <small>Stop sound, flash and remote GPS; clear messages and lost mode</small></button>
+                  <p className="fine">A stop waits for the phone to connect. It cancels outstanding commands. It cannot unlock Android after a screen lock has already happened.</p>
                   <div className="actions-grid">
                     {[
                       {
@@ -583,6 +593,7 @@ function App() {
                       {kind:"best_guess",name:"Best guess",desc:"Collect a longer GPS burst",icon:Compass},
                       {kind:"ring_flash",name:"Alarm + flash",desc:"Sound and rear-camera flash",icon:BellRing},
                       {kind:"flash",name:"Flash only",desc:"Find the phone visually",icon:Zap},
+                      {kind:"dns_check",name:"Test DNS path",desc:"Phone → Bungee → home resolver",icon:Activity},
                       {
                         kind: "message",
                         name: "Leave a message",
@@ -592,7 +603,7 @@ function App() {
                       {
                         kind: "lock",
                         name: "Lock device",
-                        desc: "Requires device admin",
+                        desc: "Standard Android lock · unlock normally",
                         icon: LockKeyhole,
                       },
                     ].map(({ kind, name, desc, icon: Icon }) => (
@@ -703,8 +714,8 @@ function App() {
           {page === "Tunnels" && <TunnelView devices={active}/>}
           {page === "Tracking" && (
             <>
-              <div className="tracking-tabs" role="group" aria-label="Tracking views">{["Current estimate","GPS history","IP observations","Check-ins","Photos"].map(tab=><button key={tab} className={trackingTab===tab?"primary":"secondary"} onClick={()=>setTrackingTab(tab)}>{tab}</button>)}</div>
-              <label htmlFor="history-device">Device</label>
+              <div className="tracking-tabs" role="group" aria-label="Tracking views">{["Current estimate","GPS history","IP observations","Check-ins","Photos"].map(tab=><button key={tab} aria-pressed={trackingTab===tab} className={trackingTab===tab?"primary":"secondary"} onClick={()=>setTrackingTab(tab)}>{tab}</button>)}</div>
+              <div className="tracking-device"><label htmlFor="history-device">Device</label>
               <select
                 id="history-device"
                 value={device?.id || ""}
@@ -715,7 +726,7 @@ function App() {
                     {d.name}
                   </option>
                 ))}
-              </select>
+              </select></div>
               {trackingTab==="Photos" ? <RecoveryPhotos/> : device ? (
                 trackingTab==="Current estimate"?<CurrentTracking device={device}/>:<HistoryView key={`${device.id}-${trackingTab}`} device={device} initialKind={trackingTab==="IP observations"?"network":trackingTab==="Check-ins"?"state":"locations"} />
               ) : (
@@ -779,6 +790,7 @@ function App() {
           )}
           {page === "Settings" && (
             <div className="settings-grid">
+              <MapManager/>
               <PasswordSettings onChanged={() => {
                 window.dispatchEvent(new Event("bungee:session-expired"));
                 setPassword("");
@@ -886,6 +898,9 @@ function App() {
                   <small>{d.revoked ? "Revoked" : "Expired invitation · never paired"}</small>
                   <button className="danger-text" onClick={() => { setBindingTarget(d); setModal("purge_binding"); setError(""); }}>Purge binding</button>
                 </div>)}
+                {purgedBinding&&<button className="secondary" onClick={()=>{
+                  setName(purgedBinding.name);setWgKey("");setPreviousWgKey(purgedBinding.wg_public_key||"");setBundle("");setModal("enroll");
+                }}>Create another invitation</button>}
               </section>
             </div>
           )}
@@ -1113,8 +1128,8 @@ function App() {
                   await api(`/devices/${target.id}/binding`, {method:"DELETE"});
                   await load();
                   setName(target.name); setWgKey(""); setPreviousWgKey(target.wg_public_key || ""); setBundle("");
-                  setBindingTarget(null); setModal("enroll");
-                  setToast("Binding purged. Create a fresh invitation using the phone’s current public key.");
+                  setPurgedBinding(target);setBindingTarget(null); setModal(null);
+                  setToast("Inactive binding purged. The phone is unchanged.");
                 } catch(e) { setError((e as Error).message); }
                 finally { setBusy(false); }
               }}>Purge binding</button>
@@ -1249,26 +1264,6 @@ function HistoryView({ device, initialKind="locations" }: { device: Device; init
     .slice()
     .reverse();
   const displayTrail = gpsTrail(points);
-  const bounds = displayTrail.points.reduce(
-    (b, p) => ({
-      minLat: Math.min(b.minLat, p.latitude!),
-      maxLat: Math.max(b.maxLat, p.latitude!),
-      minLon: Math.min(b.minLon, p.longitude!),
-      maxLon: Math.max(b.maxLon, p.longitude!),
-    }),
-    {
-      minLat: Infinity,
-      maxLat: -Infinity,
-      minLon: Infinity,
-      maxLon: -Infinity,
-    },
-  );
-  const latSpan = Math.max(0.0001, bounds.maxLat - bounds.minLat),
-    lonSpan = Math.max(0.0001, bounds.maxLon - bounds.minLon);
-  const minLat = (bounds.maxLat + bounds.minLat - latSpan) / 2,
-    minLon = (bounds.maxLon + bounds.minLon - lonSpan) / 2;
-  const xy = (p: HistoryRecord) =>
-    `${30 + ((p.longitude! - minLon) / lonSpan) * 640},${230 - ((p.latitude! - minLat) / latSpan) * 200}`;
   return (
     <section className="panel history-panel">
       <div className="panel-heading">
@@ -1474,58 +1469,7 @@ function HistoryView({ device, initialKind="locations" }: { device: Device; init
             selected={chosen as Location | null}
             label="OpenStreetMap GPS history"
           />
-          {displayTrail.points.length > 0 && <svg
-            className="history-trail"
-            viewBox="0 0 700 260"
-            role="img"
-            aria-label="Saved GPS trail, longitude horizontally and latitude vertically"
-          >
-            <rect width="700" height="260" rx="12" fill="var(--soft)" />
-            {[1, 2, 3, 4].map((n) => (
-              <path
-                key={n}
-                d={`M${n * 140} 20V240 M20 ${n * 50}H680`}
-                stroke="var(--border)"
-                strokeWidth="0.6"
-              />
-            ))}
-            <text
-              x="350"
-              y="253"
-              textAnchor="middle"
-              fill="var(--muted)"
-              fontSize="8"
-            >
-              LONGITUDE →
-            </text>
-            <text x="16" y="18" fill="var(--muted)" fontSize="8">
-              LATITUDE ↑
-            </text>
-            {displayTrail.segments.filter(segment => segment.length > 1).map((segment, i) => (
-              <polyline key={i} points={segment.map(xy).join(" ")} fill="none" stroke="var(--accent)" strokeWidth="2" />
-            ))}
-            {displayTrail.points.map((p) => {
-              const [cx, cy] = xy(p).split(",");
-              return (
-                <circle
-                  key={p.observed_at}
-                  cx={cx}
-                  cy={cy}
-                  r={chosen?.observed_at === p.observed_at ? 6 : 3}
-                  className={chosen?.observed_at === p.observed_at ? "selected" : undefined}
-                  fill={
-                    chosen?.observed_at === p.observed_at
-                      ? "var(--text)"
-                      : "var(--accent)"
-                  }
-                >
-                  <title>
-                    {new Date(p.observed_at! * 1000).toLocaleString()}
-                  </title>
-                </circle>
-              );
-            })}
-          </svg>}
+
           {displayTrail.ignored > 0 && <p className="fine">{displayTrail.ignored} uncertain fix{displayTrail.ignored === 1 ? "" : "es"} omitted from visual trail; raw records remain available below and in CSV.</p>}
           {displayTrail.points.length === 0 && <p className="fine">No reliable GPS fixes to plot in this range.</p>}
           {chosen && (

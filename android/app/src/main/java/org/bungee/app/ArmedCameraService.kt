@@ -88,8 +88,10 @@ class ArmedCameraService : Service() {
                         if (observedFailures != failuresNow) {
                             observedFailures = failuresNow
                             if (failuresNow > 0) identity.saveState("unlock", JSONObject().put("failed", failuresNow).put("last_failed_at", System.currentTimeMillis()/1000))
-                            failed(failuresNow)
                         }
+                        // A real third failure during the shared test-photo cooldown
+                        // remains eligible when the cooldown ends, while still locked.
+                        if (getSystemService(KeyguardManager::class.java).isDeviceLocked) failed(failuresNow)
                         delay(1000)
                     }
                 } catch (e: Exception) {
@@ -127,11 +129,13 @@ class ArmedCameraService : Service() {
     }
     private fun failed(attempts: Int, manual: Boolean = false) {
         if (session == null || captureJob?.isActive == true) return
+        val before = gate.snapshot().toString()
         val permitted = if (manual) gate.test(SystemClock.elapsedRealtime()) else gate.failed(attempts, SystemClock.elapsedRealtime())
         status.value = status.value.copy(failedInRow = gate.progress)
-        try { saveGate() } catch (_: Exception) { markUnavailable("Capture checkpoint could not be saved"); stopSelf(); return }
+        try { if (before != gate.snapshot().toString()) saveGate() } catch (_: Exception) { markUnavailable("Capture checkpoint could not be saved"); stopSelf(); return }
         if (!permitted) {
             if (manual) status.value = status.value.copy(detail = "Armed · capture rate limit; wait at least 30 seconds; maximum 20 attempts/hour")
+            else if (gate.progress >= 3) status.value = status.value.copy(detail = "3 failures seen · waiting for shared photo cooldown; keep phone locked")
             return
         }
         val armedSession = session ?: return
@@ -163,7 +167,7 @@ class ArmedCameraService : Service() {
                     if (session == armedSession && enabled()) status.value = status.value.copy(detail="Capture canceled before completion · no new picture queued")
                     throw e
                 }
-                if (session == armedSession) status.value = status.value.copy(detail = "Capture failed (${e.javaClass.simpleName}) · no photo to upload; try a labelled test while unlocked")
+                if (session == armedSession) status.value = status.value.copy(detail = "Capture failed: ${(e.message ?: e.javaClass.simpleName).take(110)} · no new photo")
             } finally { ticket?.let { PrivacySends.fence.release(it) } }
         }
     }
@@ -262,6 +266,7 @@ class ArmedCameraService : Service() {
             }
         }
         fun passwordFailed(attempts: Int) { active?.let { service -> service.scope.launch { service.failed(attempts) } } }
+        fun monitorUnavailable(reason: String) { status.value = status.value.copy(detail = "PIN failure monitoring unavailable ($reason); check device administration") }
         fun test(activity: FragmentActivity) {
             check(activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && !activity.getSystemService(KeyguardManager::class.java).isDeviceLocked)
             checkNotNull(active) { "Arm the camera first" }.failed(0, manual = true)

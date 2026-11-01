@@ -68,7 +68,7 @@ Photos remain on the server until separately erased, full history is erased, or 
 
 ## Physical-device checks
 
-Use a personal test phone with a stable signer. Record the GrapheneOS build, permissions and actual timestamps. Keep Android Settings and the independent recovery launcher accessible. Do not change the phone's credential or assign device ownership.
+Use a personal test phone with a stable signer. Record the GrapheneOS build, permissions and actual timestamps. Keep Android Settings and the main app’s Pairing & recovery button accessible. Do not change the phone's credential or assign device ownership.
 
 | Check | Expected result |
 | --- | --- |
@@ -107,3 +107,19 @@ Photos are resized and stripped of EXIF metadata, held in RAM only (maximum eigh
 The gallery supports erasing one photo, all photos for a device, or all household photos from Tracking → Photos. Single deletion retains an ID tombstone so a retry cannot resurrect that photo; bulk erasure rotates photo generations. Existing server backups/media blocks are unaffected by logical deletion.
 
 Queued commands can be canceled individually on the device page. Commands already offered may be executing; Stop retries prevents future redelivery, and updated phones recheck immediately before beginning an action. Cancellation cannot recall an action that has started. Late receipts are retained with the cancellation result.
+
+## Stop current actions
+
+**Stop all Bungee actions** is an actuation stop, including a siren already playing or torch already blinking. It restores Bungee's temporary alarm-volume change, cancels current remote work and pending/offered older commands, clears the recovery message, and disables lost mode/haste. A separate stop poll runs every two seconds while remote actions/alarms/messages/lost mode are active, independently of long GPS waits and photo uploads. Delivery still requires connectivity. The stop request remains available for 24 hours; ordinary action requests expire after five minutes. Receipts distinguish requested, offered and actually completed stops.
+
+The normal app connection, locally approved sampling, phone keys and permissions remain intact. This is not an Android unlock command. Lock uses only `DevicePolicyManager.lockNow()` and ordinary removable force-lock permission: no credential reset, wipe, owner restriction or remote unlock. Stop invalidates a queued lock; once Android has locked the screen the user unlocks normally.
+
+## Camera trigger diagnostics
+
+Both Android credential-callback overloads are accepted and deduplicated by the OS failure count. The camera service also observes that counter. A third eligible failure during the shared test/automatic cooldown remains eligible once the cooldown ends while the phone stays locked; no fourth failure is required. Duplicate observations cannot capture again without three more failures. A successful unlock cancels that eligibility and an in-flight automatic capture. Callback failures and camera busy/disabled/configuration failures now have visible status text. Tests cover these counter/cooldown rules, but capture while locked still requires physical-phone validation.
+
+Saved photos open automatically in the manager; the optional Hide control remains. The phone has one launcher icon, and Pairing & recovery is a real button on the main screen and app lock screen. The internal offline recovery panel also handles damaged pairing keys.
+
+## DNS path checks
+
+Bungee does not take Android's VPN slot or capture browser DNS. Android-reported resolver addresses and Private DNS state are configuration evidence only. Test home DNS path sends a fixed `example.com` A query over the signed Bungee API to the configured home resolver (for example AdGuard Home at 10.10.20.3), bypassing the retired device-owner DNS gate. The result identifies whether the upstream replied, and the server records a labelled diagnostic group. AdGuard sees the forwarding Bungee server's source address. Phone-wide browsing DNS requires separately configured Wi-Fi DNS or reachable Android Private DNS/AdGuard TLS; this feature does not claim to collect that traffic.

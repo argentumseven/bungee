@@ -34,3 +34,5 @@ or home address is established by an IP estimate. Dataset replacement is explici
 
 `us.geojson` is the United States boundary from the same public-domain Natural
 Earth dataset, used only to select intersecting tiles from a Protomaps archive.
+
+Regional download choices are bundled in `regions.json`: eight US regions assembled from Natural Earth 5.1.2 `ne_50m_admin_1_states_provinces.geojson`, and country regions from `ne_50m_admin_0_countries.geojson`. Natural Earth data is public domain. The catalogue records source SHA-256 hashes and retains boundaries for the host downloader; `scripts/build-map-catalog.py` reproduces it from those source files. The installer and Settings → Maps & storage use the same catalogue and exact extraction-plan checks. Population/area-based list sizes are explicitly approximate; they are not claims about measured provider archive sizes.

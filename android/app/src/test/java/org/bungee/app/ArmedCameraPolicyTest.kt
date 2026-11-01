@@ -6,6 +6,21 @@ import org.junit.Test
 import java.util.UUID
 
 class ArmedCameraPolicyTest {
+    @Test fun threeFailuresDuringATestCooldownRemainEligibleWithoutAFourthFailure() {
+        val gate=FailedUnlockGate()
+        assertTrue(gate.test(0))
+        assertFalse(gate.failed(1,1000));assertFalse(gate.failed(2,2000));assertFalse(gate.failed(3,3000))
+        assertEquals(3,gate.progress)
+        assertFalse(gate.failed(3,29_999))
+        assertTrue(gate.failed(3,30_000))
+        assertFalse(gate.failed(3,90_000))
+    }
+    @Test fun duplicateAndroidCallbacksCannotTriggerDuplicatePhotos() {
+        val gate=FailedUnlockGate()
+        assertFalse(gate.failed(1,1000));assertFalse(gate.failed(1,1001))
+        assertFalse(gate.failed(2,2000));assertFalse(gate.failed(2,2001))
+        assertTrue(gate.failed(3,3000));assertFalse(gate.failed(3,3001))
+    }
     @Test fun eachAdditionalGroupOfThreeCanTriggerAnotherCaptureAfterCooldown() {
         val gate = FailedUnlockGate();gate.reset(4)
         assertFalse(gate.failed(6,0));assertTrue(gate.failed(7,0))
