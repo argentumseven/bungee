@@ -136,10 +136,23 @@ test("slow photo uploads have a fixed concurrency bound and release their slots"
   const held=[];
   for(let i=0;i<2;i++){
     const prepared=p.prepare("/v1/photos",{photo_epoch:epoch,photo:{id:randomUUID(),captured_at:Math.floor(Date.now()/1000),failed_attempts:0,reason:"local_test",jpeg:jpeg.toString("base64")}});
-    let request;
-    const completed=new Promise(resolve=>{request=httpRequest(f.deviceOrigin+"/v1/photos",{method:"POST",headers:{...prepared.headers,"Content-Length":Buffer.byteLength(prepared.text)}},r=>{r.resume();r.on("end",()=>resolve(r.statusCode));});request.on("error",()=>resolve("aborted"));});
+    let request;const observed={status:"waiting",body:""};
+    const completed=new Promise(resolve=>{
+      request=httpRequest(f.deviceOrigin+"/v1/photos",{method:"POST",agent:false,timeout:0,headers:{...prepared.headers,"Expect":"100-continue","Content-Length":Buffer.byteLength(prepared.text)}},r=>{
+        observed.status=r.statusCode;r.on("data",b=>observed.body+=b);r.on("end",()=>resolve(r.statusCode));
+      });
+      request.on("error",()=>resolve("aborted"));
+    });
+    // Hyper sends Continue when the admitted handler first polls its body. Wait
+    // for that protocol barrier, rather than guessing that a socket write has
+    // already reached the handler. No body is complete until the test releases it.
+    await new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>{request.destroy();reject(Error("Photo body was not admitted: "+JSON.stringify(observed)))},5000);
+      request.once("continue",()=>{clearTimeout(timer);resolve()});
+      request.flushHeaders();
+    });
     await new Promise((resolve,reject)=>request.write(prepared.text.slice(0,-1),error=>error?reject(error):resolve()));
-    held.push({request,completed,last:prepared.text.slice(-1)});
+    held.push({request,completed,last:prepared.text.slice(-1),observed});
   }
   try{
     async function waitForStatus(expected) {
@@ -147,7 +160,7 @@ test("slow photo uploads have a fixed concurrency bound and release their slots"
       for(let i=0;i<120;i++){status=(await p.request("/v1/photos",{})).status;if(status===expected)return status;await pause(25);}
       return status;
     }
-    assert.equal(await waitForStatus(429),429);
+    assert.equal(await waitForStatus(429),429,JSON.stringify(held.map(h=>h.observed)));
     held[0].request.destroy();assert.equal(await held[0].completed,"aborted");
     assert.equal(await waitForStatus(400),400,"canceled request bodies release admission slots");
   }finally{held[1].request.end(held[1].last);held[0].request.destroy();}
