@@ -47,6 +47,8 @@ class MainActivity : FragmentActivity() {
     private var error by mutableStateOf<String?>(null)
     private var busy by mutableStateOf(false)
     private var dnsResult by mutableStateOf("")
+    private var updateJob: Job? = null
+    private var updateBusy by mutableStateOf(false)
     private var enrolled by mutableStateOf(false)
     private var locallyStopped by mutableStateOf(false)
     private var pendingBundle: String? = null
@@ -293,6 +295,36 @@ class MainActivity : FragmentActivity() {
                             else startSharing()
                         }, modifier = Modifier.fillMaxWidth().padding(top = 20.dp), shape = RoundedCornerShape(11.dp)) { Text(SharingControl.label(status.running, locallyStopped || LocalSafety.isStopped(this@MainActivity)), Modifier.padding(6.dp)) }
                         Text("Stop is saved across restarts. Resume sharing here when you are ready. Pairing & recovery can reset only Bungee if the connection is broken.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
+                    }
+                }
+                val appUpdate by AppUpdates.status.collectAsState()
+                Card(modifier=Modifier.fillMaxWidth().padding(top=18.dp),colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.surface),shape=RoundedCornerShape(17.dp)) {
+                    Column(Modifier.padding(18.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+                        Text("App updates",fontWeight=FontWeight.SemiBold)
+                        Text("Installed ${BuildConfig.VERSION_NAME} · updates come from your paired server",fontSize=12.sp)
+                        Text(appUpdate.message,fontSize=12.sp)
+                        appUpdate.progress?.let { LinearProgressIndicator(progress={it/100f},modifier=Modifier.fillMaxWidth()); Text("$it%",fontSize=12.sp) }
+                        if(updateBusy) OutlinedButton(onClick={ updateJob?.cancel();AppUpdates.fail("Download paused. Tap Download update to resume.") }) { Text("Pause download") }
+                        else {
+                            OutlinedButton(enabled=enrolled && !locallyStopped,onClick={
+                                updateBusy=true
+                                updateJob=scope.launch {
+                                    try { withContext(Dispatchers.IO) { AppUpdates.observe(this@MainActivity,HomeApi(identity).request("/v1/app-update").optJSONObject("release")) } }
+                                    catch(e:Exception) { if(e is CancellationException) throw e;AppUpdates.fail("Connect to your paired server to check for updates.") }
+                                    finally {updateBusy=false}
+                                }
+                            }) { Text("Check for updates") }
+                            if(appUpdate.ready) Button(onClick={scope.launch {try {AppUpdates.install(this@MainActivity)}catch(e:Exception){AppUpdates.fail(e.message?:"Android could not open the update")}}}) {Text("Install update")}
+                            else if(AppUpdates.canDownload(this@MainActivity)) Button(enabled=!locallyStopped,onClick={
+                                updateBusy=true
+                                updateJob=scope.launch {
+                                    try {withContext(Dispatchers.IO) {AppUpdates.download(this@MainActivity,identity)}}
+                                    catch(e:Exception) {if(e is CancellationException) {AppUpdates.fail("Download paused. Tap Download update to resume.");throw e};AppUpdates.fail(e.message?:"Download paused; try again")}
+                                    finally {updateBusy=false}
+                                }
+                            }) {Text("Download update")}
+                        }
+                        Text("Updating keeps pairing, settings and queued history. Android asks before installing. Keep sharing connected while downloading.",fontSize=11.sp,color=MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
                 Text("SHARING AND PERMISSIONS", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp, letterSpacing = 1.8.sp, modifier = Modifier.padding(top = 30.dp, bottom = 15.dp))

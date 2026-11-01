@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {gpsTrail,currentEstimate} from "../web/src/gpsTrail.ts";
+import {gpsTrail,currentEstimate,savedPosition,uncertainPosition} from "../web/src/gpsTrail.ts";
 const p=(latitude,longitude,observed_at,accuracy=10)=>({latitude,longitude,observed_at,accuracy});
 test("uncertain fix omitted, raw retained",()=>{
  const raw=[p(32,-80,100),p(33,-81,160,400),p(32.0001,-80,220)];
@@ -26,4 +26,11 @@ test("current estimate averages stationary jitter conservatively and follows rea
  const stationary=currentEstimate(clustered);assert.equal(stationary.samples,5);assert.ok(stationary.accuracy>=5);assert.ok(Math.abs(stationary.latitude-33)<0.000001);
  const moving=currentEstimate([p(33,-80,100),p(33.002,-80,160)]);assert.equal(moving.latitude,33.002);assert.equal(moving.moving,true);
  assert.equal(currentEstimate([]),null);
+});
+
+test("a broad or missing accuracy never hides the last saved position",()=>{
+ const old=p(33,-80,100),latest=p(34,-81,200,800);
+ assert.equal(savedPosition([latest,old]),latest);assert.equal(gpsTrail([latest]).points.length,0);
+ assert.equal(savedPosition([latest],old),old);assert.equal(uncertainPosition(latest),true);
+ assert.equal(savedPosition([p(91,0,300)]),null);
 });

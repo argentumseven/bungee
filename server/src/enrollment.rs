@@ -124,26 +124,12 @@ pub async fn purge_binding(
         ));
     }
     if eligible.is_some() {
-        for table in [
-            "enrollments",
-            "nonces",
-            "commands",
-            "location_history",
-            "state_history",
-            "network_history",
-            "recovery_photos",
-            "erased_photos",
-            "dns_summary",
-            "device_policies",
-        ] {
-            tx.execute(&format!("DELETE FROM {table} WHERE device_id=?"), [&id])?;
-        }
-        tx.execute("DELETE FROM devices WHERE id=?", [&id])?;
+        retire_binding(&tx, &id)?;
         store::audit(
             &tx,
             "device.binding_purged",
             Some(&id),
-            "Inactive binding removed; a new invitation is required",
+            "Connection keys released; saved history retained",
         )?;
     }
     let peers = prepare_peers(&app, &tx)?;
@@ -156,11 +142,132 @@ pub async fn purge_binding(
             "Binding removed, but gateway refresh failed. Retry purge after fixing server storage",
         )
     })?;
-    Ok(Json(json!({"purged":true})))
+    Ok(Json(json!({"purged":true,"history_retained":true})))
 }
+/// Releasing an authentication binding never removes recovery evidence.
+fn retire_binding(db: &rusqlite::Connection, id: &str) -> ApiResult<()> {
+    for table in ["enrollments", "nonces", "commands", "device_policies"] {
+        db.execute(&format!("DELETE FROM {table} WHERE device_id=?"), [id])?;
+    }
+    db.execute("UPDATE devices SET revoked=1,public_key=NULL,wg_psk=NULL,wg_key=?,address=?,binding_released=1,management_report=NULL,capabilities='[]',history_revision=history_revision+1,gps_epoch=?,photo_epoch=? WHERE id=?",params![format!("released:{id}"),format!("retired:{id}"),token(),token(),id])?;
+    Ok(())
+}
+pub async fn disconnect(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    require_admin(&app, &headers)?;
+    let mut db = app.db.lock().unwrap();
+    let tx = db.transaction()?;
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM devices WHERE id=?)",
+        [&id],
+        |r| r.get(0),
+    )?;
+    if !exists {
+        return Err(Error(StatusCode::NOT_FOUND, "Device not found"));
+    }
+    retire_binding(&tx, &id)?;
+    let peers = prepare_peers(&app, &tx)?;
+    store::audit(
+        &tx,
+        "device.disconnected",
+        Some(&id),
+        "Connection disabled; all saved history retained",
+    )?;
+    tx.commit()?;
+    peers.publish()?;
+    Ok(Json(json!({"disconnected":true,"history_retained":true})))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Reconnect {
+    wg_public_key: String,
+}
+pub async fn reconnect(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(input): Json<Reconnect>,
+) -> ApiResult<Json<Value>> {
+    require_admin(&app, &headers)?;
+    let name = app
+        .db
+        .lock()
+        .unwrap()
+        .query_row("SELECT name FROM devices WHERE id=?", [&id], |r| {
+            r.get::<_, String>(0)
+        })
+        .optional()?
+        .ok_or(Error(StatusCode::NOT_FOUND, "Saved device not found"))?;
+    issue_for(
+        &app,
+        Enrollment {
+            name,
+            wg_public_key: input.wg_public_key,
+        },
+        Some(&id),
+        prepare_peers,
+    )
+}
+pub async fn delete_archive(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    require_admin(&app, &headers)?;
+    let mut db = app.db.lock().unwrap();
+    let tx = db.transaction()?;
+    let eligible: Option<bool> = tx
+        .query_row(
+            "SELECT revoked=1 AND binding_released=1 FROM devices WHERE id=?",
+            [&id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if eligible != Some(true) {
+        return Err(Error(
+            StatusCode::CONFLICT,
+            "Disconnect the phone before deleting its saved archive",
+        ));
+    }
+    for table in [
+        "enrollments",
+        "nonces",
+        "commands",
+        "location_history",
+        "state_history",
+        "network_history",
+        "recovery_photos",
+        "erased_photos",
+        "dns_summary",
+        "device_policies",
+    ] {
+        tx.execute(&format!("DELETE FROM {table} WHERE device_id=?"), [&id])?;
+    }
+    tx.execute("DELETE FROM devices WHERE id=?", [&id])?;
+    store::audit(
+        &tx,
+        "device.archive_erased",
+        Some(&id),
+        "Saved device and history explicitly erased",
+    )?;
+    tx.commit()?;
+    Ok(Json(json!({"erased":true})))
+}
+
 fn issue(
     app: &App,
     input: Enrollment,
+    prepare: fn(&App, &rusqlite::Connection) -> ApiResult<PeerUpdate>,
+) -> ApiResult<Json<Value>> {
+    issue_for(app, input, None, prepare)
+}
+fn issue_for(
+    app: &App,
+    input: Enrollment,
+    replace: Option<&str>,
     prepare: fn(&App, &rusqlite::Connection) -> ApiResult<PeerUpdate>,
 ) -> ApiResult<Json<Value>> {
     if input.name.trim().is_empty()
@@ -193,6 +300,54 @@ fn issue(
     let psk = STANDARD.encode(psk);
     let mut db = app.db.lock().unwrap();
     let tx = db.transaction()?;
+    if let Some(target) = replace {
+        let old: Option<String> = tx
+            .query_row("SELECT name FROM devices WHERE id=?", [target], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        if old.is_none() {
+            return Err(Error(StatusCode::NOT_FOUND, "Saved device not found"));
+        }
+        let bound: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM devices WHERE wg_key=? AND id<>?)",
+            params![input.wg_public_key, target],
+            |r| r.get(0),
+        )?;
+        if bound {
+            return Err(Error(
+                StatusCode::CONFLICT,
+                "This phone key belongs to another saved device",
+            ));
+        }
+        let used = tx
+            .prepare("SELECT address FROM devices WHERE id<>?")?
+            .query_map([target], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let address = (2..=254)
+            .map(|n| format!("10.77.0.{n}"))
+            .find(|ip| !used.contains(ip))
+            .ok_or_else(|| bad("Household device limit reached"))?;
+        retire_binding(&tx, target)?;
+        tx.execute("UPDATE devices SET name=?,wg_key=?,address=?,wg_psk=?,revoked=0,binding_released=0,last_contact=NULL,last_seen=NULL WHERE id=?",params![input.name.trim(),input.wg_public_key,address,psk,target])?;
+        tx.execute(
+            "INSERT INTO enrollments(hash,device_id,expires) VALUES(?,?,?)",
+            params![hash(&code), target, now() + 600],
+        )?;
+        store::audit(
+            &tx,
+            "device.reconnected",
+            Some(target),
+            "New invitation; saved GPS/history retained",
+        )?;
+        let peers = prepare(app, &tx)?;
+        tx.commit()?;
+        peers.publish()?;
+        return Ok(Json(
+            json!({"version":2,"device_id":target,"name":input.name.trim(),"token":code,"expires":now()+600,"history_retained":true,
+          "wireguard":{"endpoint":endpoint,"server_public_key":key.trim(),"client_public_key":input.wg_public_key,"preshared_key":psk,"address":format!("{address}/32"),"allowed_ip":"10.77.0.1/32"},"api_url":"http://10.77.0.1:8081"}),
+        ));
+    }
     let existing: Option<(String, String, bool)> = tx
         .query_row(
             "SELECT id,address,public_key IS NOT NULL FROM devices WHERE wg_key=?",
@@ -204,7 +359,7 @@ fn issue(
     let (id, address) = match existing {
         Some((_, _, true)) => {
             return Err(bad(
-                "This phone key is already bound. Revoke the old device, then purge its inactive binding in Settings before reusing this key",
+                "This phone key is already bound. Use Reconnect on its saved device record to replace its connection and keep history",
             ));
         }
         Some((id, address, false)) => {
@@ -225,32 +380,15 @@ fn issue(
             {
                 address
             } else {
-                let expired: Option<(String,String)> = tx.query_row("SELECT id,address FROM devices WHERE revoked=1 OR (public_key IS NULL AND NOT EXISTS(SELECT 1 FROM enrollments e WHERE e.device_id=devices.id AND e.expires>?)) ORDER BY created LIMIT 1", [now()], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
+                let expired: Option<(String,String)> = tx.query_row("SELECT id,address FROM devices WHERE binding_released=0 AND (revoked=1 OR (public_key IS NULL AND NOT EXISTS(SELECT 1 FROM enrollments e WHERE e.device_id=devices.id AND e.expires>?))) ORDER BY created LIMIT 1", [now()], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
                 let (old, address) =
                     expired.ok_or_else(|| bad("Household device limit reached"))?;
-                for table in [
-                    "enrollments",
-                    "nonces",
-                    "commands",
-                    "location_history",
-                    "state_history",
-                    "network_history",
-                    "recovery_photos",
-                    "erased_photos",
-                    "dns_summary",
-                    "device_policies",
-                ] {
-                    tx.execute(&format!("DELETE FROM {table} WHERE device_id=?"), [&old])?;
-                }
-                tx.execute(
-                    "DELETE FROM devices WHERE id=? AND (public_key IS NULL OR revoked=1)",
-                    [&old],
-                )?;
+                retire_binding(&tx, &old)?;
                 store::audit(
                     &tx,
                     "enrollment.reclaimed",
                     Some(&old),
-                    "Expired never-enrolled or explicitly revoked address reclaimed",
+                    "Inactive address reclaimed; saved history retained",
                 )?;
                 address
             };

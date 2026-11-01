@@ -103,7 +103,7 @@ test("armed recovery photos: private storage, bounded input and erasure generati
     assert.equal((await upload(body(photo()))).status, 200);
     const retained = epoch; await f.stop(); await f.launch(); epoch = (await (await p.request("/v1/commands", {})).json()).photo_epoch; assert.equal(epoch, retained);
     assert.equal((await f.admin(`/api/devices/${p.id}`, "DELETE")).status, 200);
-    assert.equal((await f.admin(path)).status, 404); assert.equal(f.sql("SELECT COUNT(*) FROM recovery_photos WHERE device_id=?", [p.id])[0][0], 0);
+    assert.deepEqual((await (await f.admin(path)).json()).photos, []); assert.equal(f.sql("SELECT COUNT(*) FROM recovery_photos WHERE device_id=?", [p.id])[0][0], 0);
     assert.equal((await upload(body(photo()))).status, 401);
   });
 });
@@ -137,13 +137,14 @@ test("slow photo uploads have a fixed concurrency bound and release their slots"
   for(let i=0;i<2;i++){
     const prepared=p.prepare("/v1/photos",{photo_epoch:epoch,photo:{id:randomUUID(),captured_at:Math.floor(Date.now()/1000),failed_attempts:0,reason:"local_test",jpeg:jpeg.toString("base64")}});
     let request;
-    const completed=new Promise(resolve=>{request=httpRequest(f.deviceOrigin+"/v1/photos",{method:"POST",headers:{...prepared.headers,"Content-Length":Buffer.byteLength(prepared.text)}},r=>{r.resume();r.on("end",()=>resolve(r.statusCode));});request.on("error",()=>resolve("aborted"));request.write(prepared.text.slice(0,-1));});
+    const completed=new Promise(resolve=>{request=httpRequest(f.deviceOrigin+"/v1/photos",{method:"POST",headers:{...prepared.headers,"Content-Length":Buffer.byteLength(prepared.text)}},r=>{r.resume();r.on("end",()=>resolve(r.statusCode));});request.on("error",()=>resolve("aborted"));});
+    await new Promise((resolve,reject)=>request.write(prepared.text.slice(0,-1),error=>error?reject(error):resolve()));
     held.push({request,completed,last:prepared.text.slice(-1)});
   }
   try{
     async function waitForStatus(expected) {
       let status;
-      for(let i=0;i<40;i++){status=(await p.request("/v1/photos",{})).status;if(status===expected)return status;await pause(25);}
+      for(let i=0;i<120;i++){status=(await p.request("/v1/photos",{})).status;if(status===expected)return status;await pause(25);}
       return status;
     }
     assert.equal(await waitForStatus(429),429);

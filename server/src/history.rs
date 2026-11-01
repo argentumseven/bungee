@@ -145,7 +145,7 @@ fn read_history(
         Some(move || stop.load(Ordering::Relaxed) || Instant::now() >= deadline),
     );
     let exists: bool = db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM devices WHERE id=? AND revoked=0)",
+        "SELECT EXISTS(SELECT 1 FROM devices WHERE id=?)",
         [id],
         |r| r.get(0),
     )?;
@@ -166,9 +166,9 @@ fn read_history(
     let mut rows: Vec<Value> = if let Some(keys) = selected {
         let mut result = Vec::new();
         if kind == "locations" {
-            let mut q = db.prepare("SELECT observed_at,received_at,latitude,longitude,accuracy,source,samples,system_vpn FROM location_history WHERE device_id=? AND observed_at=?")?;
+            let mut q = db.prepare("SELECT observed_at,received_at,latitude,longitude,accuracy,source,samples,system_vpn,imported_at FROM location_history WHERE device_id=? AND observed_at=?")?;
             for key in keys {
-                result.push(q.query_row(params![id,key], |r| Ok(json!({"observed_at":r.get::<_,i64>(0)?,"received_at":r.get::<_,i64>(1)?,"latitude":r.get::<_,f64>(2)?,"longitude":r.get::<_,f64>(3)?,"accuracy":r.get::<_,f64>(4)?,"source":r.get::<_,String>(5)?,"samples":r.get::<_,u32>(6)?,"system_vpn":r.get::<_,Option<bool>>(7)?})))?);
+                result.push(q.query_row(params![id,key], |r| Ok(json!({"observed_at":r.get::<_,i64>(0)?,"received_at":r.get::<_,i64>(1)?,"latitude":r.get::<_,f64>(2)?,"longitude":r.get::<_,f64>(3)?,"accuracy":r.get::<_,f64>(4)?,"source":r.get::<_,String>(5)?,"samples":r.get::<_,u32>(6)?,"system_vpn":r.get::<_,Option<bool>>(7)?,"imported_at":r.get::<_,Option<i64>>(8)?})))?);
             }
         } else if kind == "network" {
             let mut q = db.prepare("SELECT observed_at,received_at,ip,geoip FROM network_history WHERE device_id=? AND observed_at=?")?;
@@ -183,10 +183,10 @@ fn read_history(
         }
         result
     } else if kind == "locations" {
-        let mut q = db.prepare(&format!("SELECT observed_at,received_at,latitude,longitude,accuracy,source,samples,system_vpn FROM location_history WHERE device_id=? AND observed_at>=? AND observed_at<=? AND observed_at<? {filter} ORDER BY observed_at DESC LIMIT ?"))?;
+        let mut q = db.prepare(&format!("SELECT observed_at,received_at,latitude,longitude,accuracy,source,samples,system_vpn,imported_at FROM location_history WHERE device_id=? AND observed_at>=? AND observed_at<=? AND observed_at<? {filter} ORDER BY observed_at DESC LIMIT ?"))?;
         q.query_map(params![id,query.from,query.to,query.before.unwrap_or(i64::MAX),limit as i64 + 1], |r| {
             Ok(json!({"observed_at":r.get::<_,i64>(0)?,"received_at":r.get::<_,i64>(1)?,
-                "latitude":r.get::<_,f64>(2)?,"longitude":r.get::<_,f64>(3)?,"accuracy":r.get::<_,f64>(4)?,"source":r.get::<_,String>(5)?,"samples":r.get::<_,u32>(6)?,"system_vpn":r.get::<_,Option<bool>>(7)?}))
+                "latitude":r.get::<_,f64>(2)?,"longitude":r.get::<_,f64>(3)?,"accuracy":r.get::<_,f64>(4)?,"source":r.get::<_,String>(5)?,"samples":r.get::<_,u32>(6)?,"system_vpn":r.get::<_,Option<bool>>(7)?,"imported_at":r.get::<_,Option<i64>>(8)?}))
         })?.collect::<Result<Vec<_>,_>>()?
     } else if kind == "network" {
         let mut q = db.prepare("SELECT observed_at,received_at,ip,geoip FROM network_history WHERE device_id=? AND observed_at>=? AND observed_at<=? AND observed_at<? ORDER BY observed_at DESC LIMIT ?")?;

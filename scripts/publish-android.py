@@ -76,14 +76,15 @@ def main():
         print('Already published:', existing['html_url'])
         return
     manifest = api(repo, f'contents/release.json?ref={sha}')
-    version = json.loads(base64.b64decode(manifest['content']))['version']
+    app_release = json.loads(base64.b64decode(manifest['content']))
+    version = app_release['version']
     with tempfile.TemporaryDirectory(prefix='bungee-publish-') as temporary:
         directory = Path(temporary)
         gh('run', 'download', str(run['id']), '--repo', repo, '--name', 'bungee-android-debug', '--dir', str(directory))
         digest = verify_checksum(directory)
         shutil.copyfile(directory / 'bungee-debug.apk', directory / 'bungee.apk')
         (directory / 'bungee.apk.sha256').write_text(digest + '  bungee.apk\n')
-        (directory / 'build.json').write_text(json.dumps({'version': version, 'commit': sha, 'run_id': run['id'], 'sha256': digest}, indent=2) + '\n')
+        (directory / 'build.json').write_text(json.dumps({'version': version, 'android_version_code': app_release['android_version_code'], 'commit': sha, 'run_id': run['id'], 'sha256': digest}, indent=2) + '\n')
         notes = directory / 'notes.md'
         notes.write_text(f'''Download **bungee.apk** below and open it on your Android phone. No ZIP extraction or Actions login is needed for this public release.
 
@@ -91,7 +92,7 @@ Android app version: **{version}** · source: [{sha[:12]}](https://github.com/{r
 
 This development APK includes the current main-branch phone features. Its Android build, unit tests and lint passed in [the source build]({run['html_url']}). This release does not claim that unrelated server jobs passed or that physical-device testing is complete.
 
-The APK uses the source build's debug signer. Android requires the original signing key for an in-place update; preserve an existing managed installation if its signer differs. Use your own stable signer for production updates.
+The APK uses the source build's debug signer. Android requires the original signing key for an in-place update; preserve an existing managed installation if its signer differs. Use the APK from your manager’s Settings → Phone app updates for a persistent server signing identity.
 
 `bungee.apk.sha256` verifies the download; `build.json` records the exact source and build.
 

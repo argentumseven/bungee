@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { api } from "./api";
-import { gpsTrail } from "./gpsTrail";
+import { gpsTrail,savedPosition,uncertainPosition } from "./gpsTrail";
 
 const VectorMap=lazy(()=>import("./VectorMap"));
 export type GeoIP = {
@@ -77,16 +77,16 @@ export function PrivateMap({
     return () => {abort.abort();window.clearInterval(timer);};
   }, []);
   useEffect(() => {
-    if (!container.current || !status || status.vector || status.regions?.length) return;
+    if (!container.current || status?.vector || status?.regions?.length) return;
     const m = L.map(container.current, {
       attributionControl: false,
       scrollWheelZoom: false,
-      minZoom: status.maps?.min_zoom || 0,
-      maxZoom: status.maps?.max_zoom ?? 18,
+      minZoom: status?.maps?.min_zoom || 0,
+      maxZoom: status?.maps?.max_zoom ?? 18,
     });
     map.current = m;
-    m.setView([20, 0], Math.max(status.maps?.min_zoom || 0, 1));
-    if (status.maps) {
+    m.setView([20, 0], Math.max(status?.maps?.min_zoom || 0, 1));
+    if (status?.maps) {
       L.tileLayer("/api/maps/{z}/{x}/{y}", {
         minZoom: status.maps.min_zoom,
         maxZoom: status.maps.max_zoom,
@@ -97,6 +97,7 @@ export function PrivateMap({
         .addTo(m);
     }
     const cleaned = gpsTrail(points);
+    const focus=savedPosition(points,selected);
     const gps = cleaned.points.map((p) => L.latLng(p.latitude, p.longitude));
     const trail = L.featureGroup().addTo(m);
     cleaned.segments.forEach(part => {
@@ -118,9 +119,13 @@ export function PrivateMap({
             : "GPS observation",
         );
     });
-    if (selected?.accuracy && cleaned.points.some(p => p.observed_at === selected.observed_at))
-      L.circle([selected.latitude, selected.longitude], {
-        radius: selected.accuracy,
+    if(focus&&(!cleaned.points.some(p=>p.observed_at===focus.observed_at)||uncertainPosition(focus))){
+      L.circleMarker([focus.latitude,focus.longitude],{color:"#885b19",fillColor:"#e8b76b",fillOpacity:1,radius:8,weight:2,dashArray:"3 2"})
+       .addTo(trail).bindTooltip(`Last saved position · ${focus.observed_at?new Date(focus.observed_at*1000).toLocaleString():"time unknown"} · ${focus.accuracy!==undefined?`reported accuracy ±${Math.round(focus.accuracy)} m`:"accuracy unknown"}`);
+    }
+    if (focus?.accuracy)
+      L.circle([focus.latitude, focus.longitude], {
+        radius: focus.accuracy,
         color: "#4d8797",
         weight: 1,
         fillOpacity: 0.08,
@@ -149,7 +154,8 @@ export function PrivateMap({
         .addTo(m)
         .bindTooltip("Approximate IP area — not a GPS fix");
     }
-    if (gps.length)
+    if (focus) m.setView([focus.latitude,focus.longitude],Math.min(status?.maps?.max_zoom??16,uncertainPosition(focus)?11:16));
+    else if (gps.length)
       m.fitBounds(L.latLngBounds(gps), { padding: [40, 40], maxZoom: 15 });
     else if (ipBounds.current)
       m.fitBounds(ipBounds.current, { padding: [30, 30], maxZoom: 8 });
@@ -175,7 +181,7 @@ export function PrivateMap({
       />
       <div className="private-map-key">
         <span className="gps-key">● GPS</span>
-        {ignored > 0 && <span className="gps-key">· {ignored} uncertain GPS fix{ignored === 1 ? "" : "es"} omitted from map</span>}
+        {ignored > 0 && <span className="gps-key">· {ignored} uncertain GPS fix{ignored === 1 ? "" : "es"} omitted from trail; selected/last point remains visible</span>}
         <span className="ip-key">◌ Approximate IP area</span>
         {network?.geoip?.latitude != null && (
           <button

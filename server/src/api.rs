@@ -169,25 +169,26 @@ pub async fn devices(State(app): State<App>, headers: HeaderMap) -> ApiResult<Js
     }
     let db = app.db.lock().unwrap();
     // Recovery data survives long outages. Freshness is described by timestamps, not deletion.
-    let mut q=db.prepare("SELECT id,name,address,created,last_seen,revoked,telemetry,capabilities,public_key IS NOT NULL,last_location,wg_psk IS NOT NULL,management_report,last_contact,(SELECT MAX(expires) FROM enrollments WHERE device_id=devices.id),wg_key FROM devices ORDER BY created")?;
+    let mut q=db.prepare("SELECT id,name,address,created,last_seen,revoked,telemetry,capabilities,public_key IS NOT NULL,last_location,wg_psk IS NOT NULL,management_report,last_contact,(SELECT MAX(expires) FROM enrollments WHERE device_id=devices.id),wg_key,binding_released FROM devices ORDER BY created")?;
     let rows=q.query_map([],|r| {
         let location = r.get::<_,Option<String>>(9)?.and_then(|s|serde_json::from_str::<Value>(&s).ok());
         let mut telemetry = r.get::<_,Option<String>>(6)?.and_then(|s|serde_json::from_str::<Value>(&s).ok());
         // Keep the existing response shape, while storing the latest fix independently.
         if let Some(Value::Object(ref mut state)) = telemetry {
-            state.insert("location".into(), location.unwrap_or(Value::Null));
+            state.insert("location".into(), location.clone().unwrap_or(Value::Null));
         }
         Ok(json!({
         "id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"address":r.get::<_,String>(2)?,
         "created":r.get::<_,i64>(3)?,"last_seen":r.get::<_,Option<i64>>(4)?,"revoked":r.get::<_,bool>(5)?,
-        "telemetry":telemetry,"last_contact":r.get::<_,Option<i64>>(12)?,
+        "telemetry":telemetry,"last_location":location,"last_contact":r.get::<_,Option<i64>>(12)?,
         "network":crate::geography::latest(&db,&r.get::<_,String>(0)?)?,
         "capabilities":serde_json::from_str::<Vec<String>>(&r.get::<_,String>(7)?).unwrap_or_default().into_iter().filter(|kind|kind!="reboot").collect::<Vec<_>>(),
         "enrolled":r.get::<_,bool>(8)?,
         "enrollment_state":if r.get::<_,bool>(5)? {"revoked"} else if r.get::<_,bool>(8)? {"enrolled"} else if r.get::<_,Option<i64>>(13)?.is_some_and(|v|v>now()) {"pending"} else {"expired"},
         "invitation_expires_at":r.get::<_,Option<i64>>(13)?,
-        "wg_public_key":r.get::<_,String>(14)?,
-        "can_purge_binding":r.get::<_,bool>(5)? || (!r.get::<_,bool>(8)? && r.get::<_,Option<i64>>(13)?.is_none_or(|v|v<=now())),
+        "wg_public_key":if r.get::<_,bool>(15)? {None} else {Some(r.get::<_,String>(14)?)},
+        "binding_released":r.get::<_,bool>(15)?,
+        "can_purge_binding":!r.get::<_,bool>(15)? && (r.get::<_,bool>(5)? || (!r.get::<_,bool>(8)? && r.get::<_,Option<i64>>(13)?.is_none_or(|v|v<=now()))),
         "preshared_key":r.get::<_,bool>(10)?,
         "management":r.get::<_,Option<String>>(11)?.and_then(|s|serde_json::from_str::<Value>(&s).ok()),
     }))})?.collect::<Result<Vec<_>,_>>()?;

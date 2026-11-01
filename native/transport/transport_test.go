@@ -58,6 +58,14 @@ func TestWireGuardRoundTripAndRequestBoundaries(t *testing.T) {
 	waiting := make(chan struct{}, 4)
 	release := make(chan struct{})
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Bungee-Nonce") == "large-response" || r.Header.Get("X-Bungee-Nonce") == "oversized-response" {
+			size := 175000
+			if r.Header.Get("X-Bungee-Nonce") == "oversized-response" {
+				size = 192*1024 + 1
+			}
+			fmt.Fprint(w, `{"data":"`+strings.Repeat("a", size)+`"}`)
+			return
+		}
 		if r.URL.Path == "/v1/photos" {
 			data, err := io.ReadAll(r.Body)
 			if err != nil || len(data) < 1024*1024 {
@@ -103,6 +111,15 @@ func TestWireGuardRoundTripAndRequestBoundaries(t *testing.T) {
 	}
 	if _, e = Exchange("/v1/dns-check", `{}`, `{"X-Bungee-Nonce":"test-nonce"}`); e != nil {
 		t.Fatal("DNS path check could not traverse the fixed-home transport", e)
+	}
+	if _, err := Exchange("/v1/app-update/chunk", `{}`, `{"X-Bungee-Nonce":"large-response"}`); err != nil {
+		t.Fatal("bounded APK chunk rejected", err)
+	}
+	if _, err := Exchange("/v1/app-update/chunk", `{}`, `{"X-Bungee-Nonce":"oversized-response"}`); err == nil {
+		t.Fatal("unbounded APK response accepted")
+	}
+	if _, err := Exchange("/v1/telemetry", `{}`, `{"X-Bungee-Nonce":"large-response"}`); err == nil {
+		t.Fatal("ordinary response bound enlarged")
 	}
 	photoBody := `{"photo":"` + strings.Repeat("p", 1_398_104) + `"}`
 	id, err := ReserveRequest()

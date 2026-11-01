@@ -183,7 +183,7 @@ test("offline maps and GeoIP preserve source, authentication, history and erasur
       assert.equal((await history()).records.length, 1);
       assert.equal((await api("/devices/geo", "DELETE")).status, 200);
       await api("/devices");
-      assert.equal((await api(`/devices/geo/history?kind=network&from=0&to=${time+1000}`)).status,404);
+      assert.deepEqual((await (await api(`/devices/geo/history?kind=network&from=0&to=${time+1000}`)).json()).records,[]);
       assert.equal(execFileSync("python3",["-c","import sqlite3,sys;print(sqlite3.connect(sys.argv[1]).execute(\"SELECT count(*) FROM network_history WHERE device_id='geo'\").fetchone()[0])",join(dir,"bungee.sqlite3")],{encoding:"utf8"}).trim(),"0");
     },
   );

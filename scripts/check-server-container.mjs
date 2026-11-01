@@ -17,6 +17,7 @@ try {
   // Synthetic test-only keys must be readable by the image's UID 10001.
   async function readable(path){await chmod(path,0o755);for(const e of await readdir(path,{withFileTypes:true})){const p=join(path,e.name);if(e.isDirectory())await readable(p);else if(!e.isSymbolicLink())await chmod(p,0o644);}}
   await readable(issued);
+  const updates=join(dir,'app-updates');await mkdir(updates);await chmod(updates,0o755);
   const maps=join(dir,'maps'),status=join(dir,'map-status');
   for(const path of [maps,status,requests]){await mkdir(path);await chmod(path,0o755);}
   await chmod(requests,0o700);
@@ -24,7 +25,7 @@ try {
   await writeFile(join(status,'state.json'),JSON.stringify({catalog:[{id:'us-pacific',name:'Pacific'}],job:{state:'completed'},updated_at:Math.floor(Date.now()/1000)}));
   await chmod(join(maps,'library.json'),0o644);await chmod(join(status,'state.json'),0o644);
   docker(['run','--rm','--user','0:0','--network','none','--cap-drop','ALL','--cap-add','CHOWN','--mount',`type=bind,src=${requests},dst=/requests`,'--entrypoint','chown','bungee-server:dev','10001:10001','/requests']);
-  const mapMounts=['--mount',`type=bind,src=${maps},dst=/maps,readonly`,'--mount',`type=bind,src=${status},dst=/map-control/status,readonly`,'--mount',`type=bind,src=${requests},dst=/map-control/requests`];
+  const mapMounts=['--mount',`type=bind,src=${updates},dst=/app-updates,readonly`,'--mount',`type=bind,src=${maps},dst=/maps,readonly`,'--mount',`type=bind,src=${status},dst=/map-control/status,readonly`,'--mount',`type=bind,src=${requests},dst=/map-control/requests`];
   docker(['run','-d','--rm','--name',name,'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true','--ulimit','core=0','--tmpfs','/state:uid=10001,gid=10001,mode=0700','--tmpfs','/tmp:size=16m','--mount',`type=bind,src=${issued},dst=/tls,readonly`,...mapMounts,'-p','127.0.0.1::8443','--health-cmd','curl --fail --silent http://127.0.0.1:8081/healthz','-e','BUNGEE_PUBLIC_ORIGIN=https://127.0.0.1','-e','BUNGEE_ADMIN_BIND=0.0.0.0:8443','-e','BUNGEE_ADMIN_INTERFACE=eth0','-e','BUNGEE_ADMIN_SUBNETS=127.0.0.1/32 172.16.0.0/12 192.168.0.0/16','-e','BUNGEE_DEVICE_BIND=127.0.0.1:8081','-e','BUNGEE_TLS_CERT_FILE=/tls/current/server.crt','-e','BUNGEE_TLS_KEY_FILE=/tls/current/server.key','--entrypoint','sh','bungee-server:dev','-ec','printf "%s\\n" "$1" > /state/admin-password.hash; exec /usr/local/bin/bungee-server','bootstrap',verifier]);
   const port=Number(docker(['port',name,'8443/tcp']).split(':').at(-1));
   const ca=await readFile(join(issued,'root.crt'),'utf8');
@@ -35,12 +36,14 @@ try {
   assert.equal(JSON.parse(result.body).status,'ok');
   assert.equal((await query('/api/devices')).status,401);
   assert.equal((await query('/api/maps/manage')).status,401);
+  assert.equal((await query('/api/app-updates')).status,401);
   const login=await query('/api/session','POST',{password:'test-only-container-password-not-a-secret'});assert.equal(login.status,200);
   const cookie=login.headers['set-cookie'][0].split(';')[0];
   assert.equal((await query('/api/maps/manage','GET',undefined,cookie)).status,200);
+  assert.equal((await query('/api/app-updates','GET',undefined,cookie)).status,200);
   const job=await query('/api/maps/jobs','POST',{action:'plan',regions:['us-pacific']},cookie);assert.equal(job.status,202,job.body);
   const jobId=JSON.parse(job.body).id,request=JSON.parse(docker(['exec',name,'cat',`/map-control/requests/${jobId}.json`]));assert.deepEqual(request.regions,['us-pacific']);
-  for(const path of ['/maps/not-allowed','/map-control/status/not-allowed'])assert.throws(()=>docker(['exec',name,'sh','-ec',`printf x > ${path}`]));
+  for(const path of ['/maps/not-allowed','/map-control/status/not-allowed','/app-updates/not-allowed'])assert.throws(()=>docker(['exec',name,'sh','-ec',`printf x > ${path}`]));
   await assert.rejects(new Promise((res,rej)=>{const s=tls.connect({host:'127.0.0.1',port,ca,ecdhCurve:'X25519',minVersion:'TLSv1.3'},res);s.on('error',rej);s.setTimeout(3000,()=>s.destroy(Error('timeout')));}));
   const info=JSON.parse(docker(['inspect',name]))[0];
   assert.equal(info.Config.User,'10001:10001');assert.ok(info.HostConfig.ReadonlyRootfs);assert.deepEqual(info.HostConfig.CapDrop,['ALL']);assert.ok(info.HostConfig.SecurityOpt.includes('no-new-privileges:true'));

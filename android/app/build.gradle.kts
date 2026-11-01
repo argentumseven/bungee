@@ -22,7 +22,9 @@ android {
             keyPassword = providers.environmentVariable("BUNGEE_OWNER_KEY_PASSWORD").orNull ?: storePassword
         }
     }
-    buildTypes { release {
+    buildTypes {
+        getByName("debug") { isDebuggable = false }
+        release {
         isMinifyEnabled = true
         proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         if (ownerKeystore != null) signingConfig = signingConfigs.getByName("owner")

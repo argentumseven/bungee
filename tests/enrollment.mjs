@@ -71,7 +71,8 @@ test("enrollment lifecycle and storage-failure recovery", async t=>{
     f.sql("WITH RECURSIVE n(x) AS (SELECT 2 UNION ALL SELECT x+1 FROM n WHERE x<254) INSERT OR IGNORE INTO devices(id,name,wg_key,address,created) SELECT 'unpaired-fixture-'||x,'Expired fixture','unpaired-key-'||x,'10.77.0.'||x,1 FROM n");
     assert.equal(f.sql("SELECT COUNT(*) FROM devices")[0][0],253);
     const response=await invite(randomBytes(32).toString("base64")); assert.equal(response.status,200);
-    assert.equal(f.sql("SELECT COUNT(*) FROM devices")[0][0],253);
+    assert.equal(f.sql("SELECT COUNT(*) FROM devices WHERE binding_released=0")[0][0],253);
+    assert.equal(f.sql("SELECT COUNT(*) FROM devices WHERE binding_released=1")[0][0],1);
     assert.equal(f.sql("SELECT COUNT(*) FROM location_history WHERE device_id=?",[paired.device_id])[0][0],1);
     assert.equal(f.sql("SELECT public_key IS NOT NULL FROM devices WHERE id=?",[paired.device_id])[0][0],1);
   });
@@ -104,7 +105,7 @@ test('inactive bindings can be purged without retiring an offline paired phone',
   assert.equal(devices.find(d=>d.id===first.device_id).can_purge_binding,true);
   assert.equal((await purge(first.device_id)).status,200);
   assert.equal((await purge(first.device_id)).status,200,'purge is safely retryable');
-  assert.equal(f.sql('SELECT COUNT(*) FROM devices WHERE id=?',[first.device_id])[0][0],0);
+  assert.equal(f.sql('SELECT binding_released FROM devices WHERE id=?',[first.device_id])[0][0],1);
   assert.ok(!(await readFile(join(f.dir,'wireguard/peers.conf'),'utf8')).includes(key));
   const second = await invite(key);
   assert.notEqual(second.device_id,first.device_id);
@@ -117,7 +118,7 @@ test('inactive bindings can be purged without retiring an offline paired phone',
   const expired = await invite(expiredKey);
   f.sql('UPDATE enrollments SET expires=1 WHERE device_id=?',[expired.device_id]);
   const peers = await readFile(join(f.dir,'wireguard/peers.conf'),'utf8');
-  f.sql("CREATE TRIGGER purge_fault BEFORE DELETE ON devices BEGIN SELECT RAISE(ABORT,'test fault'); END");
+  f.sql("CREATE TRIGGER purge_fault BEFORE UPDATE ON devices BEGIN SELECT RAISE(ABORT,'test fault'); END");
   assert.equal((await purge(expired.device_id)).status,500);
   assert.equal(f.sql('SELECT COUNT(*) FROM devices WHERE id=?',[expired.device_id])[0][0],1);
   assert.equal(await readFile(join(f.dir,'wireguard/peers.conf'),'utf8'),peers);
@@ -132,7 +133,7 @@ test('inactive bindings can be purged without retiring an offline paired phone',
   await rm(join(f.dir,'wireguard/peers.conf'));
   await mkdir(join(f.dir,'wireguard/peers.conf'));
   assert.equal((await purge(interrupted.device_id)).status,503);
-  assert.equal(f.sql('SELECT COUNT(*) FROM devices WHERE id=?',[interrupted.device_id])[0][0],0);
+  assert.equal(f.sql('SELECT binding_released FROM devices WHERE id=?',[interrupted.device_id])[0][0],1);
   await rm(join(f.dir,'wireguard/peers.conf'),{recursive:true});
   assert.equal((await purge(interrupted.device_id)).status,200,'post-commit gateway failure can be repaired by retrying');
 });

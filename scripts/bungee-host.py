@@ -34,6 +34,7 @@ import secure_storage
 import tls_config
 import regional_maps
 import map_manager
+import app_updates
 
 HERE = Path(__file__).resolve().parent
 SOURCE = HERE.parent
@@ -181,7 +182,7 @@ def compose(config, images, root):
             healthcheck={'test': ['CMD', 'wg', 'show', 'wg0'], 'interval': '10s', 'timeout': '3s', 'retries': 5}),
         'server': service(images['server'], network_mode='service:gateway', depends_on={'gateway': {'condition': 'service_healthy'}},
             environment={**PRIVATE_ENV, **dns, 'BUNGEE_PUBLIC_ORIGIN': network.origin(c), 'BUNGEE_ADMIN_BIND': '0.0.0.0:8443', 'BUNGEE_ADMIN_INTERFACE': 'eth0', 'BUNGEE_ADMIN_SUBNETS': ' '.join(c['admin_subnets']), 'BUNGEE_DEVICE_BIND': '10.77.0.1:8081', 'BUNGEE_WG_ENDPOINT': f"{network.bracket(c['endpoint_ip'])}:{c['wg_port']}", 'BUNGEE_TLS_CERT_FILE': '/tls/current/server.crt', 'BUNGEE_TLS_KEY_FILE': '/tls/current/server.key'},
-            tmpfs=['/tmp:size=16m'], volumes=[bind('server-data', '/state'), bind('gateway-peers', '/state/wireguard'), bind('tls-data/issued', '/tls', True), {'type': 'bind', 'source': str(dataset), 'target': '/datasets', 'read_only': True, 'bind': {'create_host_path': False}}, *[{'type':'bind','source':str(root/source),'target':target,'read_only':readonly,'bind':{'create_host_path':False}} for source,target,readonly in [('maps','/maps',True),('map-control/status','/map-control/status',True),('map-control/requests','/map-control/requests',False)]]])
+            tmpfs=['/tmp:size=16m'], volumes=[bind('server-data', '/state'), bind('gateway-peers', '/state/wireguard'), bind('tls-data/issued', '/tls', True), {'type': 'bind', 'source': str(dataset), 'target': '/datasets', 'read_only': True, 'bind': {'create_host_path': False}}, *[{'type':'bind','source':str(root/source),'target':target,'read_only':readonly,'bind':{'create_host_path':False}} for source,target,readonly in [('app-updates','/app-updates',True),('maps','/maps',True),('map-control/status','/map-control/status',True),('map-control/requests','/map-control/requests',False)]]])
     }}
 
 
@@ -294,6 +295,7 @@ class Host:
     def metadata(self, gen): return read(self.root / 'generations' / gen / 'release.json')
     def stage(self, config, metadata):
         map_manager.setup(self.root)
+        app_updates.setup(self.root)
         for name in VOLUMES:
             (self.root / 'volumes' / name).mkdir(parents=True, exist_ok=True, mode=0o700)
         dataset = self.root / 'datasets' / config.get('geodata', 'empty')
@@ -621,7 +623,7 @@ def preflight(root, installing=False, config=None):
 
 SYSTEMD = Path('/etc/systemd/system')
 BOOT_FILES = (Path('/etc/crypttab'), Path('/etc/fstab'))
-UNITS = ('bungee-update.timer', 'bungee-maps.service', 'bungee-update.service', 'bungee-recover.service')
+UNITS = ('bungee-update.timer', 'bungee-maps.service', 'bungee-app-updates.service', 'bungee-update.service', 'bungee-recover.service')
 
 
 def uninstall_plan(root, purge=False):
@@ -702,11 +704,13 @@ def systemd(root):
         'bungee-update.service': f'[Unit]\nDescription=Check and transactionally update Bungee\nRequires=docker.service\nRequiresMountsFor={root}\nAfter=docker.service bungee-recover.service\nOnFailure=bungee-recover.service\n[Service]\nType=oneshot\nNoNewPrivileges=yes\nPrivateTmp=yes\nProtectSystem=full\nUMask=0077\nLimitCORE=0\nExecStart={command} update --root {root}\nTimeoutStartSec=1800\n',
         'bungee-update.timer': '[Unit]\nDescription=Daily Bungee security update check\n[Timer]\nOnBootSec=15min\nOnCalendar=daily\nRandomizedDelaySec=1h\nPersistent=true\n[Install]\nWantedBy=timers.target\n'}
     units['bungee-maps.service']=f'[Unit]\nDescription=Bungee regional map downloads\nRequiresMountsFor={root}\nAfter=docker.service\n[Service]\nType=simple\nNoNewPrivileges=yes\nPrivateTmp=yes\nProtectSystem=full\nUMask=0077\nLimitCORE=0\nMemoryMax=1G\nTasksMax=128\nExecStart={command} map-worker --root {root}\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=15\n[Install]\nWantedBy=multi-user.target\n'
+    units['bungee-app-updates.service']=units['bungee-maps.service'].replace('Bungee regional map downloads','Bungee paired phone updates').replace('map-worker','apk-worker')
     for name, content in units.items(): atomic(SYSTEMD / name, content)
     run(['systemctl', 'daemon-reload'])
     run(['systemctl', 'enable', 'bungee-recover.service'])
     run(['systemctl', 'enable', '--now', 'bungee-update.timer'])
     run(['systemctl', 'enable', '--now', 'bungee-maps.service'])
+    run(['systemctl', 'enable', '--now', 'bungee-app-updates.service'])
 
 
 def install_helpers(root):
@@ -714,6 +718,11 @@ def install_helpers(root):
         atomic(target, source.read_text())
     copy_public_file(HERE / 'regional_maps.py', root / 'regional_maps.py')
     copy_public_file(HERE / 'map_manager.py', root / 'map_manager.py')
+    copy_public_file(HERE / 'app_updates.py', root / 'app_updates.py')
+    signer=SOURCE/'deploy/android-signer.Dockerfile'
+    if signer.is_file(): copy_public_file(signer,root/'android-signer.Dockerfile')
+    (root/'signer-context').mkdir(exist_ok=True,mode=0o700)
+    app_updates.setup(root)
     source = default_basemap()
     for name in ('geoip.json','dbip-city-ipv4.mmdb.gz','dbip-city-ipv6.mmdb.gz'):
         copy_public_file(source.parent / name,root / 'basemap' / name)
@@ -724,14 +733,16 @@ def install_helpers(root):
     map_manager.setup(root)
     if (root/'current.json').exists():
         systemd(root)
-        run(['systemctl','restart','bungee-maps.service'])
+        run(['systemctl','restart','bungee-maps.service','bungee-app-updates.service'])
 
 
 def build_images():
     if not (SOURCE / 'Dockerfile').is_file(): raise ValueError('Run this command from a source checkout')
     tag = 'local-' + secrets.token_hex(8)
     run(['docker', 'build', '--pull', '-t', f'bungee-gateway:{tag}', '-f', 'deploy/wireguard/Dockerfile', 'deploy'], cwd=SOURCE, timeout=3600)
-    run(['docker', 'build', '--pull', '-t', f'bungee-server:{tag}', '.'], cwd=SOURCE, timeout=3600)
+    commit=run(['git','rev-parse','HEAD'],cwd=SOURCE)
+    if run(['git','status','--porcelain','--untracked-files=no'],cwd=SOURCE): commit='custom'
+    run(['docker', 'build', '--pull', '--build-arg', f'BUNGEE_SOURCE_COMMIT={commit}', '-t', f'bungee-server:{tag}', '.'], cwd=SOURCE, timeout=3600)
     return {name: json.loads(run(['docker', 'image', 'inspect', f'bungee-{name}:{tag}']))[0]['Id'] for name in ('gateway', 'server')}
 
 
@@ -825,11 +836,6 @@ def install(root, config, from_stdin=False):
         os.chown(credential, 10001, 10001)
         metadata = {'format': 1, 'host_api': RELEASE['host_api'], 'data_contract': RELEASE['data_contract'], 'version': VERSION, 'published_at': 0, 'images': images}
         host = Host(root)
-        if args.command == 'map-worker':
-            secure_storage.check(root)
-            while True:
-                map_manager.tick(root,default_basemap().parent/'regions.json')
-                time.sleep(3)
         generation = host.stage(config, metadata)
         atomic(root / 'current.json', {'generation': generation})
         os.chown(root / 'volumes/server-data', 10001, 10001)
@@ -866,7 +872,7 @@ def install(root, config, from_stdin=False):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['install', 'configure', 'update', 'recover', 'status', 'datasets', 'basemap', 'geodata', 'maps-us', 'maps', 'map-worker', 'uninstall', 'password', 'rebuild'])
+    parser.add_argument('command', choices=['install', 'configure', 'update', 'recover', 'status', 'datasets', 'basemap', 'geodata', 'maps-us', 'maps', 'map-worker', 'apk-worker', 'uninstall', 'password', 'rebuild'])
     parser.add_argument('--password-stdin', action='store_true', help='With install/password: read the new password from a dedicated stdin pipe')
     parser.add_argument('--root', type=Path, default=Path('/opt/bungee'))
     parser.add_argument('--config', type=Path, help='Explicit JSON answers for unattended installation/configuration')
@@ -904,6 +910,12 @@ if __name__ == '__main__':
             uninstall(root, args.purge)
             sys.exit(0)
         host = Host(root)
+        if args.command in ('map-worker','apk-worker'):
+            secure_storage.check(root)
+            while True:
+                if args.command=='map-worker': map_manager.tick(root,default_basemap().parent/'regions.json')
+                else: app_updates.tick(root,lambda:host.metadata(host.current()))
+                time.sleep(3 if args.command=='map-worker' else 60)
         if args.command in ('install', 'configure'):
             existing = read(root / 'generations' / host.current() / 'config.json') if args.command == 'configure' else None
             CONFIG = network.validate(read(args.config)) if args.config else guided(existing)
@@ -911,7 +923,7 @@ if __name__ == '__main__':
             if args.plan: sys.exit(0)
             if not args.config and ask('Apply this configuration? Type INSTALL' if args.command == 'install' else 'Apply this configuration? Type APPLY') != ('INSTALL' if args.command == 'install' else 'APPLY'):
                 sys.exit('No changes made')
-        elif args.plan: raise ValueError('--plan is for install/configure only')
+        elif args.plan and args.command not in ('maps','maps-us'): raise ValueError('--plan is for install/configure/maps only')
         if args.command == 'install': install(root, CONFIG, args.password_stdin)
         else:
             preflight(root)

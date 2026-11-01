@@ -185,7 +185,7 @@ func Exchange(path, body, headersJSON string) (string, error) {
 // Exchange only permits the fixed POST API, with bounded JSON and signed headers.
 // The JSON result contains an HTTP status and body, never a redirect or provider URL.
 func ExchangeRequest(id int64, path, body, headersJSON string, timeoutMillis int64) (string, error) {
-	allowed := map[string]bool{"/v1/enroll": true, "/v1/telemetry": true, "/v1/photos": true, "/v1/commands": true, "/v1/command-check": true, "/v1/dns-check": true, "/v1/ack": true, "/v1/sync": true}
+	allowed := map[string]bool{"/v1/enroll": true, "/v1/telemetry": true, "/v1/photos": true, "/v1/commands": true, "/v1/command-check": true, "/v1/dns-check": true, "/v1/ack": true, "/v1/sync": true, "/v1/app-update": true, "/v1/app-update/chunk": true}
 	maxBody, maxTimeout := 32768, int64(10000)
 	if path == "/v1/photos" {
 		maxBody, maxTimeout = 2*1024*1024, 60000
@@ -232,8 +232,12 @@ func ExchangeRequest(id int64, path, body, headersJSON string, timeoutMillis int
 		return "", errors.New("home server unreachable")
 	}
 	defer response.Body.Close()
-	data, e := io.ReadAll(io.LimitReader(response.Body, 65537))
-	if e != nil || len(data) > 65536 || ctx.Err() != nil {
+	maxResponse := 65536
+	if path == "/v1/app-update/chunk" {
+		maxResponse = 192 * 1024
+	}
+	data, e := io.ReadAll(io.LimitReader(response.Body, int64(maxResponse+1)))
+	if e != nil || len(data) > maxResponse || ctx.Err() != nil {
 		return "", errors.New("invalid home response")
 	}
 	result, _ := json.Marshal(struct {

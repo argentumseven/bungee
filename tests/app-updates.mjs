@@ -1,0 +1,25 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdir,writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
+import {createHash} from 'node:crypto';
+import {fixture} from './support/server.mjs';
+import {phone} from './support/phone.mjs';
+import {readFileSync} from 'node:fs';
+const release=JSON.parse(readFileSync('release.json'));
+test('only authenticated paired phones can fetch bounded immutable APK chunks; admin APK is streamed',async t=>{
+ const f=await fixture(t),p=await phone(f),dir=join(f.dir,'app-updates');await mkdir(dir);
+ const data=Buffer.alloc(131072+31,42),sha=createHash('sha256').update(data).digest('hex');
+ const manifest={version:release.version,version_code:release.android_version_code,sha256:sha,signer_sha256:'a'.repeat(64),size:data.length,commit:'b'.repeat(40)};
+ await writeFile(join(dir,sha+'.apk'),data);await writeFile(join(dir,'release.json'),JSON.stringify(manifest));
+ assert.equal((await f.device('/v1/app-update/chunk',{sha256:sha,offset:0})).status,401);
+ assert.deepEqual((await (await p.request('/v1/app-update',{})).json()).release,manifest);
+ const first=await (await p.request('/v1/app-update/chunk',{sha256:sha,offset:0})).json();assert.deepEqual(Buffer.from(first.data,'base64'),data.subarray(0,131072));
+ const last=await (await p.request('/v1/app-update/chunk',{sha256:sha,offset:131072})).json();assert.deepEqual(Buffer.from(last.data,'base64'),data.subarray(131072));
+ assert.equal((await p.request('/v1/app-update/chunk',{sha256:sha,offset:1})).status,400);
+ assert.equal((await p.request('/v1/app-update/chunk',{sha256:'../../etc/passwd',offset:0})).status,400);
+ assert.equal((await f.admin('/api/app-updates/bungee.apk','GET',undefined,{Cookie:''})).status,401);
+ const downloaded=await f.admin('/api/app-updates/bungee.apk');assert.match(downloaded.headers.get('content-disposition'),/bungee.apk/);assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()),data);
+ await writeFile(join(dir,'release.json'),JSON.stringify({...manifest,version_code:manifest.version_code+1}));
+ assert.equal((await (await p.request('/v1/app-update',{})).json()).release,null,'running server controls offered version');
+});

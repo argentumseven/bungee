@@ -35,7 +35,7 @@ import QRCode from "qrcode";
 import { version as releaseVersion } from "../../release.json";
 import "./style.css";
 import { api } from "./api";
-import { gpsTrail, currentEstimate } from "./gpsTrail";
+import { gpsTrail, currentEstimate, savedPosition, uncertainPosition } from "./gpsTrail";
 import {
   PrivateMap,
   NetworkCard,
@@ -48,6 +48,8 @@ import { RecoveryMessagePreview } from "./RecoveryMessagePreview";
 import { PasswordSettings } from "./PasswordSettings";
 import { RecoveryPhotos } from "./RecoveryPhotos";
 import { MapManager } from "./MapManager";
+import { AppUpdates } from "./AppUpdates";
+import { HistoryImport } from "./HistoryImport";
 
 type Location = {
   latitude: number;
@@ -74,6 +76,8 @@ type Device = {
   capabilities: string[];
   network?: NetworkObservation | null;
   management?: { connection_health?: Health | null };
+  last_location?:Location|null;
+  binding_released?:boolean;
   telemetry: null | {
     battery: number;
     charging: boolean;
@@ -134,7 +138,7 @@ function App() {
   const [devicesExpanded,setDevicesExpanded]=useState(true);
   const [trackingTab,setTrackingTab]=useState("Current estimate");
   const [modal, setModal] = useState<
-      "enroll" | "message" | "revoke" | "clear_location" | "purge_binding" | "help" | null
+      "enroll" | "message" | "revoke" | "clear_location" | "purge_binding" | "erase_archive" | "reconnect" | "help" | null
     >(null),
     [toast, setToast] = useState("");
   const [name, setName] = useState(""),
@@ -147,8 +151,9 @@ function App() {
   const [clearTarget, setClearTarget] = useState<Device | null>(null);
   const [bindingTarget, setBindingTarget] = useState<Device | null>(null);
   const [purgedBinding,setPurgedBinding]=useState<Device|null>(null);
+  const [registrationTarget,setRegistrationTarget]=useState<Device|null>(null);
   const active = devices.filter((d) => !d.revoked),
-    device = active.find((d) => d.id === selected) || active[0];
+    device = (page==="Tracking"?devices:active).find((d) => d.id === selected) || active[0] || (page==="Tracking"?devices[0]:undefined);
   const load = async () => {
     try {
       const data = await api<{ devices: Device[]; commands: Command[] }>(
@@ -184,7 +189,7 @@ function App() {
       setModal(null);
       setClearTarget(null);
       setBindingTarget(null);
-      setPurgedBinding(null);
+      setPurgedBinding(null);setRegistrationTarget(null);
       setBundle("");
       setPreviousWgKey("");
     };
@@ -721,9 +726,9 @@ function App() {
                 value={device?.id || ""}
                 onChange={(e) => setSelected(e.target.value)}
               >
-                {active.map((d) => (
+                {devices.map((d) => (
                   <option key={d.id} value={d.id}>
-                    {d.name}
+                    {d.name}{d.revoked?" · saved history":""}
                   </option>
                 ))}
               </select></div>
@@ -790,6 +795,7 @@ function App() {
           )}
           {page === "Settings" && (
             <div className="settings-grid">
+              <AppUpdates/>
               <MapManager/>
               <PasswordSettings onChanged={() => {
                 window.dispatchEvent(new Event("bungee:session-expired"));
@@ -809,7 +815,7 @@ function App() {
                 <ul>
                   <li>
                     GPS, IP history, recovery photos and check-in logs stay until explicitly
-                    erased or the device is revoked
+                    erased using the erase options
                   </li>
                   <li>One-use enrollment expires in 10 minutes</li>
                   <li>Remote commands expire in 5 minutes</li>
@@ -875,6 +881,7 @@ function App() {
                         Erase saved history
                       </button>
                     )}
+                    <button className="secondary" onClick={()=>{setRegistrationTarget(d);setWgKey("");setModal("reconnect");}}>Reconnect · keep history</button>
                     <br />
                     <button
                       className="danger-text"
@@ -883,15 +890,17 @@ function App() {
                         setModal("revoke");
                       }}
                     >
-                      Revoke this device
+                      Disconnect / erase options
                     </button>
                   </div>
                 ))}
+                <h3>Saved device history</h3>
+                {devices.filter(d=>d.revoked).map(d=><div className="settings-device" key={d.id}><strong>{d.name}</strong><small>Disconnected · saved records retained</small><button className="text-button" onClick={()=>{setSelected(d.id);setTrackingTab("Current estimate");setPage("Tracking");}}>View saved location &amp; history</button><button className="secondary" onClick={()=>{setRegistrationTarget(d);setWgKey("");setModal("reconnect");}}>Reconnect · keep history</button>{d.binding_released&&<button className="danger-text" onClick={()=>{setRegistrationTarget(d);setModal("erase_archive")}}>Erase saved archive…</button>}</div>)}
               </section>
               <section className="panel settings-card">
                 <KeyRound size={26} />
                 <h2>Inactive pairings</h2>
-                <p>Remove revoked devices or expired, unused invitations to free their phone public keys for a fresh invitation. Paired phones stay protected while offline. To retire one, revoke it first.</p>
+                <p>Release inactive connection keys for a fresh invitation. Saved history stays available. Paired phones stay protected while offline. To disable a connection, use Disconnect · keep history.</p>
                 {devices.filter(d => d.can_purge_binding).length === 0 && <p>No inactive bindings to remove.</p>}
                 {devices.filter(d => d.can_purge_binding).map(d => <div className="settings-device" key={d.id}>
                   <strong>{d.name}</strong>
@@ -957,8 +966,8 @@ function App() {
                   : modal === "clear_location"
                     ? "Erase this saved history?"
                     : modal === "revoke"
-                      ? "Revoke this device?"
-                      : modal === "purge_binding" ? "Purge this inactive binding?" : "Pairing instructions"}
+                      ? "Disconnect this device?"
+                      : modal === "erase_archive" ? "Erase this saved archive?" : modal === "reconnect" ? "Reconnect this phone · keep history" : modal === "purge_binding" ? "Purge this inactive binding?" : "Pairing instructions"}
             </h2>
             {modal === "enroll" && !bundle && (
               <form onSubmit={enroll}>
@@ -1046,6 +1055,11 @@ function App() {
                 </p>
               </>
             )}
+            {modal==="erase_archive"&&registrationTarget&&<><p>Permanently erase all saved GPS, IP history, photos and check-ins for <strong>{registrationTarget.name}</strong>? This does not change the phone and cannot be undone from the manager.</p><button className="primary danger full" disabled={busy} onClick={async()=>{setBusy(true);setError("");try{await api(`/devices/${registrationTarget.id}/archive`,{method:"DELETE"});setModal(null);setRegistrationTarget(null);await load();setToast("Saved archive erased.")}catch(e){setError((e as Error).message)}finally{setBusy(false)}}}>Erase this saved archive permanently</button></>}
+            {modal==="reconnect"&&registrationTarget&&<form onSubmit={async e=>{
+              e.preventDefault();setBusy(true);setError("");
+              try{const result=await api(`/devices/${registrationTarget.id}/reconnect`,{method:"POST",body:JSON.stringify({wg_public_key:wgKey})});setBundle(JSON.stringify(result));setName(registrationTarget.name);setModal("enroll");await load();setToast("New invitation ready. The same device’s GPS and saved history were kept.");}catch(e){setError((e as Error).message);}finally{setBusy(false);}
+            }}><p>Use this after reinstalling or replacing Bungee on <strong>{registrationTarget.name}</strong>. Copy the current public key shown by the phone. The old connection is disabled, and a fresh invitation reconnects to this same saved device with its history intact.</p><label htmlFor="replacement-key">Current phone WireGuard public key</label><input id="replacement-key" required value={wgKey} onChange={e=>setWgKey(e.target.value)}/><button className="primary full" disabled={busy}>Create replacement invitation · keep history</button></form>}
             {modal === "message" && (
               <form
                 className="message-composer"
@@ -1104,22 +1118,17 @@ function App() {
             {modal === "revoke" && (
               <>
                 <p>
-                  Remove {device?.name} from your household. Its location
-                  history, IP observations, recovery photos, check-in logs and pending commands
-                  will be erased, and its WireGuard access removed. To pair it
-                  again with the same phone key, purge its inactive binding in Settings and create a fresh invitation.
+                  Disconnect {device?.name} while keeping its saved GPS, last known position and history. Reconnect it later with a fresh invitation; Android permissions and the phone itself are unchanged.
                 </p>
-                <button
-                  className="primary danger full"
-                  disabled={busy}
-                  onClick={revoke}
-                >
-                  Revoke and erase location
-                </button>
+                <button className="primary full" disabled={busy} onClick={async()=>{
+                  if(!device)return;setBusy(true);
+                  try{await api(`/devices/${device.id}/disconnect`,{method:"POST",body:"{}"});setModal(null);setToast("Phone disconnected. Saved GPS and history were kept.");await load();}catch(e){setError((e as Error).message);}finally{setBusy(false);}
+                }}>Disconnect · keep history</button>
+                <details className="erase-alternative"><summary>Erase saved data instead</summary><p>This permanently erases this device’s saved locations, photos and logs.</p><button className="primary danger full" disabled={busy} onClick={revoke}>Revoke and erase location</button></details>
               </>
             )}
             {modal === "purge_binding" && bindingTarget && <>
-              <p>Remove the inactive record for <strong>{bindingTarget.name}</strong> and any remaining records for it? This frees its phone public key. Old invitations and connection secrets will not work again.</p>
+              <p>Release the inactive connection binding for <strong>{bindingTarget.name}</strong>? Its saved GPS, last position and history remain available. Old invitations and connection secrets will not work again.</p>
               <p>Your phone is unchanged. Keep its current keys or generate new ones in Bungee’s Pairing &amp; recovery screen. A fresh invitation is always required.</p>
               <button className="primary danger full" disabled={busy} onClick={async () => {
                 const target = bindingTarget;
@@ -1129,7 +1138,7 @@ function App() {
                   await load();
                   setName(target.name); setWgKey(""); setPreviousWgKey(target.wg_public_key || ""); setBundle("");
                   setPurgedBinding(target);setBindingTarget(null); setModal(null);
-                  setToast("Inactive binding purged. The phone is unchanged.");
+                  setToast("Inactive binding released. Saved history is retained; the phone is unchanged.");
                 } catch(e) { setError((e as Error).message); }
                 finally { setBusy(false); }
               }}>Purge binding</button>
@@ -1169,6 +1178,7 @@ function App() {
   );
 }
 type HistoryRecord = Partial<Location> & {
+  imported_at?:number;
   received_at: number;
   id?: number;
   battery?: number;
@@ -1273,6 +1283,7 @@ function HistoryView({ device, initialKind="locations" }: { device: Device; init
         </h2>
         <span className="subtle">UNTIL YOU ERASE IT</span>
       </div>
+      <HistoryImport key={device.id} deviceId={device.id} onImported={(from,to)=>{setRange({...range,kind:"locations",source:"all",recurrence:"all",from,to});window.dispatchEvent(new Event("bungee:refresh"));}}/>
       <form
         className="history-filters"
         onSubmit={(e) => {
@@ -1541,7 +1552,7 @@ function HistoryView({ device, initialKind="locations" }: { device: Device; init
                       <td>
                         {r.latitude!.toFixed(6)}, {r.longitude!.toFixed(6)}
                       </td>
-                      <td>±{Math.round(r.accuracy!)} m</td><td>{(r.source||"passive").replaceAll("_"," ")} · {r.samples||1} samples{r.system_vpn&&<small className="vpn-note">System VPN · IP estimate uncertain</small>}</td>
+                      <td>±{Math.round(r.accuracy!)} m</td><td>{(r.source||"passive").replaceAll("_"," ")} · {r.samples||1} samples{r.imported_at&&<small className="vpn-note">Restored from CSV</small>}{r.system_vpn&&<small className="vpn-note">System VPN · IP estimate uncertain</small>}</td>
                       <td>{new Date(r.received_at * 1000).toLocaleString()}</td>
                     </>
                   ) : range.kind === "network" ? (
@@ -1596,12 +1607,12 @@ function TunnelView({devices}:{devices:Device[]}) {
 function CurrentTracking({device}:{device:Device}) {
  const [points,setPoints]=useState<Location[]>([]),[error,setError]=useState("");
  useEffect(()=>{const abort=new AbortController();const load=()=>{const to=Math.floor(Date.now()/1000)+120;api<{records:Location[]}>(`/devices/${device.id}/history?from=${to-720}&to=${to}&kind=locations&limit=200`,{signal:abort.signal}).then(r=>setPoints(r.records)).catch(e=>{if(!abort.signal.aborted)setError(e.message);});};load();const timer=setInterval(load,15000);return()=>{abort.abort();clearInterval(timer);};},[device.id]);
- const estimate=currentEstimate(points)||device.telemetry?.location;
+ const estimate=currentEstimate(points)||device.last_location||device.telemetry?.location||savedPosition(points);
  const h=device.management?.connection_health;
- return <section className="panel care-card"><h2>{device.name} · current best estimate</h2>{error&&<p role="alert">{error}</p>}<PrivateMap points={estimate?[estimate]:[]} selected={estimate} network={device.network} label={`${device.name} current estimate`}/>{estimate?<p>{estimate.latitude.toFixed(6)}, {estimate.longitude.toFixed(6)} · uncertainty ±{Math.round(estimate.accuracy??0)} m · observed {ago(estimate.observed_at??null)}{"samples" in estimate?` · ${estimate.samples} contributing samples`:""}</p>:<p>No saved GPS fix. Enable location sharing on the phone.</p>}<p className="fine">Recent stationary fixes use an accuracy-weighted average with an accuracy floor. Moving phones keep their latest position. Averaging reduces jitter; correlated GPS errors can still place the phone outside this estimate. Use Best guess on the device page to request a longer burst.</p>{h?.system_vpn&&<p className="notice">GeoIP confidence: low · system VPN reported. The IP area may be a VPN exit. VPN use does not reduce satellite GPS accuracy.</p>}</section>;
+ return <section className="panel care-card"><h2>{device.name} · last known position</h2>{error&&<p role="alert">{error}</p>}<PrivateMap points={estimate?[estimate]:[]} selected={estimate} network={device.network} label={`${device.name} current estimate`}/>{estimate?<p>{estimate.latitude.toFixed(6)}, {estimate.longitude.toFixed(6)} · uncertainty ±{Math.round(estimate.accuracy??0)} m · observed {ago(estimate.observed_at??null)}{"samples" in estimate?` · ${estimate.samples} contributing samples`:""}</p>:<p>No saved GPS position is available for this device yet.</p>}{estimate&&uncertainPosition(estimate)&&<p className="notice">The saved point has broad or unknown uncertainty. It remains visible for reference; it is not a precise current position.</p>}<p className="fine">Recent stationary fixes use an accuracy-weighted average with an accuracy floor. Moving phones keep their latest position. Averaging reduces jitter; correlated GPS errors can still place the phone outside this estimate. Use Best guess on the device page to request a longer burst.</p>{h?.system_vpn&&<p className="notice">GeoIP confidence: low · system VPN reported. The IP area may be a VPN exit. VPN use does not reduce satellite GPS accuracy.</p>}</section>;
 }
 function LocationView({ device }: { device?: Device }) {
-  const loc = device?.telemetry?.location;
+  const loc = device?.last_location||device?.telemetry?.location;
   return (
     <>
       {loc || device?.network?.geoip?.latitude != null ? (

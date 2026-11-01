@@ -1,0 +1,42 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {generateKeyPairSync,randomBytes,sign} from 'node:crypto';
+import {fixture} from './support/server.mjs';
+import {phone} from './support/phone.mjs';
+
+test('reinstall reconnect preserves device/history, rotates authority, and archived history remains readable',async t=>{
+ const f=await fixture(t),old=await phone(f);
+ f.sql('INSERT INTO location_history(device_id,observed_at,received_at,latitude,longitude,accuracy) VALUES(?,100,101,33,-80,800)',[old.id]);
+ await f.stop();await f.launch();
+ let device=(await (await f.admin('/api/devices')).json()).devices.find(d=>d.id===old.id);
+ assert.equal(device.last_location.accuracy,800,'cache restored even without telemetry/battery');
+ const signing=generateKeyPairSync('ec',{namedCurve:'P-256'}),wg=randomBytes(32).toString('base64');
+ const response=await f.admin(`/api/devices/${old.id}/reconnect`,'POST',{wg_public_key:wg});assert.equal(response.status,200);
+ const bundle=await response.json();assert.equal(bundle.device_id,old.id);assert.equal(bundle.history_retained,true);
+ assert.equal((await old.request('/v1/sync',{report:{}})).status,401,'old phone loses authority immediately');
+ const pub=signing.publicKey.export({type:'spki',format:'der'}).toString('base64');
+ const redeemed=await f.device('/v1/enroll',{token:bundle.token,public_key:pub,wg_public_key:wg,proof:sign('sha256',Buffer.from(`BUNGEE-ENROLL-V1\n${bundle.token}\n${wg}\n${pub}`),signing.privateKey).toString('base64'),capabilities:[]});
+ assert.equal(redeemed.status,200);assert.notEqual((await redeemed.json()).gps_epoch,old.epoch);
+ assert.equal(f.sql('SELECT COUNT(*) FROM location_history WHERE device_id=?',[old.id])[0][0],1);
+ assert.equal((await f.admin(`/api/devices/${old.id}/disconnect`,'POST')).status,200);
+ const history=await f.admin(`/api/devices/${old.id}/history?from=0&to=200`);assert.equal(history.status,200);assert.equal((await history.json()).records[0].accuracy,800);
+ assert.equal((await f.admin(`/api/devices/${old.id}/history.csv?from=0&to=200`)).status,200);
+ device=(await (await f.admin('/api/devices')).json()).devices.find(d=>d.id===old.id);
+ assert.equal(device.revoked,true);assert.equal(device.last_location.latitude,33);
+ assert.equal((await f.admin(`/api/devices/${old.id}/archive`,'DELETE')).status,200);
+ assert.equal(f.sql('SELECT COUNT(*) FROM devices WHERE id=?',[old.id])[0][0],0);
+});
+test('CSV restore is bounded, validated, idempotent, attributed and cannot overwrite saved rows',async t=>{
+ const f=await fixture(t),p=await phone(f);
+ const point={observed_at:100,received_at:101,latitude:33,longitude:-80,accuracy:800,source:'passive',samples:1,system_vpn:null};
+ const path=`/api/devices/${p.id}/history/import`;
+ assert.equal((await f.admin(path,'POST',{records:[point]}, {Cookie:''})).status,401);
+ assert.equal((await f.admin(path,'POST',{records:[{...point,latitude:91}]})).status,400);
+ assert.equal((await f.admin(path,'POST',{records:Array(101).fill(point)})).status,400);
+ assert.deepEqual(await (await f.admin(path,'POST',{records:[point]})).json(),{added:1,skipped:0});
+ assert.deepEqual(await (await f.admin(path,'POST',{records:[{...point,latitude:34}]})).json(),{added:0,skipped:1});
+ const saved=(await (await f.admin(`/api/devices/${p.id}/history?from=0&to=200`)).json()).records[0];
+ assert.equal(saved.latitude,33);assert.ok(saved.imported_at>0);assert.equal(saved.received_at,101);
+ await f.admin(`/api/devices/${p.id}/history`,'DELETE');await f.stop();await f.launch();
+ assert.equal((await (await f.admin('/api/devices')).json()).devices.find(d=>d.id===p.id).last_location,null,'explicit erasure never restored by migration');
+});

@@ -242,7 +242,7 @@ pub fn commit(
 
 fn enrolled(db: &Connection, id: &str) -> ApiResult<()> {
     let exists: bool = db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM devices WHERE id=? AND revoked=0 AND public_key IS NOT NULL)",
+        "SELECT EXISTS(SELECT 1 FROM devices WHERE id=?)",
         [id],
         |r| r.get(0),
     )?;
@@ -351,7 +351,7 @@ pub async fn list_all(
         return Err(bad("Invalid photo cursor"));
     }
     let db = app.db.lock().unwrap();
-    let mut q = db.prepare("SELECT p.sequence,p.photo_id,p.captured_at,p.received_at,p.failed_attempts,p.reason,d.id,d.name FROM recovery_photos p JOIN devices d ON d.id=p.device_id WHERE d.revoked=0 AND p.sequence<? ORDER BY p.sequence DESC LIMIT 20")?;
+    let mut q = db.prepare("SELECT p.sequence,p.photo_id,p.captured_at,p.received_at,p.failed_attempts,p.reason,d.id,d.name FROM recovery_photos p JOIN devices d ON d.id=p.device_id WHERE p.sequence<? ORDER BY p.sequence DESC LIMIT 20")?;
     let rows = q.query_map([page.before.unwrap_or(i64::MAX)], |r| Ok(json!({"sequence":r.get::<_,i64>(0)?,"id":r.get::<_,String>(1)?,"captured_at":r.get::<_,i64>(2)?,"received_at":r.get::<_,i64>(3)?,"failed_attempts":r.get::<_,u32>(4)?,"reason":r.get::<_,String>(5)?,"device_id":r.get::<_,String>(6)?,"device_name":r.get::<_,String>(7)?})))?.collect::<Result<Vec<_>,_>>()?;
     let next = if rows.len() == 20 {
         rows.last().map(|row| row["sequence"].clone())
@@ -366,7 +366,7 @@ pub async fn erase_all(State(app): State<App>, headers: HeaderMap) -> ApiResult<
     let mut db = app.db.lock().unwrap();
     let tx = db.transaction()?;
     let ids = tx
-        .prepare("SELECT id FROM devices WHERE revoked=0")?
+        .prepare("SELECT id FROM devices")?
         .query_map([], |row| row.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
     for id in &ids {

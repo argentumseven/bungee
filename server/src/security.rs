@@ -111,6 +111,8 @@ pub enum RateClass {
     AdminSource,
     AdminAggregate,
     DeviceSource,
+    UpdateSource,
+    UpdateIdentity,
     DeviceIdentity,
     Enrollment,
     Dns,
@@ -149,7 +151,17 @@ pub async fn device_source_guard(State(app): State<App>, req: Request, next: Nex
     };
     // WireGuard validates each peer's source address. Never accept a caller's
     // device ID or a forwarding header as pre-authentication identity.
-    if let Err(e) = rate_limit(&app, RateClass::DeviceSource, peer.0.ip().to_string(), 600) {
+    let update = req.uri().path() == "/v1/app-update/chunk";
+    if let Err(e) = rate_limit(
+        &app,
+        if update {
+            RateClass::UpdateSource
+        } else {
+            RateClass::DeviceSource
+        },
+        peer.0.ip().to_string(),
+        if update { 1200 } else { 600 },
+    ) {
         return e.into_response();
     }
     next.run(req).await
@@ -333,7 +345,17 @@ pub fn verify_device(app: &App, headers: &HeaderMap, path: &str, body: &[u8]) ->
     verify
         .verify(message.as_bytes(), &sig)
         .map_err(|_| denied())?;
-    rate_limit(app, RateClass::DeviceIdentity, id.to_owned(), 240)?;
+    let update = path == "/v1/app-update/chunk";
+    rate_limit(
+        app,
+        if update {
+            RateClass::UpdateIdentity
+        } else {
+            RateClass::DeviceIdentity
+        },
+        id.to_owned(),
+        if update { 1000 } else { 240 },
+    )?;
     db.execute("DELETE FROM nonces WHERE created < ?", [now() - 300])?;
     let inserted = db.execute(
         "INSERT OR IGNORE INTO nonces(device_id,nonce,created) VALUES(?,?,?)",

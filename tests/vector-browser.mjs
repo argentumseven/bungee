@@ -8,6 +8,29 @@ import {chromium} from "playwright-core";
 import {fixture} from "./support/server.mjs";
 import {phone} from "./support/phone.mjs";
 
+test("an old broad saved GPS fix remains visible after reconnect, including failed street tiles",async t=>{
+ const data=await mkdtemp(join(tmpdir(),"bungee-coarse-history-"));t.after(()=>rm(data,{recursive:true,force:true}));
+ execFileSync("python3",["tests/fixtures/vector_map.py",join(data,"map.pmtiles")]);
+ const f=await fixture(t,{geodata:data}),p=await phone(f);
+ f.sql('INSERT INTO location_history(device_id,observed_at,received_at,latitude,longitude,accuracy) VALUES(?,100,101,33,-80,800)',[p.id]);
+ await f.stop();await f.launch();
+ await f.admin(`/api/devices/${p.id}/disconnect`,'POST');
+ const browser=await chromium.launch({executablePath:process.env.CHROME_BIN||"/usr/bin/chromium",headless:true,args:["--no-sandbox","--disable-dev-shm-usage","--enable-unsafe-swiftshader"]});t.after(()=>browser.close());
+ const context=await browser.newContext(),[name,value]=f.cookie.split("=");await context.addCookies([{name,value,url:f.origin}]);const page=await context.newPage();
+ await page.route('**/api/maps/archive.pmtiles',route=>route.abort());
+ await page.goto(f.origin);await page.getByRole('button',{name:'Tracking',exact:true}).click();
+ await page.locator('.saved-gps-marker.uncertain').waitFor();
+ assert.match(await page.locator('.care-card').first().innerText(),/33\.000000, -80\.000000/);
+ assert.match(await page.locator('.saved-gps-marker').getAttribute('title'),/800 m/);
+ await page.screenshot({path:'work/saved-location-without-tiles.png'});
+ await page.getByRole('button',{name:'GPS history',exact:true}).click();
+ await page.getByText('Restore GPS history from CSV',{exact:true}).click();
+ await page.getByLabel('GPS CSV to restore').setInputFiles({name:'restored.csv',mimeType:'text/csv',buffer:Buffer.from('observed_at_utc,received_at_utc,latitude,longitude,accuracy_m,source,samples,system_vpn\n2026-01-01T00:00:00Z,2026-01-01T00:00:01Z,33,-80,800,passive,1,\n')});
+ await page.getByRole('button',{name:'Restore these rows',exact:true}).click();
+ await page.getByText(/Restored from CSV/).waitFor();
+ assert.equal(f.sql('SELECT COUNT(*) FROM location_history WHERE device_id=?',[p.id])[0][0],2);
+});
+
 test("vector archive renders with a local worker, local assets and authenticated byte ranges",async t=>{
  const data=await mkdtemp(join(tmpdir(),"bungee-vector-browser-"));t.after(()=>rm(data,{recursive:true,force:true}));
  execFileSync("python3",["tests/fixtures/vector_map.py",join(data,"map.pmtiles")]);

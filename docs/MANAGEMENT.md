@@ -30,7 +30,11 @@ Do not create an owner with ADB or OS provisioning. If you independently tested 
 
 ## Stable signing and updates
 
-Use the same signing key for in-place app updates. CI debug keys may change; personal installs may require uninstall/re-pair when signatures differ, losing Bungee's local identity/backlog. This does not require erasing the phone in the supported personal mode. Back up needed Bungee records before intentionally uninstalling. Never enroll a CI debug APK as owner.
+Install the APK from **manager Settings → Phone app updates**. The host automatically downloads the checked public APK for the exact running server commit, verifies its checksum/package/version, and signs it with a persistent household key. Bungee’s phone screen checks for updates through the paired connection and offers Download/Install. Android asks for installation permission and confirmation. Pairing keys, preferences and queued GPS survive in-place updates. No Android VPN slot is used.
+
+The private signing key/password live in encrypted `volumes/tls-data/android-signing`, included in existing authenticated cold backups, outside the runtime container mounts. Keep that key when restoring or moving a server. A missing established key is an error; the host never silently replaces it. The host worker retries unavailable releases and keeps at most two signed APKs.
+
+Older GitHub builds used disposable CI signing keys. Android requires one reinstall to move to the server’s certificate; the lost private key cannot be recovered from the old APK. Let any local backlog upload first. If removable Android administration is enabled, turn it off before uninstalling. Keep the manager’s saved device, then choose **Reconnect · keep history** with the new app’s public key. This rotates the invitation and authentication keys while preserving the same logical device ID, GPS, IP history and photos. Use server-issued APKs for future updates; reinstalling is unnecessary. Never enroll an APK as device owner.
 
 For your own stable release signer, create/back up a private keystore on a trusted development machine outside the checkout. Example with interactive passwords:
 
@@ -42,7 +46,7 @@ bash scripts/build-transport.sh
 bash scripts/build-owner-apk.sh
 ```
 
-The historical helper name `build-owner-apk.sh` refers to an operator-owned signing key; it does not enable device ownership. It signs/lints an optimized release, verifies the public certificate and prints SHA-256. Keep its key/password private; do not put them in source, issues or chat. Optional BUNGEE_OWNER_KEY_ALIAS/KEY_PASSWORD select an existing key. Increase versionCode on updates and verify the public signer fingerprint. Hosted production signing and an automatic update service are not implemented.
+The historical helper name `build-owner-apk.sh` refers to an operator-owned signing key; it does not enable device ownership. It signs/lints an optimized release, verifies the public certificate and prints SHA-256. Keep its key/password private; do not put them in source, issues or chat. Optional BUNGEE_OWNER_KEY_ALIAS/KEY_PASSWORD select an existing key. Increase versionCode on updates and verify the public signer fingerprint. An independently signed APK can only update APKs using that same independent certificate; it cannot switch signing identities in place.
 
 ## Primary sources
 

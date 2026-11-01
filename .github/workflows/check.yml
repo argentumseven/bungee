@@ -72,9 +72,17 @@ jobs:
           Extract and install `bungee-debug.apk`. GitHub sign-in is required; this build is retained for 14 days.
           In-place updates require the same signing key as the installed app.
           SUMMARY
+  apk-signing:
+    needs: android
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with: {name: bungee-android-debug, path: artifacts}
+      - run: python3 scripts/check-app-signer.py artifacts/bungee-debug.apk
   publish-main-apk:
     if: github.repository == 'argentumseven/bungee' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    needs: android
+    needs: [android, apk-signing]
     runs-on: ubuntu-24.04
     permissions:
       actions: read
@@ -105,7 +113,7 @@ jobs:
       - run: python3 scripts/check-updater.py
   publish-containers:
     if: github.repository == 'argentumseven/bungee' && startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    needs: [server-and-web, android, container-boundaries]
+    needs: [server-and-web, android, apk-signing, container-boundaries]
     runs-on: ubuntu-24.04
     concurrency:
       group: bungee-publish-${{ contains(github.ref_name, '-') && 'preview' || 'stable' }}
@@ -128,6 +136,7 @@ jobs:
         id: server
         with:
           context: .
+          build-args: BUNGEE_SOURCE_COMMIT=${{ github.sha }}
           push: true
           pull: true
           platforms: linux/amd64,linux/arm64

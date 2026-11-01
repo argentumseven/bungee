@@ -49,7 +49,7 @@ class SetupTests(unittest.TestCase):
         self.assertGreater(manifest['android_version_code'], 0)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for source, target in [(host.HERE / 'bungee-host.py', 'bungee-host.py'), (host.module_path, 'network_config.py'), (host.release_path, 'release.json'), (host.HERE / 'secure_storage.py', 'secure_storage.py'), (host.HERE / 'tls_config.py', 'tls_config.py'), (host.HERE / 'regional_maps.py', 'regional_maps.py'), (host.HERE / 'map_manager.py', 'map_manager.py')]:
+            for source, target in [(host.HERE / 'bungee-host.py', 'bungee-host.py'), (host.module_path, 'network_config.py'), (host.release_path, 'release.json'), (host.HERE / 'secure_storage.py', 'secure_storage.py'), (host.HERE / 'tls_config.py', 'tls_config.py'), (host.HERE / 'regional_maps.py', 'regional_maps.py'), (host.HERE / 'map_manager.py', 'map_manager.py'), (host.HERE / 'app_updates.py', 'app_updates.py')]:
                 (root / target).write_text(source.read_text())
             script = "import importlib.util,sys; s=importlib.util.spec_from_file_location('installed',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.VERSION)"
             result = subprocess.check_output(['python3', '-c', script, str(root / 'bungee-host.py')], text=True)

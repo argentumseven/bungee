@@ -30,7 +30,7 @@ export async function fixture(t, {legacy = false, geodata = undefined, dns = und
     cookie=response.headers.get("set-cookie").split(";")[0];
   };
   const launch=async(credential=password)=>{
-    server=spawn(resolve("server/target/debug/bungee-server"),[],{env:{...process.env,BUNGEE_STATE_DIR:dir,BUNGEE_MAP_CONTROL_DIR:join(dir,"map-control"),BUNGEE_MAPS_DIR:join(dir,"maps"),...(dns?{BUNGEE_DNS_UPSTREAM_IP:dns.ip,BUNGEE_DNS_UPSTREAM_PORT:String(dns.port),BUNGEE_DNS_BIND:`127.0.0.1:${dnsPort}`} :{}),...(geodata?{BUNGEE_GEODATA_DIR:geodata}:{}),BUNGEE_ADMIN_BIND:`127.0.0.1:${port}`,BUNGEE_DEVICE_BIND:`127.0.0.1:${devicePort}`,BUNGEE_PUBLIC_ORIGIN:origin,BUNGEE_WG_ENDPOINT:"203.0.113.10:47937"},stdio:["ignore","pipe","pipe"]});
+    server=spawn(resolve("server/target/debug/bungee-server"),[],{env:{...process.env,BUNGEE_STATE_DIR:dir,BUNGEE_APP_UPDATES_DIR:join(dir,"app-updates"),BUNGEE_MAP_CONTROL_DIR:join(dir,"map-control"),BUNGEE_MAPS_DIR:join(dir,"maps"),...(dns?{BUNGEE_DNS_UPSTREAM_IP:dns.ip,BUNGEE_DNS_UPSTREAM_PORT:String(dns.port),BUNGEE_DNS_BIND:`127.0.0.1:${dnsPort}`} :{}),...(geodata?{BUNGEE_GEODATA_DIR:geodata}:{}),BUNGEE_ADMIN_BIND:`127.0.0.1:${port}`,BUNGEE_DEVICE_BIND:`127.0.0.1:${devicePort}`,BUNGEE_PUBLIC_ORIGIN:origin,BUNGEE_WG_ENDPOINT:"203.0.113.10:47937"},stdio:["ignore","pipe","pipe"]});
     server.stdout.on("data",b=>logs+=b); server.stderr.on("data",b=>logs+=b);
     let ready=false;
     for(let n=0;n<200;n++) { try { if((await fetch(origin+"/healthz")).ok) {ready=true;break;} } catch {} if(server.exitCode!==null)throw Error(logs); await pause(25); }

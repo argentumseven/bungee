@@ -1,10 +1,12 @@
 mod api;
+mod app_updates;
 mod credentials;
 mod dns;
 mod enrollment;
 mod export;
 mod geography;
 mod history;
+mod history_import;
 mod management;
 mod maps;
 mod photos;
@@ -143,6 +145,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/session",
             get(api::session).post(api::login).delete(api::logout),
         )
+        .route("/api/app-updates", get(app_updates::status))
+        .route("/api/app-updates/bungee.apk", get(app_updates::download))
         .route("/api/geography", get(geography::status))
         .route("/api/maps/archive.pmtiles", get(geography::vector_archive))
         .route("/api/maps/regions/{id}/archive.pmtiles", get(maps::archive))
@@ -153,6 +157,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/devices", get(api::devices))
         .route("/api/enrollments", post(enrollment::create_enrollment))
         .route("/api/devices/{id}", delete(api::revoke))
+        .route("/api/devices/{id}/disconnect", post(enrollment::disconnect))
+        .route("/api/devices/{id}/reconnect", post(enrollment::reconnect))
+        .route(
+            "/api/devices/{id}/archive",
+            delete(enrollment::delete_archive),
+        )
         .route(
             "/api/devices/{id}/binding",
             delete(enrollment::purge_binding),
@@ -178,6 +188,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/photos",
             get(photos::list_all).delete(photos::erase_all),
+        )
+        .route(
+            "/api/devices/{id}/history/import",
+            post(history_import::import),
         )
         .route("/api/devices/{id}/history.csv", get(export::history_csv))
         .route(
@@ -212,6 +226,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/command-check", post(api::check_command))
         .route("/v1/dns-check", post(dns::check_path))
         .route("/v1/ack", post(api::ack))
+        .route("/v1/app-update", post(app_updates::check))
+        .route("/v1/app-update/chunk", post(app_updates::chunk))
         .route("/v1/sync", post(management::sync))
         .layer(middleware::from_fn_with_state(
             app.clone(),

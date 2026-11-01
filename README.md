@@ -10,7 +10,7 @@ Bungee is a self-hosted device finder for Android 12+ and GrapheneOS. Pair house
 
 The Kotlin app connects through an app-contained WireGuard tunnel to a Rust server and web dashboard. Only Bungee traffic uses that tunnel; Android's VPN slot remains available. Phone records stay on your server until you erase them or revoke the device.
 
-**Version 1.1.8.** Physical GrapheneOS testing and an independent security audit are pending. See the [validation record](docs/VALIDATION.md) for completed checks and [security design](docs/SECURITY.md) for the trust model.
+**Version 1.1.9.** Physical GrapheneOS testing and an independent security audit are pending. See the [validation record](docs/VALIDATION.md) for completed checks and [security design](docs/SECURITY.md) for the trust model.
 
 ![Bungee dashboard in dark mode](docs/screenshots/dashboard.png)
 
@@ -74,9 +74,9 @@ See [installation and updates](docs/INSTALL.md) for the wizard, network rules an
 
 ## Install and pair a phone
 
-Download **[bungee.apk](https://github.com/argentumseven/bungee/releases/latest/download/bungee.apk)** from the latest Android release, or build it yourself. The checksum and exact source commit are on the [release page](https://github.com/argentumseven/bungee/releases/latest). Main-branch Android releases are published automatically after the Android build, unit tests and lint succeed. The installer, server, dashboard and APK use the version in `release.json`.
+Download **manager Settings → Phone app updates → Download this server’s APK** for a persistent signing identity and future in-app updates. The host prepares the APK for its exact server version automatically. The public **[bungee.apk](https://github.com/argentumseven/bungee/releases/latest/download/bungee.apk)** and [checksums/source](https://github.com/argentumseven/bungee/releases/latest) remain available as standalone builds. Main-branch releases publish after the APK and signing pipeline checks succeed.
 
-The CI APK is a signed **debug build**. CI signing keys can change between runs; a different signer requires uninstalling and pairing again. Use [your own stable signing key](docs/MANAGEMENT.md#stable-signing-and-updates) for in-place updates. APKs and private signing keys are kept outside the source tree. Install Bungee as an ordinary personal app; **do not enroll it as device owner**.
+The standalone CI APK has a disposable signer, with Android debugging disabled. Older GitHub APKs need one reinstall to switch certificates; **Reconnect · keep history** preserves their saved server records. After that, use Bungee’s App updates screen for in-place updates. See [signing and migration](docs/MANAGEMENT.md#stable-signing-and-updates). Install Bungee as an ordinary personal app; **do not enroll it as device owner**.
 
 1. Open Bungee on the phone and copy its WireGuard public key.
    After an uninstall/reinstall, clearing app data, or generating new phone keys,
@@ -157,7 +157,9 @@ bash scripts/build-transport.sh
 bash scripts/android.sh :app:assembleDebug :app:lintDebug :app:testDebugUnitTest
 ```
 
-The development APK is `android/app/build/outputs/apk/debug/app-debug.apk`. `assembleRelease` is unsigned until you configure a signer outside source control. `scripts/build-owner-apk.sh` uses an operator-owned signing key; its historical name does not enable Android ownership.
+For normal installations, download **manager Settings → Phone app updates → Download this server’s APK**. The host prepares it automatically; future updates are available inside the paired phone app with a persistent server signer. See [the one-time transition from old GitHub APKs](docs/MANAGEMENT.md#stable-signing-and-updates).
+
+The local development APK is `android/app/build/outputs/apk/debug/app-debug.apk`. `assembleRelease` is unsigned until you configure a signer outside source control. `scripts/build-owner-apk.sh` uses an operator-owned signing key; its historical name does not enable Android ownership.
 
 The server's administrator HTTP listener binds loopback on port 8080; device tests use 8081. Passwords are stored only as salted Argon2id verifiers. Before a first development launch, build the server and initialize a password privately:
 

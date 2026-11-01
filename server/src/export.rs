@@ -56,7 +56,7 @@ pub(crate) fn live_revision(app: &App, headers: &HeaderMap, id: &str) -> ApiResu
         .lock()
         .unwrap()
         .query_row(
-            "SELECT history_revision FROM devices WHERE id=? AND revoked=0",
+            "SELECT history_revision FROM devices WHERE id=?",
             [id],
             |r| r.get(0),
         )

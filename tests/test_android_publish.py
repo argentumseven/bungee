@@ -32,7 +32,7 @@ class PublishingTests(unittest.TestCase):
             if path == 'actions/runs/123/artifacts': return {'artifacts':[{'name':'bungee-android-debug','expired':False}]}
             if path == 'releases?per_page=100': return releases or []
             if path == 'contents/release.json?ref=' + 'a' * 40:
-                return {'content':base64.b64encode(json.dumps({'version':'1.1.4'}).encode()).decode()}
+                return {'content':base64.b64encode(json.dumps({'version':'1.1.4','android_version_code':20}).encode()).decode()}
             raise AssertionError(path)
         def gh(*args):
             calls.append(args)

@@ -82,6 +82,7 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
         ("source", "TEXT NOT NULL DEFAULT 'passive'"),
         ("samples", "INTEGER NOT NULL DEFAULT 1"),
         ("system_vpn", "INTEGER"),
+        ("imported_at", "INTEGER"),
     ] {
         if !location_columns.iter().any(|c| c == name) {
             tx.execute(
@@ -95,6 +96,12 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
         .prepare("PRAGMA table_info(devices)")?
         .query_map([], |r| r.get::<_, String>(1))?
         .collect::<Result<Vec<_>, _>>()?;
+    if !columns.iter().any(|c| c == "binding_released") {
+        tx.execute(
+            "ALTER TABLE devices ADD COLUMN binding_released INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
     if !columns.iter().any(|c| c == "last_contact") {
         tx.execute("ALTER TABLE devices ADD COLUMN last_contact INTEGER", [])?;
         tx.execute("UPDATE devices SET last_contact=last_seen", [])?;
@@ -179,6 +186,9 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
         )?;
         tx.execute_batch("PRAGMA user_version=2;")?;
     }
+    // Repair only a missing cache from retained history. Explicit GPS erasure
+    // deletes those rows, so this cannot resurrect an erased fix.
+    tx.execute("UPDATE devices SET last_location=(SELECT json_object('latitude',latitude,'longitude',longitude,'accuracy',accuracy,'observed_at',observed_at,'source',source,'samples',samples,'system_vpn',json(CASE WHEN system_vpn IS NULL THEN 'null' WHEN system_vpn=1 THEN 'true' ELSE 'false' END),'imported_at',imported_at) FROM location_history WHERE device_id=devices.id ORDER BY observed_at DESC LIMIT 1) WHERE last_location IS NULL",[])?;
     tx.commit()
 }
 

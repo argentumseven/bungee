@@ -10,6 +10,15 @@ function valid(p:GpsPoint):boolean{
  return Number.isFinite(p.latitude)&&Number.isFinite(p.longitude)&&p.latitude>=-90&&p.latitude<=90&&p.longitude>=-180&&p.longitude<=180&&
  p.accuracy!==undefined&&Number.isFinite(p.accuracy)&&p.accuracy>=0&&p.accuracy<=100;
 }
+/** A dated saved position remains useful even when it cannot form a reliable trail. */
+export function savedPosition<T extends GpsPoint>(raw:readonly T[],selected?:T|null):T|null {
+ const usable=(point:T)=>Number.isFinite(point.latitude)&&Number.isFinite(point.longitude)&&Math.abs(point.latitude)<=90&&Math.abs(point.longitude)<=180;
+ if(selected&&usable(selected))return selected;
+ return raw.filter(usable).reduce<T|null>((last,point)=>!last||(point.observed_at??0)>(last.observed_at??0)?point:last,null);
+}
+export function uncertainPosition(point:GpsPoint):boolean {
+ return point.accuracy===undefined||!Number.isFinite(point.accuracy)||point.accuracy>100;
+}
 function dt(a:GpsPoint,b:GpsPoint):number{
  if(!Number.isFinite(a.observed_at)||!Number.isFinite(b.observed_at))return 0;
  return b.observed_at!-a.observed_at!;

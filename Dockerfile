@@ -15,6 +15,8 @@ COPY server/src ./server/src
 RUN --mount=type=secret,id=build_ca if [ -s /run/secrets/build_ca ]; then export CARGO_HTTP_CAINFO=/run/secrets/build_ca; fi; cargo build --release --locked --manifest-path server/Cargo.toml -j 4
 
 FROM debian:bookworm-slim
+ARG BUNGEE_SOURCE_COMMIT=custom
+LABEL dev.bungee.source-commit=$BUNGEE_SOURCE_COMMIT
 RUN apt-get update && apt-get install --yes --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 bungee && useradd --uid 10001 --gid 10001 --no-create-home bungee \
     && mkdir -p /state /maps /map-control/status /map-control/requests && chown bungee:bungee /state

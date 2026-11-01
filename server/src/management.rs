@@ -227,7 +227,7 @@ pub async fn get_policy(
     let report = report.ok_or(Error(StatusCode::NOT_FOUND, "Device not found"))?;
     let (revision, policy) = read(&db, &id)?;
     Ok(Json(
-        json!({"revision":revision,"policy":policy.reversible(),"persistent_controls_enabled":false,"legacy_policy_present":policy.has_persistent_controls(),"report":report.and_then(|s|serde_json::from_str::<Value>(&s).ok()),"dns_configured":app.dns.is_some(),"dns_upstream":app.dns.as_ref().map(|d|d.upstream.to_string())}),
+        json!({"app_update":crate::app_updates::descriptor(),"revision":revision,"policy":policy.reversible(),"persistent_controls_enabled":false,"legacy_policy_present":policy.has_persistent_controls(),"report":report.and_then(|s|serde_json::from_str::<Value>(&s).ok()),"dns_configured":app.dns.is_some(),"dns_upstream":app.dns.as_ref().map(|d|d.upstream.to_string())}),
     ))
 }
 #[derive(Deserialize)]
@@ -341,7 +341,7 @@ pub async fn sync(
         |r| r.get(0),
     )?;
     Ok(Json(
-        json!({"revision":revision,"policy":policy.reversible(),"gps_epoch":epoch,"photo_epoch":db.query_row("SELECT photo_epoch FROM devices WHERE id=?",[&id],|r|r.get::<_,String>(0))?,"server_time":now(),"dns_available":false,"persistent_controls_enabled":false}),
+        json!({"app_update":crate::app_updates::descriptor(),"revision":revision,"policy":policy.reversible(),"gps_epoch":epoch,"photo_epoch":db.query_row("SELECT photo_epoch FROM devices WHERE id=?",[&id],|r|r.get::<_,String>(0))?,"server_time":now(),"dns_available":false,"persistent_controls_enabled":false}),
     ))
 }
 pub fn dns_peer(db: &rusqlite::Connection, address: &str) -> ApiResult<Option<String>> {
