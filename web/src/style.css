@@ -2219,3 +2219,6 @@ select {
 .map-street-label,.map-manager,.dns-panel .fine {overflow-wrap:anywhere}
 .saved-gps-marker {width:18px;height:18px;border:3px solid white;border-radius:50%;background:#79b5c0;box-shadow:0 0 0 2px #234d60}
 .saved-gps-marker.uncertain {background:#e8b76b;box-shadow:0 0 0 2px #885b19;border-style:dashed}
+
+.settings-card .wrap { overflow-wrap:anywhere; }
+.history-import input { max-width:100%; }

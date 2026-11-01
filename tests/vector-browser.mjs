@@ -43,10 +43,11 @@ test("vector archive renders with a local worker, local assets and authenticated
  page.on("pageerror",e=>errors.push(e.message));page.on("console",m=>{if(m.type()==="error")errors.push(m.text());});
  page.on("request",r=>{if(!r.url().startsWith(f.origin)&&!r.url().startsWith("data:"))external.push(r.url());});
  page.on("response",r=>{if(r.url().endsWith("/api/maps/archive.pmtiles"))ranges.push(r.status());});
+ const archiveResponse=page.waitForResponse(r=>r.url().endsWith("/api/maps/archive.pmtiles")&&r.status()===206);
  await page.goto(f.origin);
  await page.locator(".phone-card").click();
  await page.locator(".maplibregl-canvas").waitFor();
- await page.waitForResponse(r=>r.url().endsWith("/api/maps/archive.pmtiles")&&r.status()===206);
+ await archiveResponse;
  await page.waitForFunction(()=>document.querySelector(".maplibregl-canvas")?.getBoundingClientRect().width>0);
  // Allow the worker/GPU to present a frame before checking resource/console errors.
  await page.waitForTimeout(1000);
@@ -88,4 +89,18 @@ test("regional maps can be planned in Settings and render labelled streets in GP
  assert.equal(await page.locator(".history-trail").count(),0);assert.equal(await page.locator(".history-selection").count(),1);
  await page.screenshot({path:"docs/screenshots/regional-street-tracking.png"});
  assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
+});
+
+
+test("server APK is easy to download and its signing details fit the mobile manager",async t=>{
+ const f=await fixture(t),dir=join(f.dir,'app-updates'),release=JSON.parse(await readFile('release.json','utf8'));
+ await mkdir(dir);const bytes=Buffer.from('synthetic APK download fixture'),sha='a'.repeat(64);
+ await writeFile(join(dir,sha+'.apk'),bytes);await writeFile(join(dir,'release.json'),JSON.stringify({version:release.version,version_code:release.android_version_code,sha256:sha,signer_sha256:'b'.repeat(64),size:bytes.length,commit:'c'.repeat(40)}));
+ const browser=await chromium.launch({executablePath:process.env.CHROME_BIN||'/usr/bin/chromium',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});t.after(()=>browser.close());
+ const context=await browser.newContext({viewport:{width:390,height:844}}),[name,value]=f.cookie.split('=');await context.addCookies([{name,value,url:f.origin}]);const page=await context.newPage();
+ await page.goto(f.origin);await page.getByRole('button',{name:'Settings',exact:true}).click();
+ await page.getByText('Signing identity',{exact:true}).click();
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ const downloading=page.waitForEvent('download');await page.getByRole('link',{name:'Download this server’s APK'}).click();const downloaded=await downloading;
+ assert.equal(downloaded.suggestedFilename(),'bungee.apk');assert.deepEqual(await readFile(await downloaded.path()),bytes);
 });
