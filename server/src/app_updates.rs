@@ -46,11 +46,17 @@ pub fn descriptor() -> Option<Value> {
     }
     Some(value)
 }
+pub fn preparation() -> Value {
+    fs::read(root().join("status.json"))
+        .ok()
+        .filter(|b| b.len() <= 8192)
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .unwrap_or(json!({"state":"waiting","message":"The host is preparing this server’s APK automatically. Check the host’s bungee-app-updates.service if this persists."}))
+}
 pub async fn status(State(app): State<App>, headers: HeaderMap) -> ApiResult<Json<Value>> {
     require_admin(&app, &headers)?;
-    let state=fs::read(root().join("status.json")).ok().filter(|b|b.len()<=8192).and_then(|b|serde_json::from_slice::<Value>(&b).ok()).unwrap_or(json!({"state":"waiting","message":"The host is preparing this server’s APK automatically."}));
     Ok(Json(
-        json!({"server_version":crate::release::version(),"release":descriptor(),"preparation":state}),
+        json!({"server_version":crate::release::version(),"release":descriptor(),"preparation":preparation()}),
     ))
 }
 pub async fn check(
@@ -60,7 +66,7 @@ pub async fn check(
 ) -> ApiResult<Json<Value>> {
     verify_device(&app, &headers, "/v1/app-update", &body)?;
     Ok(Json(
-        json!({"server_version":crate::release::version(),"release":descriptor(),"server_time":now()}),
+        json!({"server_version":crate::release::version(),"release":descriptor(),"preparation":preparation(),"server_time":now()}),
     ))
 }
 #[derive(Deserialize)]

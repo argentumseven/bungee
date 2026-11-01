@@ -298,33 +298,61 @@ class MainActivity : FragmentActivity() {
                     }
                 }
                 val appUpdate by AppUpdates.status.collectAsState()
+                var showUpdateHelp by remember { mutableStateOf(false) }
+                val checkAppUpdates: () -> Unit = {
+                    updateBusy=true
+                    updateJob=scope.launch {
+                        try { withContext(Dispatchers.IO) { AppUpdates.check(this@MainActivity,identity) } }
+                        catch(e:Exception) { AppUpdates.fail(if(e is CancellationException) "Update check interrupted. Try again." else "Update check failed: ${e.message ?: "server unreachable"}");if(e is CancellationException) throw e }
+                        finally {updateBusy=false}
+                    }
+                }
                 Card(modifier=Modifier.fillMaxWidth().padding(top=18.dp),colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.surface),shape=RoundedCornerShape(17.dp)) {
                     Column(Modifier.padding(18.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
                         Text("App updates",fontWeight=FontWeight.SemiBold)
-                        Text("Installed ${BuildConfig.VERSION_NAME} · updates come from your paired server",fontSize=12.sp)
+                        Text("Installed ${BuildConfig.VERSION_NAME} · paired server ${appUpdate.serverVersion ?: "not checked"}",fontSize=12.sp)
+                        if(appUpdate.signerMismatch) Text("Signing key mismatch · update blocked",color=MaterialTheme.colorScheme.error,fontWeight=FontWeight.SemiBold)
                         Text(appUpdate.message,fontSize=12.sp)
-                        appUpdate.progress?.let { LinearProgressIndicator(progress={it/100f},modifier=Modifier.fillMaxWidth()); Text("$it%",fontSize=12.sp) }
-                        if(updateBusy) OutlinedButton(onClick={ updateJob?.cancel();AppUpdates.fail("Download paused. Tap Download update to resume.") }) { Text("Pause download") }
-                        else {
-                            OutlinedButton(enabled=enrolled && !locallyStopped,onClick={
-                                updateBusy=true
-                                updateJob=scope.launch {
-                                    try { withContext(Dispatchers.IO) { AppUpdates.observe(this@MainActivity,HomeApi(identity).request("/v1/app-update").optJSONObject("release")) } }
-                                    catch(e:Exception) { if(e is CancellationException) throw e;AppUpdates.fail("Connect to your paired server to check for updates.") }
-                                    finally {updateBusy=false}
-                                }
-                            }) { Text("Check for updates") }
+                        appUpdate.progress?.let { progress ->
+                            LinearProgressIndicator(progress={progress/100f},modifier=Modifier.fillMaxWidth())
+                            val downloaded=appUpdate.downloadedBytes/1048576.0
+                            val total=(appUpdate.release?.size ?: 0)/1048576.0
+                            Text(String.format(java.util.Locale.ROOT,"%d%% · %.1f / %.1f MiB",progress,downloaded,total),fontSize=12.sp)
+                        }
+                        if(updateBusy) {
+                            if(appUpdate.phase==AppUpdatePhase.DOWNLOADING) OutlinedButton(onClick={ updateJob?.cancel() }) { Text("Pause download") }
+                            else {
+                                LinearProgressIndicator(modifier=Modifier.fillMaxWidth())
+                                Text(if(appUpdate.phase==AppUpdatePhase.VERIFYING) "Verifying update…" else "Checking server…",fontSize=12.sp)
+                            }
+                        } else {
+                            if(!appUpdate.signerMismatch) OutlinedButton(enabled=enrolled && !locallyStopped,onClick=checkAppUpdates) { Text("Check for updates") }
                             if(appUpdate.ready) Button(onClick={scope.launch {try {AppUpdates.install(this@MainActivity)}catch(e:Exception){AppUpdates.fail(e.message?:"Android could not open the update")}}}) {Text("Install update")}
-                            else if(AppUpdates.canDownload(this@MainActivity)) Button(enabled=!locallyStopped,onClick={
+                            else if(appUpdate.canDownload) Button(enabled=!locallyStopped,onClick={
                                 updateBusy=true
                                 updateJob=scope.launch {
                                     try {withContext(Dispatchers.IO) {AppUpdates.download(this@MainActivity,identity)}}
-                                    catch(e:Exception) {if(e is CancellationException) {AppUpdates.fail("Download paused. Tap Download update to resume.");throw e};AppUpdates.fail(e.message?:"Download paused; try again")}
+                                    catch(e:Exception) {if(e is CancellationException) {AppUpdates.pause();throw e};AppUpdates.fail(e.message?:"Download interrupted; resume to try again")}
                                     finally {updateBusy=false}
                                 }
-                            }) {Text("Download update")}
+                            }) {Text(if(appUpdate.downloadedBytes>0 || appUpdate.phase==AppUpdatePhase.PAUSED) "Resume download" else "Download update")}
                         }
-                        Text("Updating keeps pairing, settings and queued history. Android asks before installing. Keep sharing connected while downloading.",fontSize=11.sp,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                        if(appUpdate.signerMismatch) {
+                            Button(onClick={showUpdateHelp=!showUpdateHelp}) {Text(if(showUpdateHelp) "Hide update recovery" else "Update recovery")}
+                            if(showUpdateHelp) {
+                                Text("Already used this server’s APK? Restore its original APK signing key from the encrypted server backup. Do not reinstall while checking this.",fontSize=12.sp)
+                                Text("Installed an older GitHub APK? Its disposable key cannot sign a replacement. A one-time switch is required:",fontSize=12.sp)
+                                Text("1. Let queued GPS and photos upload. Uninstalling removes unsent phone data. Keep the saved device in the manager.",fontSize=12.sp)
+                                Text("2. Download the server’s APK from manager Settings → Phone app updates. Turn off removable device administration in Bungee, then uninstall the old app and install the server APK.",fontSize=12.sp)
+                                Text("3. On the SAME saved device, use Reconnect · keep history with the new phone public key, then scan its invitation. Do not purge or erase that device.",fontSize=12.sp)
+                                Text("Future server APK updates install over the app and keep pairing. Android requires installation confirmation.",fontSize=12.sp)
+                                OutlinedButton(enabled=!updateBusy && enrolled && !locallyStopped,onClick=checkAppUpdates) {Text("Recheck after restoring server key")}
+                                appUpdate.installedSigner?.let {Text("Installed signing certificate: $it",fontSize=10.sp)}
+                                appUpdate.release?.let {Text("Server signing certificate: ${it.signer}",fontSize=10.sp)}
+                            }
+                        }
+                        if(locallyStopped) Text("Bungee is stopped locally. Resume its connection before checking or downloading updates.",fontSize=11.sp)
+                        Text("Updates signed with the same key keep pairing, settings and queued history. Checking opens only Bungee’s private connection; it does not enable GPS sharing.",fontSize=11.sp,color=MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
                 Text("SHARING AND PERMISSIONS", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp, letterSpacing = 1.8.sp, modifier = Modifier.padding(top = 30.dp, bottom = 15.dp))

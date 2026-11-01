@@ -13,7 +13,12 @@ test('only authenticated paired phones can fetch bounded immutable APK chunks; a
  const manifest={version:release.version,version_code:release.android_version_code,sha256:sha,signer_sha256:'a'.repeat(64),size:data.length,commit:'b'.repeat(40)};
  await writeFile(join(dir,sha+'.apk'),data);await writeFile(join(dir,'release.json'),JSON.stringify(manifest));
  assert.equal((await f.device('/v1/app-update/chunk',{sha256:sha,offset:0})).status,401);
- assert.deepEqual((await (await p.request('/v1/app-update',{})).json()).release,manifest);
+ const preparation={state:'preparing',version:release.version,stage:'downloading',message:'Downloading the server APK…',downloaded_bytes:524288,total_bytes:1048576};
+ await writeFile(join(dir,'status.json'),JSON.stringify(preparation));
+ const check=await (await p.request('/v1/app-update',{})).json();
+ assert.deepEqual(check.release,manifest);assert.deepEqual(check.preparation,preparation);assert.equal(check.server_version,release.version);
+ const syncResponse=await p.request('/v1/sync',{report:{}});assert.equal(syncResponse.status,200);
+ const sync=await syncResponse.json();assert.deepEqual(sync.app_update_preparation,preparation);assert.equal(sync.server_version,release.version);
  const first=await (await p.request('/v1/app-update/chunk',{sha256:sha,offset:0})).json();assert.deepEqual(Buffer.from(first.data,'base64'),data.subarray(0,131072));
  const last=await (await p.request('/v1/app-update/chunk',{sha256:sha,offset:131072})).json();assert.deepEqual(Buffer.from(last.data,'base64'),data.subarray(131072));
  assert.equal((await p.request('/v1/app-update/chunk',{sha256:sha,offset:1})).status,400);
@@ -21,5 +26,9 @@ test('only authenticated paired phones can fetch bounded immutable APK chunks; a
  assert.equal((await f.admin('/api/app-updates/bungee.apk','GET',undefined,{Cookie:''})).status,401);
  const downloaded=await f.admin('/api/app-updates/bungee.apk');assert.match(downloaded.headers.get('content-disposition'),/bungee.apk/);assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()),data);
  await writeFile(join(dir,'release.json'),JSON.stringify({...manifest,version_code:manifest.version_code+1}));
- assert.equal((await (await p.request('/v1/app-update',{})).json()).release,null,'running server controls offered version');
+ const notReady=await (await p.request('/v1/app-update',{})).json();
+ assert.equal(notReady.release,null,'running server controls offered version');assert.deepEqual(notReady.preparation,preparation);
+ const failure={state:'waiting',message:'APK signing identity is missing; restore its encrypted backup'};
+ await writeFile(join(dir,'status.json'),JSON.stringify(failure));
+ assert.deepEqual((await (await p.request('/v1/app-update',{})).json()).preparation,failure);
 });

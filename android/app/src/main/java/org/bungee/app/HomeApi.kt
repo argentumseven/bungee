@@ -6,7 +6,7 @@ import java.security.MessageDigest
 import java.util.UUID
 import org.bungee.transport.Transport
 
-class HomeApiException(val status: Int) : Exception("Home API rejected request")
+class HomeApiException(val status: Int) : Exception(when (status) { 401 -> "The server rejected this phone’s pairing. Use Retry saved pairing or check the saved device in the manager."; 404 -> "The server could not find this request (HTTP 404). Check its version."; 429 -> "The server is busy; wait a moment and try again."; else -> "The server rejected the request (HTTP $status)." })
 
 class HomeApi(private val identity: Identity, val clock: HomeClock = HomeClock()) {
     private val bundle get() = JSONObject(checkNotNull(identity.bundle) { "Not paired" })

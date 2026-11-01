@@ -183,7 +183,7 @@ class TelemetryService : Service() {
                     val generation = synchronized(actionsLock) { actionGeneration }
                     if (elapsed() < deadline) { withContext(Dispatchers.IO) {
                         val desired = api.request("/v1/sync", JSONObject().put("report", ManagementAgent.report(this@TelemetryService, identity)))
-                        runCatching { AppUpdates.observe(this@TelemetryService,desired.optJSONObject("app_update")) }
+                        runCatching { AppUpdates.observe(this@TelemetryService,desired.optJSONObject("app_update"),desired.optString("server_version").takeIf { it.isNotBlank() },desired.optJSONObject("app_update_preparation")) }
                         identity.reconcileGpsEpoch(desired.getString("gps_epoch"))
                         synchronized(actionsLock) { if (generation == actionGeneration)
                             ManagementAgent.apply(this@TelemetryService, identity, desired.getLong("revision"), desired.getJSONObject("policy")) }

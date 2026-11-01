@@ -9,6 +9,7 @@ import secrets
 import shutil
 import subprocess
 import tempfile
+import urllib.error
 import urllib.request
 
 MAX_APK = 256 * 1024**2
@@ -36,7 +37,7 @@ def setup(root):
     public.mkdir(exist_ok=True); public.chmod(0o755)
 
 
-def fetch(url, target=None, limit=64*1024):
+def fetch(url, target=None, limit=64*1024, progress=None):
     request = urllib.request.Request(url, headers={'User-Agent': 'Bungee server APK updater', 'Accept-Encoding': 'identity'})
     with urllib.request.urlopen(request, timeout=60) as response:
         if int(response.headers.get('Content-Length', 0)) > limit: raise ValueError('APK download exceeds size limit')
@@ -45,11 +46,14 @@ def fetch(url, target=None, limit=64*1024):
             if len(data) > limit: raise ValueError('APK metadata exceeds size limit')
             return json.loads(data)
         size = 0
+        total = int(response.headers.get('Content-Length', 0))
+        if progress: progress(0, total)
         with target.open('xb') as output:
             while chunk := response.read(1024*1024):
                 size += len(chunk)
                 if size > limit: raise ValueError('APK download exceeds size limit')
                 output.write(chunk)
+                if progress: progress(size, total)
             output.flush(); os.fsync(output.fileno())
         return size
 
@@ -77,12 +81,15 @@ def run(args):
 def prepare(root, metadata):
     root = Path(root)
     setup(root)
+    public = root / 'app-updates'
+    def report(stage, message, **details):
+        atomic(public/'status.json', {'state':'preparing','version':metadata['version'],'stage':stage,'message':message,**details})
+    report('resolving', 'Checking the APK for server ' + metadata['version'] + '…')
     image = metadata['images']['server']
     inspected = json.loads(run(['docker', 'image', 'inspect', image]))[0]
     commit = (inspected.get('Config', {}).get('Labels') or {}).get('dev.bungee.source-commit', '')
     if not re.fullmatch('[a-f0-9]{40}', commit):
         raise ValueError('Running server has no official source commit; APK preparation unavailable for this custom build')
-    public = root / 'app-updates'
     existing = json.loads((public/'release.json').read_text()) if (public/'release.json').exists() else {}
     if existing and (not (root/'volumes/tls-data/android-signing/bungee.p12').is_file() or not (root/'volumes/tls-data/android-signing/password').is_file()):
         raise ValueError('APK signing identity is missing; restore its encrypted backup')
@@ -94,12 +101,14 @@ def prepare(root, metadata):
     if map_manager.capacity(root)['available_bytes'] < 2*MAX_APK + 512*1024**2:
         raise ValueError('Not enough safe free space to stage the APK and signing tools')
     base = REPOSITORY + '/releases/download/android-' + commit[:12] + '/'
+    report('metadata', 'Finding the verified APK for server ' + metadata['version'] + '…')
     build = fetch(base+'build.json')
     code = validate_build(build, commit, metadata['version'])
     signer_file = root/'android-signer.Dockerfile'
     signer_image = 'bungee-android-signer:' + digest(signer_file)[:16]
     try: run(['docker','image','inspect',signer_image])
     except subprocess.CalledProcessError:
+        report('tools', 'Installing the APK signing tools. The first preparation can take several minutes.')
         run(['docker','build','--pull','-t',signer_image,'-f',signer_file,signer_file.parent/'signer-context'])
     # tls-data is encrypted and already part of every authenticated cold snapshot.
     # Only tls-data/issued is mounted in the runtime container, never these keys.
@@ -124,8 +133,10 @@ def prepare(root, metadata):
             fd=os.open(keys,os.O_RDONLY|os.O_DIRECTORY)
             try: os.fsync(fd)
             finally: os.close(fd)
-        atomic(public/'status.json',{'state':'preparing','version':metadata['version']})
-        fetch(base+'bungee.apk', work/'source.apk', MAX_APK)
+        def download_progress(size, total):
+            report('downloading', 'Downloading server ' + metadata['version'] + ' APK…', downloaded_bytes=size, total_bytes=total)
+        fetch(base+'bungee.apk', work/'source.apk', MAX_APK, progress=download_progress)
+        report('verifying', 'Verifying the downloaded APK checksum, package and version…')
         if digest(work/'source.apk') != build['sha256']: raise ValueError('Published APK checksum mismatch')
         badging_all = tool('aapt','dump','badging','/work/source.apk')
         if 'application-debuggable' in badging_all: raise ValueError('Debuggable APK cannot be distributed as a server update')
@@ -134,6 +145,7 @@ def prepare(root, metadata):
             raise ValueError('APK package/version does not match release metadata')
         # Keep Gradle’s native-library page alignment intact (including 16 KiB phones).
         tool('zipalign','-c','-p','4','/work/source.apk')
+        report('signing', 'Signing the APK with this server’s existing signing identity…')
         tool('apksigner','sign','--ks','/keys/bungee.p12','--ks-key-alias','bungee','--ks-pass','file:/keys/password','--out','/work/signed.apk','/work/source.apk')
         verification = tool('apksigner','verify','--print-certs','/work/signed.apk')
         match = re.search(r'Signer #1 certificate SHA-256 digest: ([a-f0-9]{64})',verification)
@@ -160,6 +172,13 @@ def tick(root, metadata):
             if stale.is_dir() and not stale.is_symlink(): shutil.rmtree(stale)
         try: prepare(root, metadata())
         except (ValueError, OSError, subprocess.SubprocessError) as error:
-            # Only public error classes; subprocess stderr may contain private tool details.
-            message = str(error) if isinstance(error, ValueError) else 'Download or signing tool unavailable; automatic retry in one minute'
-            atomic(Path(root)/'app-updates/status.json',{'state':'waiting','message':message[:240]})
+            # Never publish subprocess output, command arguments or secret paths.
+            previous = {}
+            try: previous = json.loads((Path(root)/'app-updates/status.json').read_text())
+            except (OSError, ValueError): pass
+            if not isinstance(previous, dict): previous = {}
+            if isinstance(error, ValueError): message = str(error)
+            elif isinstance(error, urllib.error.HTTPError): message = f'APK download returned HTTP {error.code}; automatic retry in one minute'
+            elif isinstance(error, subprocess.SubprocessError): message = 'APK signing tool failed; check bungee-app-updates.service on the host. Automatic retry in one minute.'
+            else: message = 'APK download or storage unavailable; check host connectivity and free space. Automatic retry in one minute.'
+            atomic(Path(root)/'app-updates/status.json',{'state':'waiting','version':previous.get('version'),'stage':previous.get('stage'),'message':message[:240]})

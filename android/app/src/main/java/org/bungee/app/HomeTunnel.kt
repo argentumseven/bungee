@@ -14,7 +14,7 @@ object HomeTunnel {
         private set
     @Volatile var state: Tunnel.State = Tunnel.State.DOWN
         private set
-    @Synchronized fun connect(context: Context, identity: Identity, bundle: JSONObject, owner: Any? = null) {
+    @Synchronized fun connect(context: Context, identity: Identity, bundle: JSONObject, owner: Any? = null, claimExisting: Boolean = true) {
         require(bundle.getInt("version") == 2) { "Re-pair using a version 2 invitation with a preshared key" }
         require(bundle.getString("api_url") == "http://10.77.0.1:8081") { "Unexpected device API address" }
         val wg = bundle.getJSONObject("wireguard")
@@ -32,7 +32,7 @@ object HomeTunnel {
         check(!ManagementAgent.blocksPersonalOperation(context)) { "Open Bungee recovery. Device/profile ownership is unsupported" }
         check(identity.requestsAllowed()) { "Pairing changed; reopen Bungee" }
         val parameters = wg.toString()
-        if (state == Tunnel.State.UP && appContained && activeParameters == parameters) { activeOwner = owner; return }
+        if (state == Tunnel.State.UP && appContained && activeParameters == parameters) { if (claimExisting) activeOwner = owner; return }
         disconnect()
         RecoveryConnection.current.open(
             { identity.requestsAllowed() },

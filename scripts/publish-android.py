@@ -90,9 +90,11 @@ def main():
 
 Android app version: **{version}** · source: [{sha[:12]}](https://github.com/{repo}/commit/{sha})
 
-This development APK includes the current main-branch phone features. Its Android build, unit tests and lint passed in [the source build]({run['html_url']}). This release does not claim that unrelated server jobs passed or that physical-device testing is complete.
+For a paired phone with in-app updates, install **manager Settings → Phone app updates → Download this server’s APK**. That APK uses your server’s persistent signing key. The GitHub asset below is also the verified input used by the host’s signer.
 
-The APK uses the source build's debug signer. Android requires the original signing key for an in-place update; preserve an existing managed installation if its signer differs. Use the APK from your manager’s Settings → Phone app updates for a persistent server signing identity.
+This standalone development APK includes the current main-branch phone features. Its Android build, unit tests and lint passed in [the source build]({run['html_url']}). This release does not claim that unrelated server jobs passed or that physical-device testing is complete.
+
+The standalone APK has a disposable CI signing key, with Android debugging disabled. It cannot update to a differently signed server APK in place. Switching once removes unsent local data on uninstall: upload it first, keep the saved manager device, then use **Reconnect · keep history** on that same device after installing the server APK. Do not purge or erase it. Subsequent server-signed upgrades keep pairing and app data; do not uninstall for routine updates.
 
 `bungee.apk.sha256` verifies the download; `build.json` records the exact source and build.
 

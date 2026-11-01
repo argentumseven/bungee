@@ -35,8 +35,11 @@ with tempfile.TemporaryDirectory(prefix='bungee-signer-check-') as temporary:
                 binary='keytool' if tool=='keytool' else str(Path(os.environ['ANDROID_HOME'])/'build-tools/35.0.0'/tool)
                 return original_run([binary,*rest])
         return original_run(command)
-    def fetch(url,target=None,limit=65536):
-        if target is not None: shutil.copyfile(args.apk,target);return target.stat().st_size
+    def fetch(url,target=None,limit=65536,progress=None):
+        if target is not None:
+            shutil.copyfile(args.apk,target)
+            if progress: progress(target.stat().st_size,target.stat().st_size)
+            return target.stat().st_size
         return {'commit':commit,'version':release['version'],'android_version_code':release['android_version_code'],'sha256':app_updates.digest(args.apk)}
     metadata={'version':release['version'],'images':{'server':'bungee-server:test'}}
     with patch.object(app_updates,'run',run),patch.object(app_updates,'fetch',fetch),patch.object(map_manager,'capacity',return_value={'available_bytes':10*1024**3}):

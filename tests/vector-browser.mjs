@@ -129,3 +129,22 @@ test("server APK is easy to download and its signing details fit the mobile mana
  const downloading=page.waitForEvent('download');await page.getByRole('link',{name:'Download this server’s APK'}).click();const downloaded=await downloading;
  assert.equal(downloaded.suggestedFilename(),'bungee.apk');assert.deepEqual(await readFile(await downloaded.path()),bytes);
 });
+
+test("phone update preparation shows bytes and errors, and signer recovery keeps retained records explicit",async t=>{
+ const f=await fixture(t),dir=join(f.dir,'app-updates');await mkdir(dir);
+ const status=join(dir,'status.json');
+ await writeFile(status,JSON.stringify({state:'preparing',message:'Downloading the server APK…',downloaded_bytes:52428800,total_bytes:104857600}));
+ const browser=await chromium.launch({executablePath:process.env.CHROME_BIN||'/usr/bin/chromium',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});t.after(()=>browser.close());
+ const context=await browser.newContext({viewport:{width:390,height:844}}),[name,value]=f.cookie.split('=');await context.addCookies([{name,value,url:f.origin}]);const page=await context.newPage();
+ await page.goto(f.origin);await page.getByRole('button',{name:'Settings',exact:true}).click();
+ await page.getByText('50% · 50.0 / 100.0 MiB',{exact:true}).waitFor();
+ assert.equal(await page.getByRole('progressbar',{name:'Server APK preparation'}).getAttribute('value'),'52428800');
+ await writeFile(status,JSON.stringify({state:'waiting',message:'APK signing identity is missing; restore its encrypted backup'}));
+ await page.getByText('APK signing identity is missing; restore its encrypted backup',{exact:true}).waitFor();
+ assert.equal(await page.getByRole('progressbar',{name:'Server APK preparation'}).count(),0);
+ await page.getByText('Phone says “different signing key”?',{exact:true}).click();
+ assert.match(await page.locator('.apk-recovery').innerText(),/Do not purge/);
+ assert.match(await page.locator('.apk-recovery').innerText(),/Uninstalling removes unsent data/);
+ assert.match(await page.locator('.apk-recovery').innerText(),/Reconnect · keep history/);
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+});
