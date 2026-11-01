@@ -67,6 +67,14 @@ class UninstallTests(unittest.TestCase):
         self.assertLess(unmount, close)
         self.assertFalse(any('prune' in row or row[:2] == ['docker', 'rmi'] for row in self.events))
 
+    def test_uninstall_accepts_repaired_boot_entries_and_keeps_other_mounts(self):
+        for path,line in zip(self.boot,host.secure_storage.boot_entries(self.root)):
+            path.write_text(path.read_text().replace(host.secure_storage.boot_entries(self.root,legacy=True)[self.boot.index(path)],line))
+        host.uninstall(self.root)
+        self.assertNotIn('bungee',self.boot[0].read_text())
+        self.assertIn('/dev/other /other',self.boot[1].read_text())
+        self.assertTrue(self.key.exists());self.assertTrue(self.image.exists())
+
     def test_purge_deletes_only_known_storage_after_detaching(self):
         extra = self.key.parent / 'unrelated'
         extra.write_text('keep')

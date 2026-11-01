@@ -1,6 +1,6 @@
 # Install and operate Bungee
 
-Use a Linux host you administer, with systemd, kernel WireGuard, Docker Compose 2.24+, IPv4/IPv6 iptables/conntrack, Python 3, OpenSSL, `cryptsetup`, `e2fsprogs`, `util-linux`, and `age`. On Debian/Ubuntu, install the host tools with `sudo apt-get install cryptsetup e2fsprogs util-linux age openssl python3`. Docker and Compose must already work locally. The installer refuses remote Docker contexts and unencrypted swap. Disable swap or configure encrypted swap first. Keep a provider console or local console available for recovery.
+Use a Linux host you administer, with systemd, kernel WireGuard, Docker Compose 2.24+, IPv4/IPv6 iptables/conntrack, Python 3, OpenSSL, `cryptsetup` and its systemd boot service/generator, `e2fsprogs`, `util-linux`, and `age`. On Debian 13+, install the host tools with `sudo apt-get install cryptsetup systemd-cryptsetup e2fsprogs util-linux age openssl python3`. On other distributions, install the package providing `systemd-cryptsetup@.service` and `systemd-cryptsetup-generator` as well as the listed tools. Docker and Compose must already work locally. The installer refuses remote Docker contexts and unencrypted swap. Disable swap or configure encrypted swap first. Keep a provider console or local console available for recovery.
 
 ## Uninstall the server/host
 
@@ -83,7 +83,30 @@ Example answers (replace documentation addresses):
 
 The installer builds two runtime images, checks kernel WireGuard support, creates a **new** allocated LUKS2 image at `/var/lib/bungee/storage.luks`, and mounts it at `/opt/bungee` (or `--root`). It never formats an existing device/image or overwrites an installation. Storage capacity is allocated up front; retain enough room inside it for live data and cold snapshots. Growing storage requires a planned host maintenance operation; the application never automatically deletes primary history to free space.
 
-The random unlock key is `/etc/bungee/storage.key`, root-owned mode 0600. `crypttab` and `fstab` unlock/mount it at boot without a passphrase. A Docker systemd drop-in requires that mount **before Docker starts**, including automatic container restarts. This dependency affects the host Docker daemon: a missing/broken Bungee mount keeps Docker from starting. Restore storage/key from the host console; do not remove the dependency and let Bungee create plaintext fallback directories.
+The random unlock key is `/etc/bungee/storage.key`, root-owned mode 0600. `crypttab` and `fstab` unlock/mount it at boot without a passphrase. The installer verifies systemd’s unlock helper, unit and generator before allocating storage. Both entries use `nofail`, with a 30-second mapper wait: an unavailable volume leaves Bungee stopped while the host completes boot. A Docker systemd drop-in requires that mount **before Docker starts**, including automatic container restarts. This dependency affects the host Docker daemon: a missing/broken Bungee mount keeps Docker from starting. Restore storage/key from the host console; keep the Docker mount dependency to prevent plaintext fallback directories. Normal source rebuilds repair the installer-owned boot entries without replacing storage or keys.
+
+### Recover a missing boot unlock service
+
+If boot reports `/dev/mapper/bungee` timed out and `systemd-cryptsetup@bungee.service` is not found, but `/etc/bungee/storage.key` and `/var/lib/bungee/storage.luks` exist, log in as root at the host console. Open the existing image and resume boot:
+
+```sh
+cryptsetup open --key-file /etc/bungee/storage.key /var/lib/bungee/storage.luks bungee &&
+systemctl reset-failed &&
+systemctl start opt-bungee.mount &&
+systemctl default
+```
+
+After normal networking returns, install the missing Debian component and repair the existing boot entries from the checkout (no running Docker daemon or mounted `/opt/bungee` is needed for `repair-boot`):
+
+```sh
+apt-get update &&
+apt-get install -y systemd-cryptsetup &&
+cd /usr/local/src/bungee &&
+git pull --ff-only origin main &&
+python3 scripts/bungee-host.py repair-boot
+```
+
+`repair-boot` checks existing image/key permissions, changes only recognized installer-owned crypttab/fstab entries and the matching Docker drop-in, and reloads systemd. It refuses custom or duplicate entries. It does not unlock, format, mount, replace keys, restart Docker or change application records. Use `--root` with a custom installation path; its mount unit name also differs from `opt-bungee.mount`.
 
 All persistent application state, WireGuard/peer secrets, CA/leaf keys, local configuration and backups live inside this encrypted mount. Runtime scratch files use tmpfs. Containers have read-only roots, no new privileges, disabled core limits, and no Docker socket. Rust also disables Linux process dumps before reading secrets. The gateway alone receives NET_ADMIN, CHOWN and DAC_OVERRIDE; Rust runs as UID 10001 with zero capabilities.
 

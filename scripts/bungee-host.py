@@ -646,15 +646,16 @@ def uninstall(root, purge=False):
     generation = host.current()
     # Validate every shared host file before stopping anything. Never remove a
     # different installation's entries or follow symlinks into unrelated files.
-    expected = (f'bungee {secure_storage.IMAGE} {secure_storage.KEY} luks',
-                f'/dev/mapper/bungee {root} ext4 defaults,nodev,nosuid,noexec 0 2')
+    expected = secure_storage.boot_entries(root)
+    legacy = secure_storage.boot_entries(root, legacy=True)
     edits = []
-    for path, line in zip(BOOT_FILES, expected):
+    for path, line, old_line in zip(BOOT_FILES, expected, legacy):
         if path.is_symlink(): raise ValueError(f'Refusing symlink: {path}')
         old = path.read_text()
-        matches = [row for row in old.splitlines() if row.split() == line.split()]
+        allowed = (line.split(), old_line.split())
+        matches = [row for row in old.splitlines() if row.split() in allowed]
         if len(matches) != 1: raise ValueError(f'Expected exactly one installer-owned entry in {path}')
-        edits.append((path, ''.join(row for row in old.splitlines(keepends=True) if row.split() != line.split())))
+        edits.append((path, ''.join(row for row in old.splitlines(keepends=True) if row.split() not in allowed)))
     dropin = SYSTEMD / 'docker.service.d/bungee-storage.conf'
     if dropin.is_symlink() or dropin.read_text() != f'[Unit]\nRequiresMountsFor={root}\nAfter=systemd-cryptsetup@bungee.service\n':
         raise ValueError('Docker storage dependency differs from the installer; inspect it locally')
@@ -777,6 +778,7 @@ def build_images():
 
 
 def rebuild(host):
+    secure_storage.repair_boot(host.root)
     host.recover()
     old = host.current()
     if any(host.metadata(old)[key] != RELEASE[key] for key in ('host_api', 'data_contract')):
@@ -845,6 +847,7 @@ def install_us_maps(host, plan_only=False):
 
 def install(root, config, from_stdin=False):
     preflight(root, installing=True, config=config)
+    secure_storage.require_boot_support()
     images = build_images()
     password = password_input(from_stdin)
     try:
@@ -902,7 +905,7 @@ def install(root, config, from_stdin=False):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['install', 'configure', 'update', 'recover', 'status', 'datasets', 'basemap', 'geodata', 'maps-us', 'maps', 'map-worker', 'apk-worker', 'repair-maps', 'uninstall', 'password', 'rebuild'])
+    parser.add_argument('command', choices=['install', 'configure', 'update', 'recover', 'status', 'datasets', 'basemap', 'geodata', 'maps-us', 'maps', 'map-worker', 'apk-worker', 'repair-maps', 'repair-boot', 'uninstall', 'password', 'rebuild'])
     parser.add_argument('--password-stdin', action='store_true', help='With install/password: read the new password from a dedicated stdin pipe')
     parser.add_argument('--root', type=Path, default=Path('/opt/bungee'))
     parser.add_argument('--config', type=Path, help='Explicit JSON answers for unattended installation/configuration')
@@ -931,6 +934,12 @@ if __name__ == '__main__':
         parser.error('Cannot disable host helper process dumps')
     try:
         root = args.root.absolute()
+        if args.command == 'repair-boot':
+            if os.geteuid() != 0: raise ValueError('Run repair-boot as root on the Debian host')
+            if args.plan: raise ValueError('--plan is not supported for repair-boot')
+            secure_storage.repair_boot(root)
+            print('Bungee boot configuration repaired. Debian can boot if storage is unavailable; Docker still requires the encrypted mount. Storage and keys were not changed.')
+            sys.exit(0)
         if args.command == 'uninstall':
             print(json.dumps(uninstall_plan(root, args.purge), indent=2))
             if args.plan: sys.exit(0)

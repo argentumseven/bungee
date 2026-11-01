@@ -151,7 +151,7 @@ class TransactionTests(unittest.TestCase):
             helpers.assert_not_called()
     def test_local_rebuild_preserves_configuration_and_refreshes_helper_after_acceptance(self):
         images = {service: 'sha256:' + 'b' * 64 for service in ('server', 'gateway')}
-        with patch.object(host, 'build_images', return_value=images), patch.object(host, 'install_helpers') as helper:
+        with patch.object(host.secure_storage, 'repair_boot') as boot, patch.object(host, 'build_images', return_value=images), patch.object(host, 'install_helpers') as helper:
             host.rebuild(self.host)
         self.assertNotEqual(self.host.current(), self.old)
         self.assertEqual(self.host.metadata(self.host.current())['images'], images)
@@ -159,9 +159,16 @@ class TransactionTests(unittest.TestCase):
         self.assertIn('backup', self.engine.events)
         self.assertEqual(self.engine.events[-1], 'open')
         helper.assert_called_once_with(self.root)
+        boot.assert_called_once_with(self.root)
+    def test_missing_boot_support_stops_rebuild_before_images_or_data_change(self):
+        with patch.object(host.secure_storage,'repair_boot',side_effect=ValueError('Install systemd-cryptsetup')),patch.object(host,'build_images') as build:
+            with self.assertRaisesRegex(ValueError,'systemd-cryptsetup'):host.rebuild(self.host)
+            build.assert_not_called()
+        self.assertEqual(self.host.current(),self.old)
+        self.assertEqual(self.engine.events,[])
     def test_failed_local_rebuild_rolls_back_without_replacing_installed_helper(self):
         self.engine.fail = 'healthy-new'
-        with patch.object(host, 'build_images', return_value=metadata()['images']), patch.object(host, 'install_helpers') as helper:
+        with patch.object(host.secure_storage, 'repair_boot'), patch.object(host, 'build_images', return_value=metadata()['images']), patch.object(host, 'install_helpers') as helper:
             with self.assertRaises(RuntimeError): host.rebuild(self.host)
         self.assertEqual(self.host.current(), self.old)
         self.assertIn('restore', self.engine.events)

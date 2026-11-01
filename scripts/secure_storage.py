@@ -5,6 +5,7 @@ container or included in an application snapshot. No existing device is formatte
 """
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import shutil
@@ -45,10 +46,107 @@ def check(root):
     private(IMAGE)
 
 
+BOOT_FILES = (Path('/etc/crypttab'), Path('/etc/fstab'))
+SYSTEMD = Path('/etc/systemd/system')
+SYSTEMD_VENDOR_ROOTS = (Path('/usr/lib/systemd'), Path('/lib/systemd'))
+BOOT_COMPONENTS = (
+    ('system/systemd-cryptsetup@.service', 'systemd cryptsetup service'),
+    ('system-generators/systemd-cryptsetup-generator', 'systemd cryptsetup generator'),
+    ('systemd-cryptsetup', 'systemd unlock helper'),
+)
+
+
+def require_boot_support():
+    for relative, label in BOOT_COMPONENTS:
+        if not any((base/relative).is_file() and (relative.startswith('system/') or os.access(base/relative, os.X_OK)) for base in SYSTEMD_VENDOR_ROOTS):
+            raise ValueError(f'Missing {label}. On Debian install systemd-cryptsetup before installing or repairing Bungee')
+
+
+def boot_entries(root, legacy=False):
+    crypt_options = 'luks' if legacy else 'luks,nofail'
+    mount_options = 'defaults,nodev,nosuid,noexec' + ('' if legacy else ',nofail,x-systemd.device-timeout=30s')
+    return (f'{MAPPER} {IMAGE} {KEY} {crypt_options}',
+            f'/dev/mapper/{MAPPER} {root} ext4 {mount_options} 0 2')
+
+
+def storage_dropin(root):
+    # nofail allows Debian to boot, but never allows Docker to bypass the mount.
+    return f'[Unit]\nRequiresMountsFor={root}\nAfter=systemd-cryptsetup@{MAPPER}.service\n'
+
+
+def boot_edits(root, create=False):
+    root = Path(root)
+    if str(root) == '/' or not re.fullmatch(r'/[A-Za-z0-9_./-]+', str(root)) or '..' in root.parts:
+        raise ValueError('Use an absolute Bungee root without spaces or parent traversal')
+    for parent in (root, *root.parents):
+        if parent.is_symlink(): raise ValueError('Bungee root cannot contain symlinks')
+    edits = []
+    for index, (path, entry) in enumerate(zip(BOOT_FILES, boot_entries(root))):
+        if path.is_symlink() or (path.exists() and (not path.is_file() or path.stat().st_uid != os.geteuid() or path.stat().st_mode & 0o022)):
+            raise ValueError(f'Unsafe boot configuration: {path}')
+        old = path.read_text() if path.exists() else ''
+        rows = old.splitlines(keepends=True)
+        def candidate(row):
+            fields = row.split()
+            if not fields or row.lstrip().startswith('#'): return False
+            return fields[0] == MAPPER if index == 0 else fields[0] == f'/dev/mapper/{MAPPER}' or (len(fields) > 1 and fields[1] == str(root))
+        matches = [i for i, row in enumerate(rows) if candidate(row)]
+        if create:
+            if matches: raise ValueError(f'Existing Bungee boot entry in {path}; existing configuration preserved')
+            content = old + ('\n' if old and not old.endswith('\n') else '') + entry + '\n'
+        else:
+            allowed = (boot_entries(root, legacy=True)[index].split(), entry.split())
+            if len(matches) != 1 or rows[matches[0]].split() not in allowed:
+                raise ValueError(f'Expected one unchanged installer-owned Bungee entry in {path}; inspect custom configuration locally')
+            # Preserve comments, whitespace and all unrelated records verbatim.
+            if rows[matches[0]].split() == entry.split(): content = old
+            else:
+                rows[matches[0]] = entry + '\n'
+                content = ''.join(rows)
+        edits.append((path, content))
+    dropin = SYSTEMD/'docker.service.d/bungee-storage.conf'
+    if dropin.is_symlink() or (dropin.exists() and (not dropin.is_file() or dropin.stat().st_uid != os.geteuid() or dropin.stat().st_mode & 0o022 or dropin.read_text() != storage_dropin(root))):
+        raise ValueError('Docker storage dependency differs from the installer; inspect it locally')
+    if dropin.parent.is_symlink() or (dropin.parent.exists() and (dropin.parent.stat().st_uid != os.geteuid() or dropin.parent.stat().st_mode & 0o022)):
+        raise ValueError('Docker drop-in directory must be owned by root and not writable by other users')
+    edits.append((dropin, storage_dropin(root)))
+    return edits
+
+
+def write_boot(edits):
+    for path, content in edits:
+        if path.exists() and path.read_text() == content: continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        previous = path.stat() if path.exists() else None
+        temporary = path.with_name(path.name + '.' + secrets.token_hex(8))
+        try:
+            with temporary.open('x') as stream:
+                stream.write(content); stream.flush()
+                os.fchmod(stream.fileno(), previous.st_mode & 0o777 if previous else 0o644)
+                if previous: os.fchown(stream.fileno(), previous.st_uid, previous.st_gid)
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+            fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try: os.fsync(fd)
+            finally: os.close(fd)
+        finally: temporary.unlink(missing_ok=True)
+
+
+def repair_boot(root):
+    require_boot_support()
+    private(IMAGE); private(KEY)
+    # Works while /opt/bungee is unmounted and Docker cannot start. Never open,
+    # format or replace storage, keys, pairing, containers or host data here.
+    write_boot(boot_edits(root))
+    run(['systemctl', 'daemon-reload'])
+
+
 def provision(root, size_gib=8):
     root = Path(root)
     if type(size_gib) is not int or not 2 <= size_gib <= 1048576:
         raise ValueError('Storage size must be 2–1048576 GiB')
+    require_boot_support()
+    boot_edits(root, create=True)  # Refuse conflicts before allocating or formatting anything.
     for command in ('cryptsetup', 'mkfs.ext4', 'mount', 'findmnt', 'fallocate', 'age', 'age-keygen', 'openssl'):
         if not shutil.which(command): raise ValueError('Install required host tool: ' + command)
     for parent in (IMAGE.parent, KEY.parent):
@@ -77,17 +175,6 @@ def provision(root, size_gib=8):
     root.mkdir(mode=0o700)
     run(['mount', '-o', 'nodev,nosuid,noexec', '/dev/mapper/' + MAPPER, root])
     root.chmod(0o700)
-    # fstab + crypttab unlock without an interactive password and fail closed.
-    # Docker must wait too: container restart policies can run before Bungee units.
-    for path, line in ((Path('/etc/crypttab'), f'{MAPPER} {IMAGE} {KEY} luks'),
-                       (Path('/etc/fstab'), f'/dev/mapper/{MAPPER} {root} ext4 defaults,nodev,nosuid,noexec 0 2')):
-        old = path.read_text() if path.exists() else ''
-        if any(l.split() and not l.lstrip().startswith('#') and (l.split()[0] == MAPPER if path.name == 'crypttab' else len(l.split()) > 1 and l.split()[1] == str(root)) for l in old.splitlines()):
-            raise ValueError('Existing boot storage entry needs local review; it was not overwritten')
-        with path.open('a') as stream:
-            stream.write('\n' + line + '\n'); stream.flush(); os.fsync(stream.fileno())
-    dropin = Path('/etc/systemd/system/docker.service.d')
-    dropin.mkdir(parents=True, exist_ok=True)
-    (dropin / 'bungee-storage.conf').write_text(f'[Unit]\nRequiresMountsFor={root}\nAfter=systemd-cryptsetup@{MAPPER}.service\n')
+    write_boot(boot_edits(root, create=True))
     run(['systemctl', 'daemon-reload'])
     check(root)
