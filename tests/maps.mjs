@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {mkdir,readFile,writeFile,copyFile,mkdtemp,rm,chmod} from "node:fs/promises";
+import {mkdir,readFile,writeFile,copyFile,mkdtemp,rm,chmod,unlink} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {randomUUID} from "node:crypto";
@@ -44,4 +44,18 @@ test("managed archives appear in geography and use authenticated bounded byte ra
  assert.equal((await f.admin(route)).status,400);
  assert.equal((await f.admin(route,"GET",undefined,{Range:"bytes=0-16777216"})).status,400);
  const response=await f.admin(route,"GET",undefined,{Range:"bytes=0-126"});assert.equal(response.status,206);assert.equal((await response.arrayBuffer()).byteLength,127);
+});
+
+test("whole-region batches exceed 24 pieces, queued work can be stopped, and deletion uses the installed library",async t=>{
+ const f=await fixture(t),{root,state,region}=await setup(f);
+ state.catalog=Array.from({length:40},(_,i)=>({...region,id:`country-${i}`}));
+ const status=join(root,'status/state.json');await writeFile(status,JSON.stringify(state));
+ let response=await f.admin('/api/maps/jobs','POST',{action:'plan',regions:state.catalog.map(r=>r.id)});assert.equal(response.status,202);
+ const queued=await response.json();assert.equal((await f.admin(`/api/maps/jobs/${queued.id}`,'DELETE')).status,200);
+ assert.equal((await readFile(join(root,'requests',`cancel-${queued.id}`))).length,0);
+ await unlink(join(root,'requests',queued.id+'.json'));await unlink(join(root,'requests',`cancel-${queued.id}`));
+ state.job={id:queued.id,state:'completed',message:'Done'};await writeFile(status,JSON.stringify(state));
+ assert.equal((await (await f.admin(`/api/maps/jobs/${queued.id}`,'DELETE')).json()).already_finished,true);
+ state.installed=[{...region,id:'retired-region',filename:'retired-region-0123456789abcdef.pmtiles',bytes:123}];await writeFile(status,JSON.stringify(state));
+ response=await f.admin('/api/maps/jobs','POST',{action:'remove',regions:['retired-region']});assert.equal(response.status,202);
 });

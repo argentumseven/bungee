@@ -11,6 +11,15 @@ spec=importlib.util.spec_from_file_location('regional_maps',Path(__file__).resol
 maps=importlib.util.module_from_spec(spec);spec.loader.exec_module(maps)
 
 class RegionalMapsTests(unittest.TestCase):
+    def test_bulk_selection_accepts_a_whole_region_with_more_than_24_pieces(self):
+        catalogue={f'country-{n}':{'id':f'country-{n}'} for n in range(40)}
+        self.assertEqual(len(maps.selection(catalogue,list(catalogue))),40)
+        with self.assertRaises(ValueError):maps.selection(catalogue,list(catalogue)*7)
+    def test_size_checks_can_stop_their_running_tool_without_waiting_for_its_timeout(self):
+        import sys
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(maps.MapCancelled):
+                maps.checked_tool([sys.executable,'-c','import time;time.sleep(30)'],Path(directory)/'log',lambda:True)
     def test_map_plan_is_bounded_before_download(self):
         self.assertGreater(maps.archive_size('Extract transferred 3.0 GB (overfetch 0.05) for an archive size of 2.5 GB'),2_500_000_000)
         self.assertLess(maps.archive_size('archive size of 2.5 GB'),2_600_000_000)

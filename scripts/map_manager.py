@@ -112,7 +112,7 @@ def check_plan(root, plan):
     disk=capacity(root)
     planned=plan['planned_bytes']
     current=library(root)['regions']
-    if len(current)+len(plan['regions'])>24: raise ValueError('At most 24 regions can be installed; remove unused regions first')
+    if len(current)+len(plan['regions'])>regional_maps.MAX_REGIONS: raise ValueError('Map catalogue region limit exceeded')
     installed=sum(item['bytes'] for item in current)+legacy_bytes(root)
     if planned+installed>regional_maps.LIMIT: raise ValueError('Selected and installed street maps exceed the 25 GB map limit; remove maps or select fewer regions')
     if planned>disk['available_bytes'] or not disk['backing_has_tool_space']:
@@ -125,6 +125,10 @@ def public_status(root, catalog_path, state):
     value={**state,'updated_at':int(time.time()),'disk':capacity(root),'installed':library(root)['regions'],
            'legacy_map_bytes':legacy_bytes(root),'map_limit_bytes':regional_maps.LIMIT,
            'catalog':[{key:item[key] for key in ('id','name','group','estimated_bytes','bounds','max_zoom')} for item in catalog.values()]}
+    if value.get('job',{}).get('action')=='install':
+        ids=value['job'].get('regions',[])
+        value['job']['total']=len(ids)
+        value['job']['completed']=sum(item['id'] in ids for item in value['installed'])
     atomic(root/'map-control/status/state.json',value)
     return value
 
@@ -140,7 +144,7 @@ def read_request(path):
     return value
 
 
-def plan_selection(root, catalog_path, identifiers, progress):
+def plan_selection(root, catalog_path, identifiers, progress, cancelled=lambda:False):
     catalog=regional_maps.region_catalog(catalog_path)
     regional_maps.selection(catalog,identifiers)
     disk=capacity(root)
@@ -149,7 +153,7 @@ def plan_selection(root, catalog_path, identifiers, progress):
     installed={item['id'] for item in library(root)['regions']}
     wanted=[identifier for identifier in identifiers if identifier not in installed]
     if not wanted: raise ValueError('The selected regions are already installed')
-    plan=regional_maps.make_plan(catalog_path,wanted,progress)
+    plan=regional_maps.make_plan(catalog_path,wanted,progress,cancelled)
     check_plan(root,plan)
     return plan
 
@@ -159,45 +163,40 @@ def install_plan(root,catalog_path,plan,progress,cancelled=lambda:False):
     existing=library(root)
     if any(item['id'] in {r['id'] for r in existing['regions']} for item in plan['regions']):
         raise ValueError('Installed maps changed; calculate the selection again')
-    # Staging and final archive are on the same encrypted filesystem: atomic
-    # rename publishes validated files without a second multi-GB import copy.
+    # Commit verified regions one at a time. Stopping or losing a later download
+    # keeps completed pieces available, and a new plan selects only the remainder.
     with tempfile.TemporaryDirectory(prefix='.staging-',dir=root/'maps') as staging:
         def remaining():
             disk=capacity(root)
             return disk['free_bytes']-disk['reserve_bytes'] if disk['backing_has_tool_space'] else -1
-        results=regional_maps.extract_regions(catalog_path,plan,staging,progress,
-                    remaining,cancelled)
-        progress('Validating maps before publishing')
-        for item in results:
+        def publish(item):
             with Path(item['path']).open('rb') as stream: header=stream.read(127)
             if len(header)!=127 or header[:8]!=b'PMTiles\x03' or header[99]!=1 or not header[100]<=header[101]<=22 or header[101]<14 or header[97] not in (1,2) or header[98] not in (1,2):
                 raise ValueError('Downloaded archive does not contain street-level vector maps')
-        published=[]
-        try:
-            for item in results:
-                source=Path(item.pop('path'))
-                filename=f'{item["id"]}-{item["sha256"][:16]}.pmtiles'
-                destination=root/'maps/archives'/filename
-                os.chmod(source,0o644)
-                os.replace(source,destination)
+            value={key:value for key,value in item.items() if key!='path'}
+            filename=f'{item["id"]}-{item["sha256"][:16]}.pmtiles'
+            destination=root/'maps/archives'/filename
+            try:
+                os.chmod(item['path'],0o644);os.replace(item['path'],destination)
                 with destination.open('rb') as stream: os.fsync(stream.fileno())
-                published.append(destination)
-                item['filename']=filename
-            fd=os.open(root/'maps/archives',os.O_RDONLY|os.O_DIRECTORY)
-            try: os.fsync(fd)
-            finally: os.close(fd)
-            atomic(root/'maps/library.json',{'format':1,'regions':existing['regions']+results})
-        except Exception:
-            referenced={item['filename'] for item in library(root)['regions']}
-            for path in published:
-                if path.name not in referenced: path.unlink(missing_ok=True)
-            raise
+                fd=os.open(root/'maps/archives',os.O_RDONLY|os.O_DIRECTORY)
+                try: os.fsync(fd)
+                finally: os.close(fd)
+                value['filename']=filename
+                current=library(root)['regions']
+                atomic(root/'maps/library.json',{'format':1,'regions':current+[value]})
+            except Exception:
+                if filename not in {item['filename'] for item in library(root)['regions']}: destination.unlink(missing_ok=True)
+                raise
+            progress(f'{item["name"]} is downloaded and ready')
+        regional_maps.extract_regions(catalog_path,plan,staging,progress,remaining,cancelled,publish)
 
 
 def remove_regions(root, identifiers):
     value=library(root)
     removed=[item for item in value['regions'] if item['id'] in identifiers]
     if not removed: raise ValueError('No selected installed maps to remove')
+    if len(removed)!=len(set(identifiers)): raise ValueError('Some selected maps are no longer installed; refresh the library')
     for item in removed:
         filename=item['filename']
         if not re.fullmatch(r'[a-z][a-z0-9-]{1,47}-[a-f0-9]{16}\.pmtiles',filename): raise ValueError('Invalid stored map filename')
@@ -215,6 +214,9 @@ def tick(root, catalog_path):
         # The lock excludes a live CLI/worker download before cleanup runs.
         for stale in (root/'maps').glob('.staging-*'):
             if stale.is_dir() and not stale.is_symlink(): shutil.rmtree(stale)
+        referenced={item['filename'] for item in library(root)['regions']}
+        for orphan in (root/'maps/archives').glob('*.pmtiles'):
+            if re.fullmatch(r'[a-z][a-z0-9-]{1,47}-[a-f0-9]{16}\.pmtiles',orphan.name) and orphan.name not in referenced: orphan.unlink()
         state={}
         with contextlib.suppress(OSError,ValueError): state=json.loads((root/'map-control/status/state.json').read_text())
         state={key:state[key] for key in ('job','last_plan') if key in state}
@@ -230,11 +232,14 @@ def tick(root, catalog_path):
             public_status(root,catalog_path,state)
         try:
             request=read_request(path)
-            regional_maps.selection(regional_maps.region_catalog(catalog_path),request.get('regions'))
+            allowed=({item['id']:item for item in library(root)['regions']} if request['action']=='remove' else regional_maps.region_catalog(catalog_path))
+            regional_maps.selection(allowed,request.get('regions'))
+            state['job'].update(action=request['action'],regions=request['regions'])
+            if cancel.exists(): raise regional_maps.MapCancelled('Map operation stopped; completed maps remain downloaded')
             public_status(root,catalog_path,state)
             path.unlink()
             if request['action']=='plan':
-                state['last_plan']=plan_selection(root,catalog_path,request['regions'],progress)|{'id':job_id}
+                state['last_plan']=plan_selection(root,catalog_path,request['regions'],progress,cancel.exists)|{'id':job_id}
                 message='Download plan ready. Review the total and available space before installing.'
             elif request['action']=='install':
                 plan=state.get('last_plan',{})
@@ -248,7 +253,8 @@ def tick(root, catalog_path):
                 message='Selected maps removed.'
             state['job'].update(state='completed',message=message)
         except Exception as error:
-            state['job'].update(state='failed',message=str(error)[:2048])
+            stopped=isinstance(error,regional_maps.MapCancelled) or cancel.exists()
+            state['job'].update(state='canceled' if stopped else 'failed',message='Map operation stopped; completed maps remain downloaded' if stopped else str(error)[:2048])
         finally:
             path.unlink(missing_ok=True);cancel.unlink(missing_ok=True)
             public_status(root,catalog_path,state)

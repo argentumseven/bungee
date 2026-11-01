@@ -170,3 +170,14 @@ The map worker inherited the host/systemd `0077` file mask, turning requested `0
 The `repair-maps` command refreshes host helpers, publishes status and restarts the map worker without replacing server containers or data. It refuses interrupted server transactions and active map jobs. Tests cover the real restrictive file mask, repair without changing the generation/history/library, and forbidden link targets. An actual UID-10001 container reads the resulting public metadata and cannot read private fixtures. The production container check now uses the real publisher under `0077` instead of manually fixing fixture permissions, and checks overview/tile access when regional metadata is unreadable. API/browser tests verify the overview remains rendered and the download panel recovers after permission repair.
 
 Local checks: 93 Python tests (two age-dependent skips), 17 Rust tests/clippy, 117 API tests plus ten presentation tests, and 25 browser checks. Full production-container build verification runs in CI; the local full Docker build exceeded this workspace’s temporary storage.
+
+
+## 1.1.11: map library workflows
+
+The map manager separates browsing/downloading from downloaded-map management, with distinct download, selection, deletion and stop controls. It supports single places, a whole displayed region and custom batches across filters. Plans show the combined size and current safe capacity; deletion requires a confirmation with map names and bytes to reclaim. The world overview remains included. The artificial 24-region limit is replaced by a bounded 256-ID request limit, while the 25 GB budget and disk/swap/backup reserves remain enforced. Worldwide detail still exceeds that budget.
+
+Verified regions publish individually during a batch. Cancellation or failure keeps completed pieces available; a fresh plan excludes those pieces. Size checks and verification subprocesses can be stopped, queued jobs accept cancellation, old catalogue entries remain deletable from the installed library, and restart cleanup reclaims only unreferenced generated archives. Region archive URLs include their revision so redownloads can refresh the map source.
+
+Tests exercise individual/region planning and downloads, a capacity reduction before confirmation, cancellation after a completed piece, re-planning only the remainder, single/bulk deletion, redownload availability, host whole-region selection above 24 pieces, child cancellation and orphan cleanup. Browser workflows check the light/dark manager, mobile width and compact touch controls, with a custom deletion dialog instead of a browser confirmation.
+
+Local validation: 17 Rust unit tests and clippy, 99 Python tests (two age-dependent skips), 118 API tests plus ten presentation tests, and 26 browser checks. The updated region-rendering test verifies local street labels with archive revisions; map-library tests cover both desktop themes and 390-pixel layouts.

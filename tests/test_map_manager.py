@@ -32,8 +32,8 @@ class MapManagerTests(unittest.TestCase):
         item=next(item for item in self.regions if item['id']==identifier)
         entry={key:item[key] for key in ('id','name','group','bounds','max_zoom')}|{'planned_bytes':size}
         return {'build':'20261031.pmtiles','created_at':int(time.time()),'regions':[entry],'planned_bytes':size}
-    def extracted(self,catalog,plan,staging,progress,available,cancelled):
-        if cancelled():raise ValueError('Map download canceled')
+    def extracted(self,catalog,plan,staging,progress,available,cancelled,completed=None):
+        if cancelled():raise regional_maps.MapCancelled('Map operation stopped; completed maps remain downloaded')
         results=[]
         for item in plan['regions']:
             header=bytearray(127);header[:8]=b'PMTiles\x03';header[97]=2;header[98]=1;header[99]=1;header[101]=15
@@ -41,6 +41,7 @@ class MapManagerTests(unittest.TestCase):
             path=Path(staging)/(item['id']+'.pmtiles');path.write_bytes(data)
             results.append({key:item[key] for key in ('id','name','group','bounds','max_zoom')}|
                            {'path':str(path),'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data),'build':plan['build']})
+            if completed: completed(results[-1])
         return results
     def request(self,action,regions,plan_id=None):
         identifier=str(uuid.uuid4());path=self.root/'map-control/requests'/(identifier+'.json')
@@ -94,8 +95,8 @@ class MapManagerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'even for map planning'):maps.plan_selection(self.root,self.catalog,['test-one'],lambda _:None)
             plan.assert_not_called()
     def test_installed_region_count_is_bounded(self):
-        maps.atomic(self.root/'maps/library.json',{'format':1,'regions':[{'id':str(n),'bytes':1} for n in range(24)]})
-        with self.assertRaisesRegex(ValueError,'24 regions'):maps.check_plan(self.root,self.plan())
+        maps.atomic(self.root/'maps/library.json',{'format':1,'regions':[{'id':str(n),'bytes':1} for n in range(regional_maps.MAX_REGIONS)]})
+        with self.assertRaisesRegex(ValueError,'region limit'):maps.check_plan(self.root,self.plan())
     def test_verified_archives_are_published_by_rename_and_report_actual_size(self):
         with patch.object(regional_maps,'extract_regions',side_effect=self.extracted):maps.install_plan(self.root,self.catalog,self.plan(),lambda _:None)
         item=maps.library(self.root)['regions'][0];target=self.root/'maps/archives'/item['filename']
@@ -109,7 +110,9 @@ class MapManagerTests(unittest.TestCase):
         self.assertEqual(maps.library(self.root),before);self.assertEqual(len(list((self.root/'maps/archives').iterdir())),1)
     def test_bad_archive_never_enters_the_library(self):
         def bad(*args):
-            results=self.extracted(*args);Path(results[0]['path']).write_bytes(b'not PMTiles');return results
+            def invalid(item):
+                Path(item['path']).write_bytes(b'not PMTiles');args[-1](item)
+            return self.extracted(*args[:-1],invalid)
         with patch.object(regional_maps,'extract_regions',side_effect=bad):
             with self.assertRaisesRegex(ValueError,'street-level'):maps.install_plan(self.root,self.catalog,self.plan(),lambda _:None)
         self.assertEqual(maps.library(self.root)['regions'],[]);self.assertEqual(list((self.root/'maps/archives').iterdir()),[])
@@ -120,6 +123,34 @@ class MapManagerTests(unittest.TestCase):
         history=self.root/'saved-history';history.write_text('preserve')
         maps.remove_regions(self.root,['test-one'])
         self.assertEqual([item['id'] for item in maps.library(self.root)['regions']],['test-two']);self.assertEqual(history.read_text(),'preserve')
+    def test_stopping_a_batch_keeps_completed_pieces_and_a_new_plan_only_downloads_the_remainder(self):
+        plan=self.plan();plan['regions']+=self.plan('test-two')['regions'];plan['planned_bytes']=2048;plan['id']=str(uuid.uuid4())
+        maps.public_status(self.root,self.catalog,{'last_plan':plan})
+        self.request('install',['test-one','test-two'],plan['id'])
+        def stopped(catalog,plan,staging,progress,available,cancelled,completed):
+            self.extracted(catalog,{**plan,'regions':plan['regions'][:1]},staging,progress,available,cancelled,completed)
+            raise regional_maps.MapCancelled('stopped after first piece')
+        with patch.object(regional_maps,'extract_regions',side_effect=stopped):maps.tick(self.root,self.catalog)
+        self.assertEqual(self.state()['job']['state'],'canceled')
+        self.assertEqual(self.state()['job']['completed'],1);self.assertEqual(self.state()['job']['total'],2)
+        self.assertEqual([item['id'] for item in maps.library(self.root)['regions']],['test-one'])
+        with patch.object(regional_maps,'make_plan',return_value=self.plan('test-two')) as planning:
+            maps.plan_selection(self.root,self.catalog,['test-one','test-two'],lambda _:None)
+        self.assertEqual(planning.call_args.args[1],['test-two'])
+        with patch.object(regional_maps,'extract_regions',side_effect=self.extracted):maps.install_plan(self.root,self.catalog,self.plan('test-two'),lambda _:None)
+        self.assertEqual(len(maps.library(self.root)['regions']),2)
+    def test_downloaded_regions_can_be_deleted_even_after_leaving_the_catalogue(self):
+        with patch.object(regional_maps,'extract_regions',side_effect=self.extracted):maps.install_plan(self.root,self.catalog,self.plan(),lambda _:None)
+        self.catalog.write_text(json.dumps({'format':1,'regions':[self.regions[1]]}))
+        self.request('remove',['test-one']);maps.tick(self.root,self.catalog)
+        self.assertEqual(self.state()['job']['state'],'completed');self.assertEqual(maps.library(self.root)['regions'],[])
+    def test_restart_reclaims_only_unreferenced_generated_archives(self):
+        with patch.object(regional_maps,'extract_regions',side_effect=self.extracted):maps.install_plan(self.root,self.catalog,self.plan(),lambda _:None)
+        orphan=self.root/'maps/archives/test-two-0123456789abcdef.pmtiles';orphan.write_bytes(b'interrupted unpublished file')
+        other=self.root/'maps/archives/operator-notes.txt';other.write_text('keep')
+        maps.tick(self.root,self.catalog)
+        self.assertFalse(orphan.exists());self.assertTrue(other.exists())
+        self.assertEqual(len(list((self.root/'maps/archives').glob('*.pmtiles'))),1)
     def test_request_symlinks_hardlinks_and_fifos_are_rejected(self):
         original=self.root/'original';original.write_text('{}')
         link=self.root/'link';link.symlink_to(original)
@@ -156,7 +187,7 @@ class MapManagerTests(unittest.TestCase):
         plan=self.plan()|{'id':str(uuid.uuid4())};maps.public_status(self.root,self.catalog,{'last_plan':plan})
         identifier,_=self.request('install',['test-one'],plan['id']);(self.root/'map-control/requests'/('cancel-'+identifier)).touch()
         with patch.object(regional_maps,'extract_regions',side_effect=self.extracted):maps.tick(self.root,self.catalog)
-        self.assertIn('canceled',self.state()['job']['message']);self.assertEqual(maps.library(self.root)['regions'],[])
+        self.assertEqual(self.state()['job']['state'],'canceled');self.assertEqual(maps.library(self.root)['regions'],[])
     def test_capacity_counts_existing_swap_once_and_exposes_growth_reserve(self):
         self.capacity.stop()
         try:

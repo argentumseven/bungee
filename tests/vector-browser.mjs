@@ -101,11 +101,11 @@ test("regional maps can be planned in Settings and render labelled streets in GP
  const request=JSON.parse(await readFile(join(root,"requests",planned.id+".json"),"utf8"));assert.deepEqual(request.regions,[region.id]);
  await unlink(join(root,"requests",planned.id+".json"));state.job={id:planned.id,state:"completed",message:"Plan ready"};state.last_plan={id:planned.id,planned_bytes:1048576,regions:[{...region,planned_bytes:1048576}]};await publish();
  const installResponse=page.waitForResponse(r=>r.url().endsWith("/api/maps/jobs")&&r.status()===202);
- const install=manager.getByRole("button",{name:"Download selected maps",exact:true});await install.waitFor();await install.click();const installing=await (await installResponse).json();
+ const install=manager.getByRole("button",{name:/^Download selected maps/});await install.waitFor();await install.click();const installing=await (await installResponse).json();
  await unlink(join(root,"requests",installing.id+".json"));
  const filename="us-south-atlantic-0123456789abcdef.pmtiles",archive=join(f.dir,"maps","archives",filename);execFileSync("python3",["tests/fixtures/vector_map.py",archive,"--detail"]);
  const installed={...region,filename,bytes:(await stat(archive)).size};await writeFile(join(f.dir,"maps","library.json"),JSON.stringify({format:1,regions:[installed]}));
- state.installed=[installed];state.job={id:installing.id,state:"completed",message:"Street maps installed"};delete state.last_plan;await publish();
+ state.installed=[installed];state.job={id:installing.id,state:"completed",action:"install",message:"Street maps installed"};delete state.last_plan;await publish();
  await manager.getByText("Street maps installed",{exact:true}).waitFor();
  await manager.screenshot({path:"docs/screenshots/maps-storage.png"});
  await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);await manager.screenshot({path:"docs/screenshots/mobile-maps-storage.png"});

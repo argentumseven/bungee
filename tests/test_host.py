@@ -54,6 +54,11 @@ class SetupTests(unittest.TestCase):
             script = "import importlib.util,sys; s=importlib.util.spec_from_file_location('installed',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.VERSION)"
             result = subprocess.check_output(['python3', '-c', script, str(root / 'bungee-host.py')], text=True)
             self.assertEqual(result.strip(), host.VERSION)
+    def test_installer_can_choose_a_complete_group_with_more_than_24_maps(self):
+        catalogue={f'country-{n}':{'id':f'country-{n}','name':f'Country {n}','group':'Example region','estimated_bytes':1000} for n in range(40)}
+        with patch.object(host.regional_maps,'region_catalog',return_value=catalogue),patch.object(host,'ask',side_effect=['1','all','done']),patch('builtins.print'):
+            self.assertEqual(host.choose_maps(),sorted(catalogue))
+        self.assertEqual(host.network.validate({**CONFIG,'map_regions':list(catalogue)})['map_regions'],list(catalogue))
     def test_bare_hosts_canonical_prefixes_ipv6_and_no_shell_input(self):
         self.assertEqual(host.network.admin_networks('192.168.1.15,192.168.1.99/24 fd12::4'), ['192.168.1.15/32', '192.168.1.0/24', 'fd12::4/128'])
         for value in ['', [], '0.0.0.0/0', '::/0', '128.0.0.0/1', '192.168.1', '::ffff:192.168.1.1', '192.168.1.1;id', 'fe80::1%eth0', '224.0.0.0/8', '10.0.0.0/8', '10.77.0.0/24', '10.77.0.2/32', '10.77.0.255']:

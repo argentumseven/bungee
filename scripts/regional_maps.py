@@ -24,6 +24,10 @@ BINARIES = {
     'aarch64': 'f8bd47e7ea866863489cad588fbaf2f31f42e5821f7a03f009b3769f05801cb1',
 }
 LIMIT = 25_000_000_000
+MAX_REGIONS = 256
+
+class MapCancelled(ValueError):
+    pass
 USER_AGENT = 'Bungee map installer'
 CATALOG_URL = 'https://build-metadata.protomaps.dev/builds.json'
 
@@ -161,8 +165,8 @@ def published_build():
 
 
 def selection(catalog, identifiers):
-    if not isinstance(identifiers,list) or not 1<=len(identifiers)<=24 or any(not isinstance(value,str) for value in identifiers) or len(set(identifiers))!=len(identifiers):
-        raise ValueError('Select 1–24 distinct map regions')
+    if not isinstance(identifiers,list) or not 1<=len(identifiers)<=MAX_REGIONS or any(not isinstance(value,str) for value in identifiers) or len(set(identifiers))!=len(identifiers):
+        raise ValueError('Select 1–256 distinct map regions')
     if any(not isinstance(identifier,str) or identifier not in catalog for identifier in identifiers):
         raise ValueError('Unknown map region')
     return [catalog[identifier] for identifier in identifiers]
@@ -177,7 +181,27 @@ def _child_limits(max_bytes=None):
     return guard
 
 
-def make_plan(catalog_path, identifiers, progress=lambda message: None):
+def checked_tool(command, log, cancelled, timeout=600):
+    """Permit prompt cancellation while a size check or archive verification runs."""
+    with Path(log).open('w+') as output, subprocess.Popen(command,stdout=output,stderr=subprocess.STDOUT,preexec_fn=_child_limits(4*1024**2)) as process:
+        started=time.monotonic()
+        try:
+            while process.poll() is None:
+                if cancelled(): raise MapCancelled('Map operation stopped; completed maps remain downloaded')
+                if time.monotonic()-started>timeout: raise ValueError('Map check timed out')
+                time.sleep(0.2)
+            output.seek(0);text=output.read(4*1024**2)
+            if process.returncode: raise RuntimeError('Map check failed: '+text[-2048:].strip())
+            if cancelled(): raise MapCancelled('Map operation stopped; completed maps remain downloaded')
+            return text
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try: process.wait(timeout=10)
+                except subprocess.TimeoutExpired: process.kill();process.wait()
+
+
+def make_plan(catalog_path, identifiers, progress=lambda message: None, cancelled=lambda:False):
     regions=selection(region_catalog(catalog_path),identifiers)
     progress('Reading the street-map catalogue')
     build=published_build()
@@ -189,15 +213,13 @@ def make_plan(catalog_path, identifiers, progress=lambda message: None):
             boundary.write_text(json.dumps(item['geometry']))
             command=[str(binary),'extract','https://build.protomaps.com/'+build,str(work/'plan.pmtiles'),
                      '--region',str(boundary),'--maxzoom','15','--download-threads','4','--dry-run']
-            try:
-                output=subprocess.run(command,check=True,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=600,preexec_fn=_child_limits()).stdout
-            except subprocess.CalledProcessError as error:
-                raise RuntimeError(f'Map size check failed for {item["name"]}: {(error.stdout or "")[-2048:].strip()}') from error
+            output=checked_tool(command,work/'plan.log',cancelled)
             entries.append({key:item[key] for key in ('id','name','group','bounds','max_zoom')}|{'planned_bytes':archive_size(output)})
+            if sum(item['planned_bytes'] for item in entries)>LIMIT: raise ValueError('Selection exceeds the 25 GB map budget; choose fewer regions')
     return {'build':build,'created_at':int(time.time()),'regions':entries,'planned_bytes':sum(item['planned_bytes'] for item in entries)}
 
 
-def extract_regions(catalog_path, plan, staging, progress, available, cancelled=lambda:False):
+def extract_regions(catalog_path, plan, staging, progress, available, cancelled=lambda:False, completed=None):
     """Download regional ranges only; keep a hard file limit and monitor live free space."""
     if not re.fullmatch(r'\d{8}\.pmtiles',plan['build']): raise ValueError('Invalid planned map build')
     catalog=region_catalog(catalog_path)
@@ -205,7 +227,7 @@ def extract_regions(catalog_path, plan, staging, progress, available, cancelled=
     results=[]
     with extraction_tool(progress) as (binary,work):
         for entry in plan['regions']:
-            if cancelled(): raise ValueError('Map download canceled')
+            if cancelled(): raise MapCancelled('Map operation stopped; completed maps remain downloaded')
             item=catalog[entry['id']]
             limit=entry['planned_bytes']
             if type(limit) is not int or not 0<limit<=LIMIT or available()<limit:
@@ -220,7 +242,7 @@ def extract_regions(catalog_path, plan, staging, progress, available, cancelled=
                 started=time.monotonic()
                 try:
                     while process.poll() is None:
-                        if cancelled(): raise ValueError('Map download canceled')
+                        if cancelled(): raise MapCancelled('Map operation stopped; completed maps remain downloaded')
                         if available()<0: raise ValueError('Free space fell below the system/swap reserve; download stopped')
                         if time.monotonic()-started>6*3600: raise ValueError('Map download timed out')
                         written=target.stat().st_size if target.exists() else 0
@@ -235,8 +257,9 @@ def extract_regions(catalog_path, plan, staging, progress, available, cancelled=
                         try: process.wait(timeout=10)
                         except subprocess.TimeoutExpired: process.kill();process.wait()
             progress(f'Verifying {item["name"]}')
-            subprocess.run([str(binary),'verify',str(target)],check=True,timeout=600,stdout=subprocess.DEVNULL,preexec_fn=_child_limits())
+            checked_tool([str(binary),'verify',str(target)],work/'verify.log',cancelled)
             if target.stat().st_size>limit: raise ValueError('Downloaded map exceeded its planned bound')
             results.append({key:entry[key] for key in ('id','name','group','bounds','max_zoom')}|
                            {'bytes':target.stat().st_size,'sha256':file_digest(target),'build':plan['build'],'path':str(target)})
+            if completed: completed(results[-1])
     return results

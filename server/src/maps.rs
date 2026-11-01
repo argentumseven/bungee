@@ -58,7 +58,7 @@ pub fn installed() -> ApiResult<Value> {
     if list.len() > 256 {
         return Err(bad("Too many installed regions"));
     }
-    Ok(Value::Array(list.iter().map(|item| json!({"id":item["id"],"name":item["name"],"bytes":item["bytes"],"bounds":item["bounds"],"min_zoom":0,"max_zoom":item["max_zoom"],"format":"pmtiles"})).collect()))
+    Ok(Value::Array(list.iter().map(|item| json!({"revision":item["filename"],"id":item["id"],"name":item["name"],"bytes":item["bytes"],"bounds":item["bounds"],"min_zoom":0,"max_zoom":item["max_zoom"],"format":"pmtiles"})).collect()))
 }
 pub async fn status(State(app): State<App>, headers: HeaderMap) -> ApiResult<Json<Value>> {
     require_admin(&app, &headers)?;
@@ -99,15 +99,19 @@ pub async fn queue(
     require_admin(&app, &headers)?;
     if !["plan", "install", "remove"].contains(&job.action.as_str())
         || job.regions.is_empty()
-        || job.regions.len() > 24
+        || job.regions.len() > 256
         || job.regions.iter().any(|id| !safe_id(id))
     {
-        return Err(bad("Choose 1–24 map regions and a supported map action"));
+        return Err(bad("Choose 1–256 map regions and a supported map action"));
     }
     let state = read_json(&control().join("status/state.json"), 524288)?;
-    let catalog = state["catalog"]
-        .as_array()
-        .ok_or_else(|| bad("Region catalogue unavailable"))?;
+    let catalog = state[if job.action == "remove" {
+        "installed"
+    } else {
+        "catalog"
+    }]
+    .as_array()
+    .ok_or_else(|| bad("Region catalogue unavailable"))?;
     if job
         .regions
         .iter()
@@ -178,8 +182,17 @@ pub async fn cancel(
         return Err(bad("Invalid map job"));
     }
     let state = read_json(&control().join("status/state.json"), 524288)?;
-    if state["job"]["id"] != id || state["job"]["state"] != "running" {
-        return Err(bad("This map job is not running"));
+    let queued = control()
+        .join("requests")
+        .join(format!("{id}.json"))
+        .is_file();
+    if !queued && state["job"]["id"] == id && state["job"]["state"] != "running" {
+        return Ok(Json(
+            json!({"cancel_requested":false,"already_finished":true}),
+        ));
+    }
+    if !queued && (state["job"]["id"] != id || state["job"]["state"] != "running") {
+        return Err(bad("This map job is not queued or running"));
     }
     let path = control().join("requests").join(format!("cancel-{id}"));
     match OpenOptions::new().write(true).create_new(true).open(path) {

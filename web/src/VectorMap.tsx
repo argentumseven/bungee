@@ -10,7 +10,7 @@ import type {NetworkObservation} from "./PrivateMap";
 
 maplibregl.setWorkerUrl(workerUrl);
 maplibregl.addProtocol("pmtiles",new Protocol().tile);
-export type MapRegion={id:string;name:string;min_zoom:number;max_zoom:number;bounds?:number[]};
+export type MapRegion={id:string;name:string;min_zoom:number;max_zoom:number;bounds?:number[];revision?:string};
 export default function VectorMap({points,selected,network,label,regions=[],legacy=false,overview=false}:{points:GpsPoint[];selected?:GpsPoint|null;network?:NetworkObservation|null;label:string;regions?:MapRegion[];legacy?:boolean;overview?:boolean}) {
  const element=useRef<HTMLDivElement>(null),map=useRef<maplibregl.Map|null>(null);
  const [error,setError]=useState(""),[street,setStreet]=useState(""),[covered,setCovered]=useState<boolean|null>(null);
@@ -21,7 +21,7 @@ export default function VectorMap({points,selected,network,label,regions=[],lega
   const sources:Record<string,maplibregl.SourceSpecification>={};
   const styleLayers:LayerSpecification[]=[{id:"background",type:"background",paint:{"background-color":"#e9e7df"}}];
   if(overview){sources.overview={type:"raster",tiles:[`${window.location.origin}/api/maps/{z}/{x}/{y}`],tileSize:256,minzoom:0,maxzoom:6};styleLayers.push({id:"world-overview",type:"raster",source:"overview"});}
-  const archives=[...(legacy?[{id:"legacy",url:"/api/maps/archive.pmtiles"}]:[]),...regions.map(r=>({id:r.id,url:`/api/maps/regions/${r.id}/archive.pmtiles`}))];
+  const archives=[...(legacy?[{id:"legacy",url:"/api/maps/archive.pmtiles"}]:[]),...regions.map(r=>({id:r.id,url:`/api/maps/regions/${r.id}/archive.pmtiles${r.revision?`?v=${encodeURIComponent(r.revision)}`:""}`}))];
   for(const archive of archives){
    const source=`streets-${archive.id}`;
    sources[source]={type:"vector",url:`pmtiles://${window.location.origin}${archive.url}`};

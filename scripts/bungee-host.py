@@ -555,19 +555,23 @@ def choose_maps(selected=None):
         rows=[item for item in catalog.values() if item['group']==groups[int(group)-1]]
         while True:
             for index,item in enumerate(rows,1): print(f'  [{"x" if item["id"] in chosen else " "}] {index}. {item["name"]} · ~{item["estimated_bytes"]/1024**3:.2f} GiB')
-            print('Combined selection: ~%.2f GiB. Maximum 24 regions / 25 GB of installed street maps.' % (sum(catalog[key]['estimated_bytes'] for key in chosen)/1024**3))
-            answer=ask('Numbers to toggle (commas/spaces), or back/done','back')
+            print('Combined selection: ~%.2f GiB. 25 GB maximum of installed street maps.' % (sum(catalog[key]['estimated_bytes'] for key in chosen)/1024**3))
+            answer=ask('Numbers to toggle, all/none for this group, or back/done','back')
             if answer=='done':
                 if chosen or field('No street maps selected. Continue with overview only? yes/no','no',choice('yes','no'))=='yes': return sorted(chosen)
                 continue
             if answer=='back': break
+            if answer in ('all','none'):
+                ids={item['id'] for item in rows}
+                chosen=chosen|ids if answer=='all' else chosen-ids
+                continue
             try:
                 numbers=[int(value) for value in re.split('[, ]+',answer)]
                 if any(value<1 or value>len(rows) for value in numbers): raise ValueError()
                 updated=chosen.symmetric_difference(rows[value-1]['id'] for value in numbers)
-                if len(updated)>24: raise ValueError()
+                if len(updated)>regional_maps.MAX_REGIONS: raise ValueError()
                 chosen=updated
-            except ValueError: print('Choose listed numbers, up to 24 regions overall.')
+            except ValueError: print('Choose distinct listed region numbers.')
 
 
 def guided(existing=None):

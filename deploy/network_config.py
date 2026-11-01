@@ -94,8 +94,8 @@ def validate(config):
     result = dict(config)
     if 'map_regions' in config:
         regions=config['map_regions']
-        if not isinstance(regions,list) or len(regions)>24 or any(not isinstance(value,str) or not re.fullmatch('[a-z][a-z0-9-]{1,47}',value) for value in regions) or len(set(regions))!=len(regions):
-            raise ValueError('Choose up to 24 distinct map region IDs')
+        if not isinstance(regions,list) or len(regions)>256 or any(not isinstance(value,str) or not re.fullmatch('[a-z][a-z0-9-]{1,47}',value) for value in regions) or len(set(regions))!=len(regions):
+            raise ValueError('Choose up to 256 distinct map region IDs')
     if 'dns_upstream_ip' in config: result['dns_upstream_ip'] = dns_upstream(config['dns_upstream_ip'])
     if 'dns_upstream_port' in config: result['dns_upstream_port'] = port(config['dns_upstream_port'])
     if 'storage_size_gib' in config and (type(config['storage_size_gib']) is not int or not 2 <= config['storage_size_gib'] <= 1048576):
