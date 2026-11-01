@@ -10,7 +10,7 @@ Bungee is a self-hosted device finder for Android 12+ and GrapheneOS. Pair house
 
 The Kotlin app connects through an app-contained WireGuard tunnel to a Rust server and web dashboard. Only Bungee traffic uses that tunnel; Android's VPN slot remains available. Phone records stay on your server until you erase them or revoke the device.
 
-**Version 1.1.6.** Physical GrapheneOS testing and an independent security audit are pending. See the [validation record](docs/VALIDATION.md) for completed checks and [security design](docs/SECURITY.md) for the trust model.
+**Version 1.1.7.** Physical GrapheneOS testing and an independent security audit are pending. See the [validation record](docs/VALIDATION.md) for completed checks and [security design](docs/SECURITY.md) for the trust model.
 
 ![Bungee dashboard in dark mode](docs/screenshots/dashboard.png)
 
@@ -33,8 +33,8 @@ The Kotlin app connects through an app-contained WireGuard tunnel to a Rust serv
 | Alarm | Bundled rising/falling siren, at most 30 seconds, phone alarm volume and interruption settings, local stop controls, two-second browser preview |
 | Messages | Up to 240 characters in Android recovery notifications; lock-screen and heads-up illustrations in the dashboard; normal credential entry remains accessible |
 | Lost mode | Saved state survives outages, one lock attempt per revision when permitted, contact notification and more frequent check-ins |
-| Theft photos | One-time local approval, visible Camera2 foreground service, one front-camera attempt after three new eligible failed PIN/password entries while ready, five-minute/six-per-hour attempt limits, labelled test photos, EXIF removal and JPEGs up to 12 KiB |
-| Photo recovery | RAM-only three-photo queue, same-boot process recovery preserves failure counts/rate limits; optional boot/update restoration after first Android unlock through a brief startup screen and separately granted special access |
+| Theft photos | One-time local approval, visible Camera2 foreground service, high-quality front-camera JPEGs targeting 2048 pixels / quality 90, up to 1 MiB each; further captures after three additional eligible failed entries, 30-second minimum spacing and 20 attempts/hour; labelled tests and EXIF removal |
+| Photo recovery | RAM-only eight-photo queue, same-boot process recovery preserves failure counts/rate limits; optional boot/update restoration after first Android unlock through a brief startup screen and separately granted special access |
 | Photo gallery | Signed uploads, authenticated paginated gallery, capture/receipt times, local-test labels and separate photo erasure; old erased generations cannot upload again |
 | Phone consent | QR or pasted invitation, separate GPS/command consent, commands off by default, visible sharing notification, optional restart after first unlock, background-location grant for automatic GPS recovery, authenticated unpairing |
 | Local recovery | Separate offline launcher independent of pairing keys, Compose and native transport; authenticated stop, saved stop across reboot/update, cleanup results, Android Settings links and explicit manual restart |

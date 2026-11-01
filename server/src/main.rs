@@ -197,6 +197,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/healthz", get(api::health))
         .route("/v1/enroll", post(api::enroll))
         .route("/v1/telemetry", post(api::telemetry))
+        .route(
+            "/v1/photos",
+            post(photos::upload)
+                .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024))
+                .layer(middleware::from_fn(photos::admission)),
+        )
         .route("/v1/commands", post(api::poll))
         .route("/v1/command-check", post(api::check_command))
         .route("/v1/ack", post(api::ack))

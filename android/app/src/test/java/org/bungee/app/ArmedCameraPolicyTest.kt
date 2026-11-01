@@ -6,19 +6,17 @@ import org.junit.Test
 import java.util.UUID
 
 class ArmedCameraPolicyTest {
-    @Test fun onlyThreeNewFailuresTriggerOncePerStreak() {
-        val gate = FailedUnlockGate()
-        gate.reset(4)
-        assertFalse(gate.failed(4, 0)); assertFalse(gate.failed(5, 0)); assertFalse(gate.failed(6, 0))
-        assertTrue(gate.failed(7, 0)); assertFalse(gate.failed(7, 1)); assertFalse(gate.failed(8, 2))
+    @Test fun eachAdditionalGroupOfThreeCanTriggerAnotherCaptureAfterCooldown() {
+        val gate = FailedUnlockGate();gate.reset(4)
+        assertFalse(gate.failed(6,0));assertTrue(gate.failed(7,0))
+        assertFalse(gate.failed(10,29_999));assertTrue(gate.failed(11,30_000))
+        assertFalse(gate.failed(13,60_000));assertTrue(gate.failed(14,60_001))
+        assertFalse(gate.failed(14,120_000)) // No new entries cannot retrigger.
     }
     @Test fun successfulUnlockStartsANewStreakWithoutRemovingThrottle() {
-        val gate = FailedUnlockGate()
-        assertTrue(gate.failed(3, 0))
-        gate.reset()
-        assertFalse(gate.failed(3, 299_999))
-        assertFalse(gate.failed(4, 300_000)) // Suppressed attempt still consumes this streak.
-        gate.reset(); assertTrue(gate.failed(3, 300_000))
+        val gate = FailedUnlockGate();assertTrue(gate.failed(3,0));gate.reset()
+        assertFalse(gate.failed(3,29_999));assertTrue(gate.failed(4,30_000))
+        gate.reset();assertFalse(gate.failed(2,60_000));assertTrue(gate.failed(3,60_001))
     }
     @Test fun lowerOsCountResetsStreakAndInvalidCountsDoNothing() {
         val gate = FailedUnlockGate(); gate.reset(9)
@@ -26,10 +24,10 @@ class ArmedCameraPolicyTest {
         assertFalse(gate.failed(1, 0)); assertFalse(gate.failed(2, 0)); assertTrue(gate.failed(3, 0))
     }
     @Test fun hourlyBudgetIncludesLocalTestsAndRollsForward() {
-        val gate = FailedUnlockGate()
-        for (i in 0..5) assertTrue(gate.test(i * 300_000L))
-        gate.reset(); assertFalse(gate.failed(3, 1_800_000))
-        assertFalse(gate.test(3_599_999)); assertTrue(gate.test(3_600_000))
+        val gate=FailedUnlockGate()
+        repeat(20){assertTrue(gate.test(it*30_000L))}
+        gate.reset();assertFalse(gate.failed(3,600_000))
+        assertFalse(gate.test(3_599_999));assertTrue(gate.test(3_600_000))
     }
     @Test fun rearmingCannotReuseAnOldStreakInANewGate() {
         val old = FailedUnlockGate(); assertTrue(old.failed(3, 0))
@@ -39,14 +37,13 @@ class ArmedCameraPolicyTest {
     private fun photo(id: String = UUID.randomUUID().toString(), reason: String = "failed_unlock", attempts: Int = 3) =
         JSONObject().put("id", id).put("captured_at", 100).put("failed_attempts", attempts).put("reason", reason).put("jpeg", "dGVzdA==")
     @Test fun boundedOutboxRetainsNewestAndAcknowledgesOnlyExactId() {
-        val queue = PhotoOutbox.empty("local-session")
-        val photos = (0..3).map { photo() }
-        for (p in photos) PhotoOutbox.append(queue, p)
-        assertEquals(3, queue.getJSONArray("records").length()); assertEquals(1, queue.getLong("dropped"))
-        assertEquals(photos[1].getString("id"), queue.getJSONArray("records").getJSONObject(0).getString("id"))
-        PhotoOutbox.acknowledge(queue, photos[0].getString("id")); assertEquals(3, queue.getJSONArray("records").length())
-        PhotoOutbox.acknowledge(queue, photos[2].getString("id")); assertEquals(2, queue.getJSONArray("records").length())
-        assertEquals("local-session", queue.getString("session"))
+        val queue=PhotoOutbox.empty("local-session")
+        val photos=(0..PhotoOutbox.CAPACITY).map{photo()}
+        photos.forEach{PhotoOutbox.append(queue,it)}
+        assertEquals(PhotoOutbox.CAPACITY,queue.getJSONArray("records").length());assertEquals(1,queue.getLong("dropped"))
+        assertEquals(photos[1].getString("id"),queue.getJSONArray("records").getJSONObject(0).getString("id"))
+        PhotoOutbox.acknowledge(queue,photos[0].getString("id"));assertEquals(PhotoOutbox.CAPACITY,queue.getJSONArray("records").length())
+        PhotoOutbox.acknowledge(queue,photos[2].getString("id"));assertEquals(PhotoOutbox.CAPACITY-1,queue.getJSONArray("records").length())
     }
     @Test fun memoryQueueSurvivesCameraSessionRestartButClearAndAckRemoveBytes() {
         PendingPhotos.clear(); PendingPhotos.resume("before")
@@ -65,7 +62,7 @@ class ArmedCameraPolicyTest {
     @Test fun progressCountsOnlyNewFailuresAndResetsOnSuccessfulUnlock() {
         val gate = FailedUnlockGate(); gate.reset(5)
         gate.failed(7,0); assertEquals(2,gate.progress)
-        gate.failed(8,0); assertEquals(3,gate.progress)
+        gate.failed(8,0); assertEquals(0,gate.progress)
         gate.failed(0,1); assertEquals(0,gate.progress)
     }
     @Test fun legacyPhotoMigrationPreservesPicturesAndDoesNotDuplicateThemOnRetry() {
@@ -81,12 +78,12 @@ class ArmedCameraPolicyTest {
     @Test fun invalidLegacyPhotoCannotPartiallyReplaceTheMemoryQueue() {
         PendingPhotos.clear(); PendingPhotos.resume("live")
         val captured=photo(); PendingPhotos.append(captured,"live")
-        val invalid=PhotoOutbox.empty("old").put("records",org.json.JSONArray().put(photo().put("jpeg","x".repeat(16_385))))
+        val invalid=PhotoOutbox.empty("old").put("records",org.json.JSONArray().put(photo().put("jpeg","x".repeat(RecoveryPhotoPolicy.MAX_BASE64_CHARS+1))))
         assertThrows(IllegalArgumentException::class.java){PendingPhotos.adoptLegacy(invalid)}
         assertEquals(captured.toString(),PendingPhotos.first("live")!!.toString()); PendingPhotos.clear()
     }
     @Test fun outboxRejectsOversizeAndMislabelledTests() {
-        assertThrows(IllegalArgumentException::class.java) { PhotoOutbox.append(PhotoOutbox.empty("s"), photo().put("jpeg", "x".repeat(16_385))) }
+        assertThrows(IllegalArgumentException::class.java) { PhotoOutbox.append(PhotoOutbox.empty("s"), photo().put("jpeg", "x".repeat(RecoveryPhotoPolicy.MAX_BASE64_CHARS+1))) }
         assertThrows(IllegalArgumentException::class.java) { PhotoOutbox.append(PhotoOutbox.empty("s"), photo(attempts = 2)) }
         assertThrows(IllegalArgumentException::class.java) { PhotoOutbox.append(PhotoOutbox.empty("s"), photo(reason = "local_test", attempts = 3)) }
         assertEquals(1, PhotoOutbox.append(PhotoOutbox.empty("s"), photo(reason = "local_test", attempts = 0)).getJSONArray("records").length())

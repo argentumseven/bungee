@@ -45,8 +45,8 @@ test("armed recovery photos: private storage, bounded input and erasure generati
     assert.equal((await upload(body(photo({ reason: "local_test", failed_attempts: 0 })))).status, 200);
     assert.equal((await f.admin(`/api/devices/${p.id}/commands`, "POST", { kind: "camera" })).status, 400);
   });
-  await t.test("six-per-hour admission does not block ordinary telemetry", async () => {
-    for (let i = 0; i < 4; i++) assert.equal((await upload(body(photo()))).status, 200);
+  await t.test("bounded catch-up admission does not block ordinary telemetry", async () => {
+    for (let i = 0; i < 26; i++) assert.equal((await upload(body(photo()))).status, 200);
     assert.equal((await upload(body(photo()))).status, 429);
     assert.equal((await upload(body(saved))).status, 200, "exact retry remains acknowledgeable at quota");
     const ordinary = body(undefined); delete ordinary.recovery_photo;
@@ -106,4 +106,50 @@ test("armed recovery photos: private storage, bounded input and erasure generati
     assert.equal((await f.admin(path)).status, 404); assert.equal(f.sql("SELECT COUNT(*) FROM recovery_photos WHERE device_id=?", [p.id])[0][0], 0);
     assert.equal((await upload(body(photo()))).status, 401);
   });
+});
+
+test("larger detailed JPEGs use a dedicated bounded route; ordinary telemetry stays small",async t=>{
+  const f=await fixture(t),p=await phone(f),epoch=(await (await p.request("/v1/commands",{})).json()).photo_epoch;
+  const jpeg=await readFile("tests/fixtures/recovery-detail-test.jpg");
+  assert.ok(jpeg.length>32*1024 && jpeg.length<=1024*1024);
+  const photo={id:randomUUID(),captured_at:Math.floor(Date.now()/1000),failed_attempts:0,reason:"local_test",jpeg:jpeg.toString("base64")};
+  const upload={photo_epoch:epoch,photo};
+  assert.equal((await f.device("/v1/photos",upload)).status,401);
+  const response=await p.request("/v1/photos",upload);assert.equal(response.status,200);assert.equal((await response.json()).accepted_photo,photo.id);
+  const stored=await f.admin(`/api/devices/${p.id}/photos/${photo.id}`);assert.equal(stored.status,200);assert.deepEqual(Buffer.from(await stored.arrayBuffer()),jpeg);
+  assert.equal((await p.request("/v1/photos",upload)).status,200,"retry remains idempotent");
+  assert.equal((await p.request("/v1/telemetry",{battery:50,charging:false,device_owner:false,capabilities:[],photo_epoch:epoch,recovery_photo:photo})).status,413);
+  assert.equal((await p.request("/v1/photos",{...upload,photo:{...photo,jpeg:"A".repeat(Math.ceil(1024*1024/3)*4+1)}})).status,400);
+  assert.equal((await p.request("/v1/photos",{...upload,photo:{...photo,jpeg:"A".repeat(2*1024*1024)}})).status,413);
+  const dimensions=Buffer.from(jpeg),frame=dimensions.indexOf(Buffer.from([255,192]));assert.ok(frame>0);dimensions.writeUInt16BE(4096,frame+7);
+  assert.equal((await p.request("/v1/photos",{...upload,photo:{...photo,jpeg:dimensions.toString("base64")}})).status,400);
+  await f.admin(`/api/devices/${p.id}/photos/${photo.id}`,"DELETE");
+  assert.equal((await p.request("/v1/photos",upload)).status,200);assert.equal((await f.admin(`/api/devices/${p.id}/photos/${photo.id}`)).status,404);
+  const next={...upload,photo:{...photo,id:randomUUID()}};
+  await f.admin(`/api/devices/${p.id}/photos`,"DELETE");
+  assert.equal((await (await p.request("/v1/photos",next)).json()).accepted_photo,null,"old generations cannot restore a larger photo");
+});
+
+test("slow photo uploads have a fixed concurrency bound and release their slots",async t=>{
+  const f=await fixture(t),p=await phone(f),epoch=(await (await p.request("/v1/commands",{})).json()).photo_epoch;
+  const jpeg=await readFile("tests/fixtures/recovery-detail-test.jpg");
+  const held=[];
+  for(let i=0;i<2;i++){
+    const prepared=p.prepare("/v1/photos",{photo_epoch:epoch,photo:{id:randomUUID(),captured_at:Math.floor(Date.now()/1000),failed_attempts:0,reason:"local_test",jpeg:jpeg.toString("base64")}});
+    let request;
+    const completed=new Promise(resolve=>{request=httpRequest(f.deviceOrigin+"/v1/photos",{method:"POST",headers:{...prepared.headers,"Content-Length":Buffer.byteLength(prepared.text)}},r=>{r.resume();r.on("end",()=>resolve(r.statusCode));});request.on("error",()=>resolve("aborted"));request.write(prepared.text.slice(0,-1));});
+    held.push({request,completed,last:prepared.text.slice(-1)});
+  }
+  try{
+    async function waitForStatus(expected) {
+      let status;
+      for(let i=0;i<40;i++){status=(await p.request("/v1/photos",{})).status;if(status===expected)return status;await pause(25);}
+      return status;
+    }
+    assert.equal(await waitForStatus(429),429);
+    held[0].request.destroy();assert.equal(await held[0].completed,"aborted");
+    assert.equal(await waitForStatus(400),400,"canceled request bodies release admission slots");
+  }finally{held[1].request.end(held[1].last);held[0].request.destroy();}
+  assert.equal(await held[1].completed,200);
+  assert.equal((await p.request("/v1/photos",{})).status,400,"finished uploads release admission slots");
 });

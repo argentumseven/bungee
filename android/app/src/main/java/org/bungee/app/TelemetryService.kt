@@ -166,6 +166,12 @@ class TelemetryService : Service() {
                         ManagementAgent.apply(this@TelemetryService, identity, desired.getLong("revision"), desired.getJSONObject("policy"))
                     } }
                     flushReceipts(api, deadline)
+                    // Act on already offered short recovery commands before a larger photo upload.
+                    for (n in 0 until batch.length()) {
+                        if (elapsed() >= deadline) break
+                        val command=batch.getJSONObject(n)
+                        if(command.getString("kind") !in listOf("locate","best_guess")) execute(api,command,deadline)
+                    }
                     if (elapsed() < deadline && elapsed() >= nextPhotoAttempt) {
                         try { uploadPhoto(api, deadline) }
                         catch (e: Exception) {
@@ -177,7 +183,8 @@ class TelemetryService : Service() {
                     }
                     for (n in 0 until batch.length()) {
                         if (elapsed() >= deadline) break
-                        execute(api, batch.getJSONObject(n), deadline)
+                        val command=batch.getJSONObject(n)
+                        if(command.getString("kind") in listOf("locate","best_guess")) execute(api,command,deadline)
                     }
                     if (elapsed() < deadline && (elapsed() >= nextTelemetry || status.value.queuedFixes > 0)) {
                         upload(api, limit = retry.batchSize)
@@ -267,17 +274,12 @@ class TelemetryService : Service() {
         val stamp = PrivacySends.fence.stamp()
         val epoch = identity.photoEpoch ?: return
         val photo = withContext(Dispatchers.IO) { identity.pendingPhoto(session) } ?: return
-        val battery = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, 0) ?: 0
-        val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
-        val data = JSONObject().put("battery", (level * 100 / scale.coerceAtLeast(1)).coerceIn(0, 100))
-            .put("charging", battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0).put("device_owner", false)
-            .put("capabilities", JSONArray(capabilities(this, identity))).put("photo_epoch", epoch).put("recovery_photo", photo)
+        val data = JSONObject().put("photo_epoch", epoch).put("photo", photo)
         val allowed = { PendingPhotos.session() == session && LocalSafety.isCameraEnabled(this) && identity.requestsAllowed() && identity.enrolled && identity.allowCommands && identity.photoEpoch == epoch && elapsed() < deadline }
         val result = withContext(Dispatchers.IO) {
             DisclosureRequest(PrivacySends.fence, { Transport.reserveRequest() }, { Transport.cancelRequest(it) })
-                .exchange(stamp, allowed, { minOf(HomeRequestBudget.MAX_MILLIS, deadline - elapsed()) }) { reservation, remaining ->
-                    api.request("/v1/telemetry", data, reservation = reservation, timeoutMillis = remaining, deadlineElapsed = deadline)
+                .exchange(stamp, allowed, { minOf(HomeRequestBudget.PHOTO_MAX_MILLIS, deadline - elapsed()) }) { reservation, remaining ->
+                    api.request("/v1/photos", data, reservation = reservation, timeoutMillis = remaining, deadlineElapsed = deadline)
                 }
         }
         if (result.getString("photo_epoch") != epoch) {

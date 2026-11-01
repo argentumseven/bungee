@@ -272,8 +272,8 @@ pub async fn sync(
         serde_json::from_slice(&body).map_err(|_| bad("Invalid management report"))?;
     let r = &input.report;
     if r.camera.as_ref().is_some_and(|c| {
-        c.pending > 3
-            || c.queued.len() > 3
+        c.pending > crate::photos::MAX_PENDING
+            || c.queued.len() > crate::photos::MAX_PENDING as usize
             || c.queued.iter().any(|p| {
                 uuid::Uuid::parse_str(&p.id).is_err()
                     || p.captured_at <= 0

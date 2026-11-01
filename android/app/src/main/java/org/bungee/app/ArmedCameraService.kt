@@ -131,7 +131,7 @@ class ArmedCameraService : Service() {
         status.value = status.value.copy(failedInRow = gate.progress)
         try { saveGate() } catch (_: Exception) { markUnavailable("Capture checkpoint could not be saved"); stopSelf(); return }
         if (!permitted) {
-            if (manual) status.value = status.value.copy(detail = "Armed · capture rate limit; wait at least five minutes")
+            if (manual) status.value = status.value.copy(detail = "Armed · capture rate limit; wait at least 30 seconds; maximum 20 attempts/hour")
             return
         }
         val armedSession = session ?: return

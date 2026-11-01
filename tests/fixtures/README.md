@@ -10,3 +10,5 @@ Neither fixture is installed in production images or sent to a provider.
 `recovery-test.jpg` is a locally generated 320×240 checkerboard labelled
 “SYNTHETIC CAMERA TEST / No real phone or person”. Photo API/browser fixtures
 use it instead of a person's image. It is never bundled with the production app.
+
+`recovery-detail-test.jpg` is a deterministic, synthetic 2048×1536 colour/noise detail pattern, encoded at JPEG quality 90. It contains no person, EXIF or real camera capture. The maintainer-only `make_recovery_detail.py` reproduces it with Pillow; tests read the checked-in JPEG and need no image library.

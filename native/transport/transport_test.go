@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -57,6 +58,15 @@ func TestWireGuardRoundTripAndRequestBoundaries(t *testing.T) {
 	waiting := make(chan struct{}, 4)
 	release := make(chan struct{})
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/photos" {
+			data, err := io.ReadAll(r.Body)
+			if err != nil || len(data) < 1024*1024 {
+				t.Error("large photo body did not arrive intact", err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"accepted":true}`)
+			return
+		}
 		if r.URL.Path == "/v1/ack" {
 			waiting <- struct{}{}
 			<-r.Context().Done()
@@ -91,6 +101,32 @@ func TestWireGuardRoundTripAndRequestBoundaries(t *testing.T) {
 	if _, e = Exchange("/v1/command-check", `{}`, `{"X-Bungee-Nonce":"test-nonce"}`); e != nil {
 		t.Fatal("cancellation check could not traverse the fixed-home transport", e)
 	}
+	photoBody := `{"photo":"` + strings.Repeat("p", 1_398_104) + `"}`
+	id, err := ReserveRequest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	large, err := ExchangeRequest(id, "/v1/photos", photoBody, `{"X-Bungee-Nonce":"test-nonce"}`, 60000)
+	CancelRequest(id)
+	if err != nil || !strings.Contains(large, `"status":200`) {
+		t.Fatal("larger photo upload failed", err, large)
+	}
+	id, err = ReserveRequest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = ExchangeRequest(id, "/v1/photos", photoBody, `{}`, 60001); err == nil {
+		t.Fatal("unbounded photo deadline accepted")
+	}
+	CancelRequest(id)
+	id, err = ReserveRequest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = ExchangeRequest(id, "/v1/telemetry", `{}`, `{}`, 60000); err == nil {
+		t.Fatal("ordinary control deadline was enlarged")
+	}
+	CancelRequest(id)
 	for _, path := range []string{"https://example.com/", "/v1/telemetry?redirect=evil", "/v1/../api/session", "/"} {
 		if _, e = Exchange(path, `{}`, `{}`); e == nil {
 			t.Fatal("unbounded destination accepted")

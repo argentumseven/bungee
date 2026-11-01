@@ -1,10 +1,12 @@
 package org.bungee.app
 
-/** The native fixed-home transport accepts at most ten seconds per HTTP request. */
+/** Ordinary requests stay short; the dedicated larger-photo route gets a bounded minute. */
 object HomeRequestBudget {
     const val MAX_MILLIS = 10_000L
-    fun remaining(requested: Long, deadline: Long, now: Long): Long {
+    const val PHOTO_MAX_MILLIS = 60_000L
+    fun remaining(requested: Long, deadline: Long, now: Long, path: String = ""): Long {
         require(requested > 0 && deadline >= 0 && now >= 0)
-        return minOf(MAX_MILLIS, requested, deadline-now).also { check(it > 0) { "Request deadline passed before transport" } }
+        val maximum=if(path=="/v1/photos") PHOTO_MAX_MILLIS else MAX_MILLIS
+        return minOf(maximum, requested, deadline-now).also { check(it > 0) { "Request deadline passed before transport" } }
     }
 }

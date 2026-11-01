@@ -17,9 +17,9 @@ class CameraRestartTest {
     }
     @Test fun successfulUnlockAndAttemptBudgetSurviveRestart() {
         var lease = CameraLease.obtain(JSONObject(), 1, 0, 0, visibleStart = true)
-        for (i in 0..5) {
-            assertTrue(lease.gate.test(i * 300_000L))
-            lease = CameraLease.obtain(JSONObject(lease.snapshot().toString()), 1, i * 300_000L, 0, visibleStart = false)
+        for (i in 0 until RecoveryPhotoPolicy.MAX_ATTEMPTS_PER_HOUR) {
+            assertTrue(lease.gate.test(i * RecoveryPhotoPolicy.MIN_INTERVAL_MILLIS))
+            lease = CameraLease.obtain(JSONObject(lease.snapshot().toString()), 1, i * RecoveryPhotoPolicy.MIN_INTERVAL_MILLIS, 0, visibleStart = false)
         }
         lease.gate.reset()
         lease = CameraLease.obtain(lease.snapshot(), 1, 1_800_000, 0, visibleStart = false)

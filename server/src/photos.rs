@@ -1,6 +1,7 @@
 use crate::{App, security::*, store};
 use axum::{
     Json,
+    body::Bytes,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
@@ -9,6 +10,57 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Deserialize;
 use serde_json::{Value, json};
+
+pub const MAX_JPEG_BYTES: usize = 1024 * 1024;
+pub const MAX_PENDING: u32 = 8;
+const MAX_BASE64_CHARS: usize = MAX_JPEG_BYTES.div_ceil(3) * 4;
+const MAX_NEW_PER_HOUR: u32 = 20 + MAX_PENDING; // Current attempts plus an offline queue catching up.
+static UPLOADS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
+pub async fn admission(request: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let Ok(_permit) = UPLOADS.try_acquire() else {
+        return Error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Two photo uploads are running; retry shortly",
+        )
+        .into_response();
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(75), next.run(request)).await {
+        Ok(response) => response,
+        Err(_) => Error(
+            StatusCode::REQUEST_TIMEOUT,
+            "Photo upload exceeded its time limit",
+        )
+        .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Upload {
+    photo_epoch: String,
+    photo: Photo,
+}
+
+pub async fn upload(
+    State(app): State<App>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResult<Json<Value>> {
+    let id = verify_device(&app, &headers, "/v1/photos", &body)?;
+    let input: Upload = serde_json::from_slice(&body).map_err(|_| bad("Invalid photo upload"))?;
+    let bytes = input.photo.validate()?;
+    let mut db = app.db.lock().unwrap();
+    let tx = db.transaction()?;
+    let accepted = commit(&tx, &id, Some(&input.photo_epoch), &input.photo, &bytes)?;
+    let epoch: String = tx.query_row("SELECT photo_epoch FROM devices WHERE id=?", [&id], |r| {
+        r.get(0)
+    })?;
+    tx.commit()?;
+    Ok(Json(
+        json!({"accepted_photo":accepted,"photo_epoch":epoch,"server_time":now()}),
+    ))
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -29,14 +81,14 @@ impl Photo {
                 (self.reason.as_str(), self.failed_attempts),
                 ("failed_unlock", 3..) | ("local_test", 0)
             )
-            || self.jpeg.len() > 16 * 1024
+            || self.jpeg.len() > MAX_BASE64_CHARS
         {
             return Err(bad("Invalid recovery photo metadata"));
         }
         let bytes = STANDARD
             .decode(&self.jpeg)
             .map_err(|_| bad("Invalid photo encoding"))?;
-        if bytes.len() > 12 * 1024 || !bounded_jpeg(&bytes) {
+        if bytes.len() > MAX_JPEG_BYTES || !bounded_jpeg(&bytes) {
             return Err(bad("Expected a bounded JPEG without EXIF"));
         }
         Ok(bytes)
@@ -84,9 +136,9 @@ fn bounded_jpeg(b: &[u8]) -> bool {
             let height = u16::from_be_bytes([b[offset + 3], b[offset + 4]]) as u32;
             let width = u16::from_be_bytes([b[offset + 5], b[offset + 6]]) as u32;
             let components = b[offset + 7] as usize;
-            if !(1..=640).contains(&width)
-                || !(1..=640).contains(&height)
-                || width * height > 307_200
+            if !(1..=2048).contains(&width)
+                || !(1..=2048).contains(&height)
+                || width * height > 3_145_728
                 || ![1, 3].contains(&components)
                 || length != 8 + 3 * components
             {
@@ -177,10 +229,10 @@ pub fn commit(
             params![id, now() - 3600],
             |r| r.get(0),
         )?;
-        if recent >= 6 {
+        if recent >= MAX_NEW_PER_HOUR {
             return Err(Error(
                 StatusCode::TOO_MANY_REQUESTS,
-                "At most six new photos per hour",
+                "At most twenty-eight new photos per hour",
             ));
         }
         db.execute("INSERT INTO recovery_photos(device_id,photo_id,captured_at,received_at,failed_attempts,reason,jpeg) VALUES(?,?,?,?,?,?,?)", params![id,photo.id,photo.captured_at,now(),photo.failed_attempts,photo.reason,bytes])?;
