@@ -10,7 +10,7 @@ Bungee is a self-hosted device finder for Android 12+ and GrapheneOS. Pair house
 
 The Kotlin app connects through an app-contained WireGuard tunnel to a Rust server and web dashboard. Only Bungee traffic uses that tunnel; Android's VPN slot remains available. Phone records stay on your server until you erase them or revoke the device.
 
-**Version 1.1.5.** Physical GrapheneOS testing and an independent security audit are pending. See the [validation record](docs/VALIDATION.md) for completed checks and [security design](docs/SECURITY.md) for the trust model.
+**Version 1.1.6.** Physical GrapheneOS testing and an independent security audit are pending. See the [validation record](docs/VALIDATION.md) for completed checks and [security design](docs/SECURITY.md) for the trust model.
 
 ![Bungee dashboard in dark mode](docs/screenshots/dashboard.png)
 

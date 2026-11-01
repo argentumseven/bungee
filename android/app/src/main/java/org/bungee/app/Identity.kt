@@ -25,7 +25,6 @@ class Identity(context: Context) {
     private val generation = prefs.getString("identity_generation", null)
     private val keys = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
     init { synchronized(identityInitialization) {
-        if (prefs.contains("state_armed_photos")) check(prefs.edit().remove("state_armed_photos").commit()) { "Could not erase legacy photo storage" }
         val bound = prefs.getBoolean("enrolled", false) || prefs.contains("bundle")
         if (!keys.containsAlias("bungee-signing")) {
             check(!bound) { "Existing signing key is unavailable; use local recovery" }
@@ -49,6 +48,12 @@ class Identity(context: Context) {
             val derived = KeyPair(Key.fromBase64(wgPrivate)).publicKey.toBase64()
             if (prefs.getString("wg_public", null) != derived)
                 check(prefs.edit().putString("wg_public", derived).commit()) { "Could not repair the public key from its existing private key" }
+        }
+        synchronized(PhotoOutbox.lock) {
+            if (prefs.contains("state_armed_photos")) {
+                PendingPhotos.adoptLegacy(state("armed_photos"))
+                check(prefs.edit().remove("state_armed_photos").commit()) { "Could not remove migrated photo storage; original pictures preserved" }
+            }
         }
     } }
     private fun currentIdentity() = generation == prefs.getString("identity_generation", null)

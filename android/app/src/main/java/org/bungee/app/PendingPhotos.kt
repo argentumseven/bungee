@@ -11,6 +11,22 @@ object PendingPhotos {
     private val queueCounts = MutableStateFlow(0 to 0L)
     val counts = queueCounts.asStateFlow()
     private fun publishCounts() { queueCounts.value = state.getJSONArray("records").length() to state.optLong("dropped") }
+    /** Adopt old encrypted records once, without ever writing JPEGs back to disk. */
+    fun adoptLegacy(legacy: JSONObject) = synchronized(PhotoOutbox.lock) {
+        val old=legacy.getJSONArray("records")
+        require(old.length() <= PhotoOutbox.CAPACITY)
+        if (old.length() == 0) return@synchronized
+        val session=state.getString("session").ifEmpty { legacy.getString("session").also { require(it.isNotEmpty()) } }
+        val next=PhotoOutbox.empty(session).put("dropped",state.optLong("dropped"))
+        val records=linkedMapOf<String,JSONObject>()
+        for (source in listOf(old,state.getJSONArray("records"))) for(i in 0 until source.length()) {
+            val photo=source.getJSONObject(i)
+            records[photo.getString("id")]=JSONObject(photo.toString())
+        }
+        // Keep the newest bounded records if initialization retries meet an existing RAM queue.
+        for (photo in records.values.sortedBy { it.getLong("captured_at") }) PhotoOutbox.append(next,photo)
+        state=next; publishCounts()
+    }
     fun session(): String? = synchronized(PhotoOutbox.lock) {
         state.getString("session").takeIf { it.isNotEmpty() && state.getJSONArray("records").length() > 0 }
     }

@@ -68,6 +68,23 @@ class ArmedCameraPolicyTest {
         gate.failed(8,0); assertEquals(3,gate.progress)
         gate.failed(0,1); assertEquals(0,gate.progress)
     }
+    @Test fun legacyPhotoMigrationPreservesPicturesAndDoesNotDuplicateThemOnRetry() {
+        PendingPhotos.clear()
+        val captured=photo(); val legacy=PhotoOutbox.append(PhotoOutbox.empty("old-session"),captured)
+        PendingPhotos.adoptLegacy(legacy); PendingPhotos.adoptLegacy(legacy)
+        assertEquals(1,PendingPhotos.report().first)
+        PendingPhotos.resume("new-session")
+        assertEquals(captured.toString(),PendingPhotos.first("new-session")!!.toString())
+        PendingPhotos.acknowledge(captured.getString("id"),"new-session")
+        assertNull(PendingPhotos.session()); PendingPhotos.clear()
+    }
+    @Test fun invalidLegacyPhotoCannotPartiallyReplaceTheMemoryQueue() {
+        PendingPhotos.clear(); PendingPhotos.resume("live")
+        val captured=photo(); PendingPhotos.append(captured,"live")
+        val invalid=PhotoOutbox.empty("old").put("records",org.json.JSONArray().put(photo().put("jpeg","x".repeat(16_385))))
+        assertThrows(IllegalArgumentException::class.java){PendingPhotos.adoptLegacy(invalid)}
+        assertEquals(captured.toString(),PendingPhotos.first("live")!!.toString()); PendingPhotos.clear()
+    }
     @Test fun outboxRejectsOversizeAndMislabelledTests() {
         assertThrows(IllegalArgumentException::class.java) { PhotoOutbox.append(PhotoOutbox.empty("s"), photo().put("jpeg", "x".repeat(16_385))) }
         assertThrows(IllegalArgumentException::class.java) { PhotoOutbox.append(PhotoOutbox.empty("s"), photo(attempts = 2)) }
