@@ -119,12 +119,17 @@ fn timestamp(value: i64) -> rusqlite::Result<String> {
 fn csv_row(row: &rusqlite::Row<'_>, kind: &str) -> rusqlite::Result<String> {
     Ok(match kind {
         "locations" => format!(
-            "{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{}\n",
             timestamp(row.get(0)?)?,
             timestamp(row.get(1)?)?,
             row.get::<_, f64>(2)?,
             row.get::<_, f64>(3)?,
-            row.get::<_, f64>(4)?
+            row.get::<_, f64>(4)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, u32>(6)?,
+            row.get::<_, Option<bool>>(7)?
+                .map(|v| v.to_string())
+                .unwrap_or_default()
         ),
         "network" => {
             let saved = row
@@ -181,8 +186,8 @@ fn write_csv(job: &ExportJob, sender: &mpsc::Sender<Result<Bytes, io::Error>>) -
             "location_history",
             "observed_at",
             "observed_at",
-            "observed_at,received_at,latitude,longitude,accuracy",
-            "observed_at_utc,received_at_utc,latitude,longitude,accuracy_m\n",
+            "observed_at,received_at,latitude,longitude,accuracy,source,samples,system_vpn",
+            "observed_at_utc,received_at_utc,latitude,longitude,accuracy_m,source,samples,system_vpn\n",
         ),
         "network" => (
             "network_history",
@@ -205,14 +210,15 @@ fn write_csv(job: &ExportJob, sender: &mpsc::Sender<Result<Bytes, io::Error>>) -
         Value::Integer(query.to),
         Value::Integer(query.before.unwrap_or(i64::MAX)),
     ];
+    let source_filter = query.source_filter().map_err(|e| io::Error::other(e.1))?;
     let filter = if let Some(every) = recurrence.every {
         bindings.push(Value::Integer(every));
         format!(
-            "AND {key} IN (SELECT MAX({key}) FROM {table} WHERE device_id=?1 AND {clock}>=?2 AND {clock}<=?3 GROUP BY ({clock}-?2)/?5)"
+            "AND {key} IN (SELECT MAX({key}) FROM {table} WHERE device_id=?1 AND {clock}>=?2 AND {clock}<=?3 {source_filter} GROUP BY ({clock}-?2)/?5)"
         )
     } else if recurrence.daily.is_some() {
         let keys = recurrence
-            .keys(
+            .keys_filtered(
                 &db,
                 id,
                 kind,
@@ -220,6 +226,7 @@ fn write_csv(job: &ExportJob, sender: &mpsc::Sender<Result<Bytes, io::Error>>) -
                 query.to,
                 query.before.unwrap_or(i64::MAX),
                 1000,
+                &source_filter,
             )
             .map_err(|e| io::Error::other(e.1))?
             .unwrap_or_default();
@@ -237,7 +244,7 @@ fn write_csv(job: &ExportJob, sender: &mpsc::Sender<Result<Bytes, io::Error>>) -
         String::new()
     };
     let sql = format!(
-        "SELECT {columns} FROM {table} WHERE device_id=?1 AND {clock}>=?2 AND {clock}<=?3 AND {key}<?4 {filter} ORDER BY {key} DESC"
+        "SELECT {columns} FROM {table} WHERE device_id=?1 AND {clock}>=?2 AND {clock}<=?3 AND {key}<?4 {source_filter} {filter} ORDER BY {key} DESC"
     );
     let mut statement = db.prepare(&sql)?;
     let mut rows = statement.query(rusqlite::params_from_iter(bindings))?;

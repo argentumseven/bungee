@@ -3,7 +3,7 @@ package org.bungee.app
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Small encrypted-at-rest queue; the enclosing Identity stores this as one encrypted record. */
+/** Bounded in-memory photo queue. No JPEG bytes are persisted. */
 object PhotoOutbox {
     const val MAX_BYTES = 12 * 1024
     const val CAPACITY = 3

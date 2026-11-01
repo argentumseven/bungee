@@ -20,12 +20,14 @@ pub struct Policy {
     pub require_strong_lock: bool,
     pub blocked_apps: Vec<String>,
     pub lost_mode: bool,
+    pub haste: bool,
     pub recovery_message: String,
 }
 impl Policy {
     pub fn reversible(&self) -> Self {
         Self {
             lost_mode: self.lost_mode,
+            haste: self.haste && self.lost_mode,
             recovery_message: self.recovery_message.clone(),
             ..Self::default()
         }
@@ -67,6 +69,7 @@ pub fn safe_package(p: &str) -> bool {
 #[serde(default, deny_unknown_fields)]
 pub struct Report {
     pub camera: Option<CameraReport>,
+    pub connection_health: Option<ConnectionHealth>,
     pub owner: bool,
     pub consent: bool,
     pub recovery_consent: bool,
@@ -89,13 +92,51 @@ pub struct Report {
     pub delivery: Option<DeliveryReport>,
 }
 #[derive(Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
+pub struct ConnectionHealth {
+    pub since: i64,
+    pub reported_at: i64,
+    pub connection: String,
+    pub system_vpn: Option<bool>,
+    pub signal_dbm: Option<i32>,
+    pub attempts: u64,
+    pub succeeded: u64,
+    pub last_rtt_ms: Option<u64>,
+    pub mean_rtt_ms: u64,
+    pub jitter_ms: u64,
+}
+impl ConnectionHealth {
+    fn valid(&self) -> bool {
+        self.since > 0
+            && self.since <= self.reported_at
+            && self.reported_at <= now() + 120
+            && ["offline", "wifi", "cellular", "ethernet", "vpn", "other"]
+                .contains(&self.connection.as_str())
+            && self.signal_dbm.is_none_or(|v| (-150..=0).contains(&v))
+            && self.succeeded <= self.attempts
+            && self.attempts <= 9_007_199_254_740_991
+            && self.last_rtt_ms.is_none_or(|v| v <= 86400000)
+            && self.mean_rtt_ms <= 86400000
+            && self.jitter_ms <= 86400000
+    }
+}
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct CameraReport {
     pub armed: bool,
     pub pending: u32,
     pub dropped: u64,
     pub status: String,
     pub reported_at: i64,
+    pub failed_in_row: u32,
+    pub queued: Vec<QueuedPhoto>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QueuedPhoto {
+    pub id: String,
+    pub captured_at: i64,
+    pub reason: String,
 }
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -232,11 +273,20 @@ pub async fn sync(
     let r = &input.report;
     if r.camera.as_ref().is_some_and(|c| {
         c.pending > 3
+            || c.queued.len() > 3
+            || c.queued.iter().any(|p| {
+                uuid::Uuid::parse_str(&p.id).is_err()
+                    || p.captured_at <= 0
+                    || p.captured_at > now() + 120
+                    || !["local_test", "failed_unlock"].contains(&p.reason.as_str())
+            })
+            || c.failed_in_row > 3
             || c.dropped > 9_007_199_254_740_991
             || c.status.len() > 240
             || c.reported_at <= 0
             || c.reported_at > now() + 120
     }) || r.delivery.as_ref().is_some_and(|d| !d.valid())
+        || r.connection_health.as_ref().is_some_and(|c| !c.valid())
         || r.revision < 0
         || r.errors.len() > 20
         || r.errors.iter().any(|e| e.len() > 160)

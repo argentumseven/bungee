@@ -67,7 +67,7 @@ test("enrollment lifecycle and storage-failure recovery", async t=>{
     assert.equal(f.sql("SELECT public_key IS NOT NULL FROM devices WHERE id=?",[paired.device_id])[0][0],1);
   });
   await t.test("expired unpaired address pressure cannot permanently exhaust enrollment or erase paired history",async()=>{
-    f.sql("INSERT INTO location_history VALUES(?,1,1,1,2,3)",[paired.device_id]);
+    f.sql("INSERT INTO location_history(device_id,observed_at,received_at,latitude,longitude,accuracy) VALUES(?,1,1,1,2,3)",[paired.device_id]);
     f.sql("WITH RECURSIVE n(x) AS (SELECT 2 UNION ALL SELECT x+1 FROM n WHERE x<254) INSERT OR IGNORE INTO devices(id,name,wg_key,address,created) SELECT 'unpaired-fixture-'||x,'Expired fixture','unpaired-key-'||x,'10.77.0.'||x,1 FROM n");
     assert.equal(f.sql("SELECT COUNT(*) FROM devices")[0][0],253);
     const response=await invite(randomBytes(32).toString("base64")); assert.equal(response.status,200);
@@ -95,7 +95,7 @@ test('inactive bindings can be purged without retiring an offline paired phone',
   assert.equal((await purge(first.device_id)).status,409,'live invitations cannot be silently invalidated');
   assert.equal((await redeem(first)).status,200);
   f.sql('UPDATE devices SET last_contact=0,last_seen=0 WHERE id=?',[first.device_id]);
-  f.sql('INSERT INTO location_history VALUES(?,1,1,1,2,3)',[first.device_id]);
+  f.sql('INSERT INTO location_history(device_id,observed_at,received_at,latitude,longitude,accuracy) VALUES(?,1,1,1,2,3)',[first.device_id]);
   assert.equal((await purge(first.device_id)).status,409,'offline is not abandoned');
   assert.equal(f.sql('SELECT COUNT(*) FROM location_history WHERE device_id=?',[first.device_id])[0][0],1);
   assert.equal((await f.admin(`/api/devices/${first.device_id}`,'DELETE')).status,200);

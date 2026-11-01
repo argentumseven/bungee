@@ -25,6 +25,7 @@ class Identity(context: Context) {
     private val generation = prefs.getString("identity_generation", null)
     private val keys = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
     init { synchronized(identityInitialization) {
+        if (prefs.contains("state_armed_photos")) check(prefs.edit().remove("state_armed_photos").commit()) { "Could not erase legacy photo storage" }
         val bound = prefs.getBoolean("enrolled", false) || prefs.contains("bundle")
         if (!keys.containsAlias("bungee-signing")) {
             check(!bound) { "Existing signing key is unavailable; use local recovery" }
@@ -120,36 +121,30 @@ class Identity(context: Context) {
             ArmedCameraService.discardPending(appContext)
             saveState("photo_epoch", JSONObject().put("epoch", epoch))
             ArmedCameraService.currentSession()?.let {
-                saveState("armed_photos", PhotoOutbox.empty(it))
+                PendingPhotos.resume(it)
                 ArmedCameraService.refreshQueue(this, it)
             }
         } }
     }
     fun resumePhotoSession(session: String) = synchronized(PhotoOutbox.lock) {
-        val previous = state("armed_photos")
-        saveState("armed_photos", if (previous.length() == 0) PhotoOutbox.empty(session) else previous.put("session", session))
+        check(prefs.edit().remove("state_armed_photos").commit()) { "Could not remove the old persisted photo queue" }
+        PendingPhotos.resume(session)
     }
     fun queuePhoto(photo: JSONObject, session: String, epoch: String, stamp: DisclosureFence.Stamp, allowed: () -> Boolean) = PrivacySends.fence.checked(stamp, allowed) {
         synchronized(PhotoOutbox.lock) {
             check(photoEpoch == epoch)
-            val stored = state("armed_photos")
-            val queue = if (stored.optString("session").isEmpty()) PhotoOutbox.empty(session) else stored
-            check(queue.getString("session") == session)
-            saveState("armed_photos", PhotoOutbox.append(queue, photo))
+            PendingPhotos.append(photo, session)
         }
     }
     fun pendingPhoto(session: String): JSONObject? = synchronized(PhotoOutbox.lock) {
-        val state = state("armed_photos")
-        if (state.optString("session") != session) null else state.optJSONArray("records")?.optJSONObject(0)
+        PendingPhotos.first(session)
     }
     fun photoQueueReport(session: String? = null): Pair<Int, Long> = synchronized(PhotoOutbox.lock) {
-        val state = state("armed_photos")
-        if (session != null && state.optString("session") != session) 0 to 0L else (state.optJSONArray("records")?.length() ?: 0) to state.optLong("dropped")
+        PendingPhotos.report(session)
     }
     fun acknowledgePhoto(id: String, session: String, stamp: DisclosureFence.Stamp, allowed: () -> Boolean) = PrivacySends.fence.checked(stamp, allowed) {
         synchronized(PhotoOutbox.lock) {
-            val state = state("armed_photos"); check(state.getString("session") == session)
-            saveState("armed_photos", PhotoOutbox.acknowledge(state, id))
+            PendingPhotos.acknowledge(id, session)
         }
     }
     var recoveryMessage: String?

@@ -143,6 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(api::session).post(api::login).delete(api::logout),
         )
         .route("/api/geography", get(geography::status))
+        .route("/api/maps/archive.pmtiles", get(geography::vector_archive))
         .route("/api/maps/{z}/{x}/{y}", get(geography::tile))
         .route("/api/devices", get(api::devices))
         .route("/api/enrollments", post(enrollment::create_enrollment))
@@ -158,10 +159,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/devices/{id}/commands", post(api::command))
         .route(
+            "/api/devices/{id}/commands/{command}",
+            delete(api::cancel_command),
+        )
+        .route(
             "/api/devices/{id}/photos",
             get(photos::list).delete(photos::erase),
         )
-        .route("/api/devices/{id}/photos/{photo}", get(photos::image))
+        .route(
+            "/api/devices/{id}/photos/{photo}",
+            get(photos::image).delete(photos::erase_one),
+        )
+        .route(
+            "/api/photos",
+            get(photos::list_all).delete(photos::erase_all),
+        )
         .route("/api/devices/{id}/history.csv", get(export::history_csv))
         .route(
             "/api/devices/{id}/policy",
@@ -186,6 +198,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/enroll", post(api::enroll))
         .route("/v1/telemetry", post(api::telemetry))
         .route("/v1/commands", post(api::poll))
+        .route("/v1/command-check", post(api::check_command))
         .route("/v1/ack", post(api::ack))
         .route("/v1/sync", post(management::sync))
         .layer(middleware::from_fn_with_state(

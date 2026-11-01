@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {gpsTrail} from "../web/src/gpsTrail.ts";
+import {gpsTrail,currentEstimate} from "../web/src/gpsTrail.ts";
 const p=(latitude,longitude,observed_at,accuracy=10)=>({latitude,longitude,observed_at,accuracy});
 test("uncertain fix omitted, raw retained",()=>{
  const raw=[p(32,-80,100),p(33,-81,160,400),p(32.0001,-80,220)];
@@ -19,4 +19,11 @@ test("long gaps and jumps split segments",()=>{
 });
 test("invalid coordinates and accuracy omitted",()=>{
  assert.equal(gpsTrail([p(32,-80,100),p(100,-80,160),p(32,NaN,220),{latitude:32,longitude:-80,observed_at:280}]).points.length,1);
+});
+
+test("current estimate averages stationary jitter conservatively and follows real movement",()=>{
+ const clustered=Array.from({length:5},(_,i)=>p(33+(i-2)*0.00001,-80,100+i*30,1));
+ const stationary=currentEstimate(clustered);assert.equal(stationary.samples,5);assert.ok(stationary.accuracy>=5);assert.ok(Math.abs(stationary.latitude-33)<0.000001);
+ const moving=currentEstimate([p(33,-80,100),p(33.002,-80,160)]);assert.equal(moving.latitude,33.002);assert.equal(moving.moving,true);
+ assert.equal(currentEstimate([]),null);
 });

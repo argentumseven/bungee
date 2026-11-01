@@ -50,6 +50,7 @@ impl Recurrence {
     }
     // Select before pagination, so a bucket or daily slot cannot reappear on another page.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     pub fn keys(
         &self,
         db: &Connection,
@@ -60,6 +61,20 @@ impl Recurrence {
         before: i64,
         limit: usize,
     ) -> ApiResult<Option<Vec<i64>>> {
+        self.keys_filtered(db, id, kind, from, to, before, limit, "")
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn keys_filtered(
+        &self,
+        db: &Connection,
+        id: &str,
+        kind: &str,
+        from: i64,
+        to: i64,
+        before: i64,
+        limit: usize,
+        filter: &str,
+    ) -> ApiResult<Option<Vec<i64>>> {
         let (table, clock, key) = if kind == "locations" {
             ("location_history", "observed_at", "observed_at")
         } else if kind == "network" {
@@ -69,7 +84,7 @@ impl Recurrence {
         };
         if let Some(every) = self.every {
             let sql = format!(
-                "SELECT selected FROM (SELECT MAX({key}) AS selected FROM {table} WHERE device_id=?1 AND {clock}>=?2 AND {clock}<=?3 GROUP BY ({clock}-?2)/?4) WHERE selected<?5 ORDER BY selected DESC LIMIT ?6"
+                "SELECT selected FROM (SELECT MAX({key}) AS selected FROM {table} WHERE device_id=?1 AND {clock}>=?2 AND {clock}<=?3 {filter} GROUP BY ({clock}-?2)/?4) WHERE selected<?5 ORDER BY selected DESC LIMIT ?6"
             );
             let mut q = db.prepare(&sql)?;
             return Ok(Some(
@@ -96,7 +111,7 @@ impl Recurrence {
             .date_naive();
         let mut selected = Vec::new();
         let sql = format!(
-            "SELECT {key} FROM {table} WHERE device_id=?1 AND {clock}>=?2 AND {clock}<=?3 ORDER BY ABS({clock}-?4), {key} DESC LIMIT 1"
+            "SELECT {key} FROM {table} WHERE device_id=?1 AND {clock}>=?2 AND {clock}<=?3 {filter} ORDER BY ABS({clock}-?4), {key} DESC LIMIT 1"
         );
         let mut q = db.prepare(&sql)?;
         while day <= end {

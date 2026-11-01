@@ -37,7 +37,7 @@ class HomeApi(private val identity: Identity, val clock: HomeClock = HomeClock()
     fun request(path: String, body: JSONObject = JSONObject(), signed: Boolean = true, reservation: Long? = null, timeoutMillis: Long = 10000, deadlineElapsed: Long = Long.MAX_VALUE, authorization: DisclosureFence.Stamp = PrivacySends.fence.stamp()): JSONObject {
         check(identity.requestsAllowed()) { "Bungee is stopped or its pairing changed; reopen the app" }
         check(HomeTunnel.state == com.wireguard.android.backend.Tunnel.State.UP) { "The private tunnel is disconnected" }
-        require(path in listOf("/v1/enroll", "/v1/telemetry", "/v1/commands", "/v1/ack", "/v1/sync"))
+        require(path in listOf("/v1/enroll", "/v1/telemetry", "/v1/commands", "/v1/command-check", "/v1/ack", "/v1/sync"))
         val bytes = body.toString().toByteArray(Charsets.UTF_8)
         val headers = JSONObject()
         if (signed) {
@@ -52,8 +52,7 @@ class HomeApi(private val identity: Identity, val clock: HomeClock = HomeClock()
         }
         check(HomeTunnel.appContained) { "The app-contained connection is unavailable" }
         val started = android.os.SystemClock.elapsedRealtime()
-        val remaining = minOf(timeoutMillis, deadlineElapsed - android.os.SystemClock.elapsedRealtime())
-        check(remaining > 0) { "Request deadline passed before transport" }
+        val remaining = HomeRequestBudget.remaining(timeoutMillis, deadlineElapsed, started)
         val response = JSONObject(if (reservation == null) {
             DisclosureRequest(PrivacySends.fence, { Transport.reserveRequest() }, { Transport.cancelRequest(it) })
                 .exchange(authorization, { identity.requestsAllowed() }, { minOf(remaining, deadlineElapsed - android.os.SystemClock.elapsedRealtime()) }) { request, budget ->

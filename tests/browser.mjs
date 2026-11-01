@@ -394,8 +394,9 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       },
     );
     await page.getByRole("button", { name: "Close dialog" }).click();
-    await page.getByRole("button", { name: /Browser test phone/ }).waitFor();
+    await page.locator(".nav-phones").getByRole("button", { name: "Browser test phone", exact:true }).waitFor();
   });
+  await page.locator(".nav-phones").getByRole("button",{name:"Browser test phone",exact:true}).click();
   await page.evaluate(() => scrollTo(0, 0));
   await page
     .getByRole("img", { name: "Last-known GPS and approximate IP location" })
@@ -407,7 +408,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     for (const theme of ["light", "dark"]) {
       await appearance.selectOption(theme);
       await assertTheme(theme);
-      await assertReadable([".stat-label", ".stat > small", ".device-text small", ".network-card p", ".private-map-status", ".primary", ".nav-item.active"]);
+      await assertReadable([".device-summary h2", ".device-summary p", ".network-card p", ".private-map-status", ".primary", ".nav-item.active"]);
     }
     await appearance.selectOption("system");
     await assertTheme("dark");
@@ -431,7 +432,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await page.getByRole("dialog").screenshot({ path: "docs/screenshots/message-preview.png", animations: "disabled" });
     await page.setViewportSize({ width: 390, height: 844 });
     await preview.scrollIntoViewIfNeeded();
-    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, JSON.stringify(await page.evaluate(()=>Array.from(document.querySelectorAll("body *")).filter(el=>el.getBoundingClientRect().right>innerWidth+1).slice(0,12).map(el=>({tag:el.tagName,cls:el.className,width:el.getBoundingClientRect().width,right:el.getBoundingClientRect().right})))));
     await preview.screenshot({ path: "docs/screenshots/notification-preview.png", animations: "disabled" });
     const commandsAfter = await page.evaluate(async () => (await (await fetch("/api/devices")).json()).commands.map((c) => c.id));
     assert.deepEqual(commandsAfter, commandsBefore, "preview controls must not queue a phone command");
@@ -528,7 +529,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       await page.evaluate(() => scrollTo(0, 0));
       await screenshot("mobile-device-care");
       await page.setViewportSize({ width: 1440, height: 1050 });
-      await page.getByRole("button", { name: "Overview", exact: true }).click();
+      await page.locator(".nav-phones").getByRole("button",{name:"Browser test phone",exact:true}).click();
       assert.equal(
         await page
           .getByRole("button", { name: "Secure reboot", exact: true })
@@ -563,7 +564,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await gallery.getByText("No saved photos in this view.",{exact:true}).waitFor();
     assert.equal(await gallery.locator("img").count(),0);
     await page.setViewportSize({width:1440,height:1050});
-    await page.getByRole("button",{name:"Overview",exact:true}).click();
+    await page.locator(".nav-phones").getByRole("button",{name:"Browser test phone",exact:true}).click();
   });
   await t.test(
     "offered commands are not labeled as confirmed delivery",
@@ -599,12 +600,13 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await page
       .getByRole("heading", { name: "Device consent & management" })
       .waitFor();
-    await page.getByText("Browser test phone", { exact: true }).waitFor();
+    await page.locator(".settings-device strong").filter({hasText:"Browser test phone"}).first().waitFor();
   });
   await t.test(
     "history supports time slices, selecting a point, state logs and private CSV export",
     async () => {
-      await page.getByRole("button", { name: "History", exact: true }).click();
+      await page.getByRole("button", { name: "Tracking", exact: true }).click();
+      await page.getByRole("button", { name: "GPS history", exact: true }).click();
       await page
         .getByRole("heading", { name: "Saved history", exact: true })
         .waitFor();
@@ -725,9 +727,9 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
           .count(),
         1,
       );
-      await page.getByRole("button", { name: "Overview", exact: true }).click();
+      await page.locator(".nav-phones").getByRole("button",{name:"Browser test phone",exact:true}).click();
       await page.getByText("Waiting for a location", { exact: true }).waitFor();
-      await page.getByRole("button", { name: /Browser test phone/ }).waitFor();
+      await page.locator(".nav-phones").getByRole("button", { name: "Browser test phone", exact:true }).waitFor();
     },
   );
   await t.test("an expired invitation can be reissued from device settings",async()=>{
@@ -776,7 +778,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await page.evaluate(async id => { await fetch(`/api/devices/${id}`,{method:"DELETE"}); }, next.device_id);
   });
   await t.test("mobile layout fits a 390-pixel viewport", async () => {
-    await page.getByRole("button", { name: "Overview", exact: true }).click();
+    await page.locator(".nav-phones").getByRole("button",{name:"Browser test phone",exact:true}).click();
     await page.setViewportSize({ width: 390, height: 844 });
     await page.evaluate(() => scrollTo(0, 0));
 
@@ -826,7 +828,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await page.getByRole("status").filter({hasText:"Password changed"}).waitFor();
     await page.getByLabel("Server administrator password").fill(next);
     await page.getByRole("button", {name:"Sign in", exact:true}).click();
-    await page.getByRole("heading", {name:"Settings", exact:true}).waitFor();
+    await page.getByRole("heading", {name:"Overview", exact:true}).waitFor();
   });
   await t.test("locking the dashboard returns to sign-in", async () => {
     await page.setViewportSize({ width: 1440, height: 1050 });

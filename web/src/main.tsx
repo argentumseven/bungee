@@ -35,7 +35,7 @@ import QRCode from "qrcode";
 import { version as releaseVersion } from "../../release.json";
 import "./style.css";
 import { api } from "./api";
-import { gpsTrail } from "./gpsTrail";
+import { gpsTrail, currentEstimate } from "./gpsTrail";
 import {
   PrivateMap,
   NetworkCard,
@@ -46,11 +46,15 @@ import { DeviceCare } from "./DeviceCare";
 import { AppearanceControl, useAppearance } from "./Appearance";
 import { RecoveryMessagePreview } from "./RecoveryMessagePreview";
 import { PasswordSettings } from "./PasswordSettings";
+import { RecoveryPhotos } from "./RecoveryPhotos";
 
 type Location = {
   latitude: number;
   longitude: number;
   accuracy: number;
+  source?: string;
+  samples?: number;
+  system_vpn?: boolean | null;
   observed_at: number;
 };
 type Device = {
@@ -68,6 +72,7 @@ type Device = {
   preshared_key: boolean;
   capabilities: string[];
   network?: NetworkObservation | null;
+  management?: { connection_health?: Health | null };
   telemetry: null | {
     battery: number;
     charging: boolean;
@@ -75,6 +80,7 @@ type Device = {
     device_owner: boolean;
   };
 };
+type Health = { since:number; reported_at:number; connection:string; system_vpn:boolean|null; signal_dbm:number|null; attempts:number; succeeded:number; last_rtt_ms:number|null; mean_rtt_ms:number; jitter_ms:number };
 type Command = {
   id: string;
   device_id: string;
@@ -124,6 +130,8 @@ function App() {
     [events, setEvents] = useState<Event[]>([]),
     [selected, setSelected] = useState(""),
     [page, setPage] = useState("Overview");
+  const [devicesExpanded,setDevicesExpanded]=useState(true);
+  const [trackingTab,setTrackingTab]=useState("Current estimate");
   const [modal, setModal] = useState<
       "enroll" | "message" | "revoke" | "clear_location" | "purge_binding" | "help" | null
     >(null),
@@ -164,6 +172,8 @@ function App() {
       setCommands([]);
       setEvents([]);
       setSelected("");
+      setPage("Overview");
+      setTrackingTab("Current estimate");
       setModal(null);
       setClearTarget(null);
       setBindingTarget(null);
@@ -395,22 +405,25 @@ function App() {
             { name: "Overview", icon: House },
             { name: "Devices", icon: Smartphone },
             { name: "Device care", icon: ShieldCheck },
-            { name: "History", icon: History },
+            { name: "Tracking", icon: Compass },
+            { name: "Tunnels", icon: Radio },
             { name: "Activity", icon: Activity },
             { name: "Settings", icon: Settings },
           ].map(({ name, icon: Icon }) => (
-            <button
+            <React.Fragment key={name}><button
               key={name}
               className={page === name ? "nav-item active" : "nav-item"}
-              onClick={() => setPage(name)}
+              aria-expanded={name==="Devices"?devicesExpanded:undefined}
+              onClick={() => { if (name === "Devices" && page === "Devices") setDevicesExpanded(v=>!v); else {setPage(name); if(name==="Devices") setDevicesExpanded(true);} }}
             >
               <Icon size={19} />
-              {name}
+              {name}{name==="Devices" && <ChevronRight size={14} style={{transform:devicesExpanded?"rotate(90deg)":undefined}}/>}
               {name === "Devices" && (
                 <span className="nav-count">{active.length}</span>
               )}
-            </button>
+            </button>{name==="Devices" && devicesExpanded && <div className="nav-phones" aria-label="Paired phones">{active.slice(0,5).map(d=><button key={d.id} className={page==="Devices" && device?.id===d.id ? "nav-item active":"nav-item"} onClick={()=>{setSelected(d.id);setPage("Devices");}}><i className={`status-dot ${online(d)?"":"offline"}`} />{d.name}</button>)}</div>}</React.Fragment>
           ))}
+
         </nav>
         <div className="sidebar-bottom">
           <div className="privacy-note">
@@ -453,7 +466,7 @@ function App() {
           <div className="top-status">
             <AppearanceControl {...appearance} />
             <i className="status-dot" />
-            Self-hosted<span className="avatar">H</span>
+            Self-hosted
           </div>
         </header>
         <main className="main">
@@ -461,27 +474,17 @@ function App() {
             <div>
               <div className="eyebrow">HOUSEHOLD PHONES</div>
               <h1>
-                {page === "Overview"
-                  ? "Overview"
-                  : page === "Devices"
-                    ? "Devices"
-                    : page === "Device care"
-                      ? "Device care"
-                      : page === "History"
-                        ? "History"
-                        : page === "Activity"
-                          ? "Activity"
-                          : "Settings"}
+                {page === "Devices" && device ? device.name : page}
               </h1>
               <p>
                 {page === "Overview"
-                  ? "Last contact, saved locations and recovery commands."
+                  ? "All household phones, their battery and last reported connection."
                   : page === "Devices"
-                    ? "Manage the phones that belong to your household."
+                    ? "Recovery controls and tasks for this phone."
                     : page === "Device care"
                       ? "Lost mode, theft photos and the phone’s last reported settings."
-                      : page === "History"
-                        ? "Search saved GPS locations, IP observations and check-ins."
+                      : page === "Tracking"
+                        ? "Current estimates, movement history, network locations and recovery photos."
                         : page === "Activity"
                           ? "Enrollment, administrator access and command events."
                           : "Connection, permissions and data retention."}
@@ -507,102 +510,20 @@ function App() {
               {error} <button onClick={load}>Retry</button>
             </div>
           )}
-          {["Overview", "Devices"].includes(page) && (
+          {page === "Overview" && <section className="phone-overview" aria-label="Your devices">
+            {active.length===0 && <section className="panel care-card"><h2>No paired phones</h2><p>Add a device and scan its invitation in Bungee.</p></section>}
+            {active.map(d=><button className="panel phone-card" key={d.id} onClick={()=>{setSelected(d.id);setPage("Devices");}}>
+              <Smartphone size={26}/><h2>{d.name}</h2><strong><i className={`status-dot ${online(d)?"":"offline"}`}/>{!d.enrolled?"Awaiting enrollment":online(d)?"Connected":"Offline"}</strong>
+              <p>Battery {d.telemetry ? `${d.telemetry.battery}%${d.telemetry.charging?" · charging":""}`:"not reported"}</p>
+              <p>{connectionLabel(d)}{d.management?.connection_health?.signal_dbm!=null?` · ${d.management.connection_health.signal_dbm} dBm`:" · signal strength unavailable"}</p>
+              <small>{d.name}: last authenticated contact {ago(d.last_contact??d.last_seen)}</small><span>Open recovery controls →</span>
+            </button>)}
+          </section>}
+          {page === "Devices" && (
             <>
-              <section className="stats">
-                <Stat
-                  icon={<Smartphone size={20} />}
-                  label="Household devices"
-                  value={String(active.length)}
-                  note="Paired to your home"
-                />
-                <Stat
-                  icon={<Radio size={20} />}
-                  label="Connected now"
-                  value={String(active.filter(online).length)}
-                  note="Authenticated contact in the last 2½ minutes"
-                  color="green"
-                />
-                <Stat
-                  icon={<ShieldCheck size={20} />}
-                  label="History storage"
-                  value="Local"
-                  note="No external map requests"
-                  color="accent"
-                />
-              </section>
-              <div className="dashboard-grid">
-                <section className="panel device-panel">
-                  <div className="panel-heading">
-                    <h2>
-                      Your devices{" "}
-                      <span className="count">{active.length}</span>
-                    </h2>
-                    <span className="subtle">HOUSEHOLD</span>
-                  </div>
-                  {active.length === 0 ? (
-                    <div className="empty-device">
-                      <div className="phone-illustration">
-                        <Smartphone size={57} strokeWidth={1.2} />
-                        <span>
-                          <ShieldCheck size={17} />
-                        </span>
-                      </div>
-                      <h3>No paired phones</h3>
-                      <p>
-                        Add a device, then scan its invitation in the Android app.
-                      </p>
-                      <button
-                        className="text-button"
-                        onClick={() => setModal("enroll")}
-                      >
-                        Pair a device
-                        <ArrowRight size={16} />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="device-list">
-                      {active.map((d) => (
-                        <button
-                          key={d.id}
-                          className={`device-row ${device?.id === d.id ? "selected" : ""}`}
-                          onClick={() => setSelected(d.id)}
-                        >
-                          <span className="device-icon">
-                            <Smartphone size={24} />
-                          </span>
-                          <span className="device-text">
-                            <strong>{d.name}</strong>
-                            <small>
-                              <i
-                                className={`status-dot ${online(d) ? "" : "offline"}`}
-                              />
-                              {!d.enrolled
-                                ? d.enrollment_state === "expired" ? "Invitation expired · reissue in Settings" : "Awaiting enrollment"
-                                : online(d)
-                                  ? "Connected"
-                                  : "Offline"}
-                              <span>·</span>
-                              {ago(d.last_contact ?? d.last_seen)}
-                            </small>
-                          </span>
-                          <span className="battery">
-                            <span
-                              title={`Battery from saved telemetry: ${ago(d.last_seen)}`}
-                            >
-                              {d.telemetry ? `${d.telemetry.battery}%` : "—"}
-                            </span>
-                            {d.telemetry?.charging && <Zap size={12} />}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  <div className="panel-footer">
-                    <LockKeyhole size={13} />
-                    Bungee traffic uses WireGuard to this server
-                  </div>
-                </section>
+              {active.length>1 && <label className="device-picker">Phone<select value={device?.id||""} onChange={e=>setSelected(e.target.value)}>{active.map(d=><option key={d.id} value={d.id}>{d.name}</option>)}</select></label>}
+              {device && <section className="panel care-card device-summary"><h2>{device.name} · {online(device)?"Connected":"Offline"}</h2><p>Last authenticated contact {ago(device.last_contact??device.last_seen)} · Battery {device.telemetry?`${device.telemetry.battery}%`:"not reported"} · {connectionLabel(device)}</p><button className="text-button" onClick={()=>setPage("Device care")}>Device care &amp; theft-photo status</button><button className="text-button" onClick={()=>setPage("Tracking")}>Tracking &amp; history</button></section>}
+              <div className="dashboard-grid device-detail-grid">
                 <section className="panel location-panel">
                   <div className="panel-heading">
                     <h2>
@@ -656,9 +577,12 @@ function App() {
                       {
                         kind: "ring",
                         name: "Sound alarm",
-                        desc: "Up to 30 sec · alarm volume",
+                        desc: "Up to 30 sec · maximum alarm volume",
                         icon: BellRing,
                       },
+                      {kind:"best_guess",name:"Best guess",desc:"Collect a longer GPS burst",icon:Compass},
+                      {kind:"ring_flash",name:"Alarm + flash",desc:"Sound and rear-camera flash",icon:BellRing},
+                      {kind:"flash",name:"Flash only",desc:"Find the phone visually",icon:Zap},
                       {
                         kind: "message",
                         name: "Leave a message",
@@ -693,11 +617,11 @@ function App() {
                       </button>
                     ))}
                   </div>
-                  <p className="alarm-note">Alarm loudness follows the phone’s alarm volume and interruption settings. Stop it here or from Bungee’s phone notification.</p>
+                  <p className="alarm-note">The updated phone app raises alarm volume temporarily and restores it afterward. Notification Stop requires unlock. Android interruption settings, system controls and hardware can still stop or suppress it.</p>
                   <details className="alarm-preview">
                     <summary>Preview alarm sound</summary>
                     <audio controls preload="none" src="/recovery-siren.wav" aria-label="Two-second siren preview" />
-                    <p>Your browser plays one two-second cycle. The phone repeats it for up to 30 seconds at its own alarm volume. Older APKs use the earlier alarm tone.</p>
+                    <p>Your browser plays one two-second cycle. The updated phone app repeats it for up to 30 seconds at maximum alarm volume, then restores the previous level. Older APKs use the earlier alarm tone.</p>
                   </details>
                   {device && (
                     <div className="secondary-actions">
@@ -730,7 +654,7 @@ function App() {
                   </div>
                   {commands
                     .filter((c) => !device || c.device_id === device.id)
-                    .slice(0, 4)
+                    .slice(0, 20)
                     .map((c) => (
                       <div className="command-row" key={c.id}>
                         <span
@@ -754,6 +678,9 @@ function App() {
                               " · Confirmed after reconnect"}
                           </small>
                         </div>
+                        {["pending","delivered"].includes(c.status) && <button className="text-button" disabled={busy} onClick={async()=>{
+                          setBusy(true); try {await api(`/devices/${c.device_id}/commands/${c.id}`,{method:"DELETE"});setToast(c.status==="delivered"?"Retries stopped. A command already offered may still complete.":"Command canceled before delivery.");await load();}catch(e){setError((e as Error).message);}finally{setBusy(false);}
+                        }}>{c.status==="pending"?"Cancel":"Stop retries"}</button>}
                         <span className={`command-status ${c.status}`}>
                           {c.delivery_uncertain
                             ? "Expired · unconfirmed"
@@ -773,8 +700,10 @@ function App() {
               </div>
             </>
           )}
-          {page === "History" && (
+          {page === "Tunnels" && <TunnelView devices={active}/>}
+          {page === "Tracking" && (
             <>
+              <div className="tracking-tabs" role="group" aria-label="Tracking views">{["Current estimate","GPS history","IP observations","Check-ins","Photos"].map(tab=><button key={tab} className={trackingTab===tab?"primary":"secondary"} onClick={()=>setTrackingTab(tab)}>{tab}</button>)}</div>
               <label htmlFor="history-device">Device</label>
               <select
                 id="history-device"
@@ -787,8 +716,8 @@ function App() {
                   </option>
                 ))}
               </select>
-              {device ? (
-                <HistoryView key={device.id} device={device} />
+              {trackingTab==="Photos" ? <RecoveryPhotos/> : device ? (
+                trackingTab==="Current estimate"?<CurrentTracking device={device}/>:<HistoryView key={`${device.id}-${trackingTab}`} device={device} initialKind={trackingTab==="IP observations"?"network":trackingTab==="Check-ins"?"state":"locations"} />
               ) : (
                 <section className="panel history-panel">
                   Pair a phone to begin saving history.
@@ -1240,10 +1169,11 @@ const localDateTime = (time: number) => {
     .toISOString()
     .slice(0, 16);
 };
-function HistoryView({ device }: { device: Device }) {
+function HistoryView({ device, initialKind="locations" }: { device: Device; initialKind?:string }) {
   const [from, setFrom] = useState(() => localDateTime(Date.now() - 86400000));
   const [to, setTo] = useState(() => localDateTime(Date.now() + 60000));
-  const [kind, setKind] = useState("locations");
+  const [kind, setKind] = useState(initialKind);
+  const [source,setSource]=useState("all");
   const [recurrence, setRecurrence] = useState("all"),
     [minutes, setMinutes] = useState(5),
     [daily, setDaily] = useState("09:00"),
@@ -1254,7 +1184,8 @@ function HistoryView({ device }: { device: Device }) {
   const [range, setRange] = useState(() => ({
     from: Math.floor((Date.now() - 86400000) / 1000),
     to: Math.floor(Date.now() / 1000) + 120,
-    kind: "locations",
+    kind: initialKind,
+    source: "all",
     recurrence: "all",
     minutes: 5,
     daily: "09:00",
@@ -1269,7 +1200,7 @@ function HistoryView({ device }: { device: Device }) {
   const [exportStarted, setExportStarted] = useState(false);
   const request = useRef<AbortController | null>(null);
   const endpoint = (before?: number | null) =>
-    `/devices/${device.id}/history?${new URLSearchParams({ from: String(range.from), to: String(range.to), kind: range.kind, limit: "200", ...(range.recurrence === "interval" ? { every: String(range.minutes * 60) } : range.recurrence === "daily" ? { daily: range.daily, timezone: range.timezone, tolerance: String(range.tolerance * 60) } : {}), ...(before ? { before: String(before) } : {}) })}`;
+    `/devices/${device.id}/history?${new URLSearchParams({ from: String(range.from), to: String(range.to), kind: range.kind, source: range.kind==="locations"?range.source:"all", limit: "200", ...(range.recurrence === "interval" ? { every: String(range.minutes * 60) } : range.recurrence === "daily" ? { daily: range.daily, timezone: range.timezone, tolerance: String(range.tolerance * 60) } : {}), ...(before ? { before: String(before) } : {}) })}`;
   useEffect(() => {
     const abort = new AbortController();
     request.current = abort;
@@ -1365,6 +1296,7 @@ function HistoryView({ device }: { device: Device }) {
             from: Math.floor(start),
             to: Math.floor(end),
             kind,
+            source:kind==="locations"?source:"all",
             recurrence,
             minutes,
             daily,
@@ -1408,6 +1340,7 @@ function HistoryView({ device }: { device: Device }) {
             <option value="state">Device check-ins</option>
           </select>
         </label>
+        {kind==="locations" && <label>Collection source<select aria-label="GPS collection source" value={source} onChange={e=>setSource(e.target.value)}><option value="all">All GPS</option><option value="passive">Passive samples</option><option value="homing">Requested homing</option><option value="haste">Lost mode · haste</option><option value="best_guess">Best-guess bursts</option></select></label>}
         <label>
           Show records
           <select
@@ -1628,7 +1561,7 @@ function HistoryView({ device }: { device: Device }) {
                   <>
                     <th>Observed</th>
                     <th>Coordinates</th>
-                    <th>Accuracy</th>
+                    <th>Uncertainty</th><th>Collection</th>
                     <th>Received</th>
                   </>
                 ) : range.kind === "network" ? (
@@ -1664,7 +1597,7 @@ function HistoryView({ device }: { device: Device }) {
                       <td>
                         {r.latitude!.toFixed(6)}, {r.longitude!.toFixed(6)}
                       </td>
-                      <td>±{Math.round(r.accuracy!)} m</td>
+                      <td>±{Math.round(r.accuracy!)} m</td><td>{(r.source||"passive").replaceAll("_"," ")} · {r.samples||1} samples{r.system_vpn&&<small className="vpn-note">System VPN · IP estimate uncertain</small>}</td>
                       <td>{new Date(r.received_at * 1000).toLocaleString()}</td>
                     </>
                   ) : range.kind === "network" ? (
@@ -1712,29 +1645,16 @@ function HistoryView({ device }: { device: Device }) {
     </section>
   );
 }
-function Stat({
-  icon,
-  label,
-  value,
-  note,
-  color = "blue",
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  note: string;
-  color?: string;
-}) {
-  return (
-    <div className="stat panel">
-      <div>
-        <span className={`stat-icon ${color}`}>{icon}</span>
-        <span className="stat-label">{label}</span>
-      </div>
-      <strong>{value}</strong>
-      <small>{note}</small>
-    </div>
-  );
+function connectionLabel(d:Device) { const h=d.management?.connection_health; return h?`${({wifi:"Wi-Fi",cellular:"Cellular",ethernet:"Ethernet",vpn:"System VPN",offline:"No network",other:"Other connection"} as Record<string,string>)[h.connection]||"Unknown"} · reported ${ago(h.reported_at)}`:"Connection type not yet reported"; }
+function TunnelView({devices}:{devices:Device[]}) {
+ return <section className="tunnel-grid">{devices.map(d=>{const h=d.management?.connection_health;return <section className="panel care-card" key={d.id}><h2>{d.name} · {online(d)?"Reachable":"No recent contact"}</h2><p>Overlay {d.address} · {connectionLabel(d)}</p><dl className="care-health"><div><dt>Last signed contact</dt><dd>{ago(d.last_contact??d.last_seen)}</dd></div><div><dt>Last API round trip</dt><dd>{h?.last_rtt_ms!=null?`${h.last_rtt_ms} ms`:"Not reported"}</dd></div><div><dt>Smoothed round trip / jitter</dt><dd>{h?`${h.mean_rtt_ms} / ${h.jitter_ms} ms`:"Not reported"}</dd></div><div><dt>API probes succeeded</dt><dd>{h&&h.attempts?`${h.succeeded}/${h.attempts} (${(h.succeeded/h.attempts*100).toFixed(1)}%)`:"Not reported"}</dd></div><div><dt>Signal strength</dt><dd>{h?.signal_dbm!=null?`${h.signal_dbm} dBm`:"Android did not provide it"}</dd></div></dl><p className="fine">Signed application probes over Bungee’s tunnel. Counts reset with the phone process{h?` · since ${new Date(h.since*1000).toLocaleString()}`:""}. These are not ICMP packet-loss measurements; the last report can be stale while offline.</p>{h?.system_vpn&&<p className="notice">System VPN reported: GeoIP may describe its exit. Satellite GPS is unaffected by VPN routing.</p>}</section>})}{devices.length===0&&<p>Pair a phone to see tunnel measurements.</p>}</section>;
+}
+function CurrentTracking({device}:{device:Device}) {
+ const [points,setPoints]=useState<Location[]>([]),[error,setError]=useState("");
+ useEffect(()=>{const abort=new AbortController();const load=()=>{const to=Math.floor(Date.now()/1000)+120;api<{records:Location[]}>(`/devices/${device.id}/history?from=${to-720}&to=${to}&kind=locations&limit=200`,{signal:abort.signal}).then(r=>setPoints(r.records)).catch(e=>{if(!abort.signal.aborted)setError(e.message);});};load();const timer=setInterval(load,15000);return()=>{abort.abort();clearInterval(timer);};},[device.id]);
+ const estimate=currentEstimate(points)||device.telemetry?.location;
+ const h=device.management?.connection_health;
+ return <section className="panel care-card"><h2>{device.name} · current best estimate</h2>{error&&<p role="alert">{error}</p>}<PrivateMap points={estimate?[estimate]:[]} selected={estimate} network={device.network} label={`${device.name} current estimate`}/>{estimate?<p>{estimate.latitude.toFixed(6)}, {estimate.longitude.toFixed(6)} · uncertainty ±{Math.round(estimate.accuracy??0)} m · observed {ago(estimate.observed_at??null)}{"samples" in estimate?` · ${estimate.samples} contributing samples`:""}</p>:<p>No saved GPS fix. Enable location sharing on the phone.</p>}<p className="fine">Recent stationary fixes use an accuracy-weighted average with an accuracy floor. Moving phones keep their latest position. Averaging reduces jitter; correlated GPS errors can still place the phone outside this estimate. Use Best guess on the device page to request a longer burst.</p>{h?.system_vpn&&<p className="notice">GeoIP confidence: low · system VPN reported. The IP area may be a VPN exit. VPN use does not reduce satellite GPS accuracy.</p>}</section>;
 }
 function LocationView({ device }: { device?: Device }) {
   const loc = device?.telemetry?.location;

@@ -5,6 +5,7 @@ import contextlib
 import ctypes
 import fcntl
 import hashlib
+import gzip
 import importlib.util
 import json
 import os
@@ -31,6 +32,7 @@ except ImportError:
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import secure_storage
 import tls_config
+import regional_maps
 
 HERE = Path(__file__).resolve().parent
 SOURCE = HERE.parent
@@ -85,6 +87,50 @@ def checksum(path):
     with Path(path).open('rb') as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b''): digest.update(block)
     return digest.hexdigest()
+
+
+def default_basemap():
+    for path in (HERE / 'basemap/world.mbtiles', SOURCE / 'basemap/world.mbtiles'):
+        if path.is_file() and not path.is_symlink():
+            expected = path.with_suffix('.mbtiles.sha256').read_text().split()[0]
+            if not re.fullmatch(r'[a-f0-9]{64}', expected) or checksum(path) != expected:
+                raise ValueError('Bundled basemap checksum failed; update the checkout before retrying')
+            return path
+    raise ValueError('Bundled basemap missing. Run this command from an updated source checkout')
+
+
+def seed_geoip(directory):
+    base = default_basemap().parent
+    manifest = read(base / 'geoip.json')
+    for version,name in (('ipv4','geoip.mmdb'),('ipv6','geoip-v6.mmdb')):
+        target = Path(directory) / name
+        if target.exists(): continue
+        source = base / f'dbip-city-{version}.mmdb.gz'
+        expected = manifest['assets'][source.name]
+        if checksum(source) != expected['sha256']: raise ValueError('Bundled GeoIP checksum failed')
+        temporary=target.with_name(target.name+'.'+secrets.token_hex(6))
+        try:
+            with gzip.open(source,'rb') as src, temporary.open('xb') as dst:
+                shutil.copyfileobj(src,dst,1024*1024)
+                dst.flush(); os.fsync(dst.fileno())
+            if temporary.stat().st_size > 256*1024**2 or checksum(temporary) != expected['uncompressed_sha256']:
+                raise ValueError('Bundled GeoIP expansion failed')
+            temporary.chmod(0o644); os.replace(temporary,target)
+        finally: temporary.unlink(missing_ok=True)
+
+
+def copy_public_file(source, target):
+    target = Path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(target.name + '.' + secrets.token_hex(6))
+    try:
+        with source.open('rb') as src, temporary.open('xb') as dst:
+            shutil.copyfileobj(src, dst)
+            dst.flush(); os.fsync(dst.fileno())
+        temporary.chmod(0o644)
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def version(value):
@@ -251,7 +297,11 @@ class Host:
         dataset = self.root / 'datasets' / config.get('geodata', 'empty')
         if config.get('geodata'):
             if not dataset.is_dir(): raise ValueError('Pinned dataset directory is missing; restore it before updating')
-        else: dataset.mkdir(parents=True, exist_ok=True, mode=0o755)
+        else:
+            dataset.mkdir(parents=True, exist_ok=True, mode=0o755)
+            if not (dataset / 'map.mbtiles').exists():
+                copy_public_file(default_basemap(), dataset / 'map.mbtiles')
+            seed_geoip(dataset)
         dataset.chmod(0o755)
         gen = secrets.token_hex(12)
         directory = self.root / 'generations' / gen
@@ -260,7 +310,7 @@ class Host:
         atomic(directory / 'release.json', metadata)
         atomic(directory / 'compose.json', compose(config, metadata['images'], self.root))
         return gen
-    def datasets(self, maps=None, geoip=None, clear_maps=False, clear_geoip=False):
+    def datasets(self, maps=None, geoip=None, clear_maps=False, clear_geoip=False, geoip_v6=None):
         self.recover()
         old = self.current()
         config = read(self.root / 'generations' / old / 'config.json')
@@ -269,13 +319,16 @@ class Host:
         directory.mkdir(parents=True, mode=0o755)
         directory.chmod(0o755)
         try:
-            for name, source, clear in (('map.mbtiles', maps, clear_maps), ('geoip.mmdb', geoip, clear_geoip)):
+            for name, source, clear in (('map.mbtiles', None if maps and Path(maps).suffix=='.pmtiles' else maps, clear_maps or bool(maps and Path(maps).suffix=='.pmtiles')), ('map.pmtiles', maps if maps and Path(maps).suffix=='.pmtiles' else None, clear_maps or bool(maps and Path(maps).suffix!='.pmtiles')), ('geoip.mmdb', geoip, clear_geoip), ('geoip-v6.mmdb', geoip_v6, clear_geoip or bool(geoip and not geoip_v6))):
                 if clear: continue
                 source = Path(source) if source else self.root / 'datasets' / config.get('geodata', 'empty') / name
-                if not source.exists() and not (maps if name == 'map.mbtiles' else geoip): continue
+                if not source.exists():
+                    explicit = maps if name in ('map.mbtiles','map.pmtiles') else geoip if name == 'geoip.mmdb' else None
+                    if explicit: raise ValueError('Requested dataset file does not exist')
+                    continue
                 if source.is_symlink() or not source.is_file(): raise ValueError('Datasets must be local regular files, not symlinks or URLs')
                 size = source.stat().st_size
-                if size == 0 or (name == 'geoip.mmdb' and size > 256 * 1024 * 1024): raise ValueError('Empty or oversized GeoIP dataset')
+                if size == 0 or (name.startswith('geoip') and size > 256 * 1024 * 1024): raise ValueError('Empty or oversized GeoIP dataset')
                 if shutil.disk_usage(self.root).free < size + 1024 ** 3: raise ValueError('Insufficient space for the new dataset plus 1 GiB')
                 target = directory / name
                 with source.open('rb') as src, target.open('xb') as dst:
@@ -287,7 +340,7 @@ class Host:
                 try: os.fsync(fd)
                 finally: os.close(fd)
             result = json.loads(self.engine.check_geodata(directory, old))
-            if any((directory / file).exists() != bool(result.get(key)) for file, key in (('map.mbtiles', 'maps'), ('geoip.mmdb', 'geoip'))):
+            if any((directory / file).exists() != bool(result.get(key)) for file, key in (('map.mbtiles', 'maps'), ('map.pmtiles', 'vector'), ('geoip.mmdb', 'geoip'))):
                 raise ValueError('Dataset validation did not confirm all supplied files')
             print('Validated offline data:', json.dumps(result))
             # A new immutable directory is pinned into this generation. Rollback keeps the old dataset.
@@ -493,7 +546,7 @@ def guided(existing=None):
     nets = field('Allowed internal administrator networks', ' '.join(c['admin_subnets']) if c.get('admin_subnets') else None, network.admin_networks)
     dns = field('Optional DNS resolver IP (type off to disable)', c.get('dns_upstream_ip', ''), lambda value: network.dns_upstream('' if value == 'off' else value))
     dns_port = field('DNS resolver port', c.get('dns_upstream_port', 53), network.port) if dns else 53
-    size = field('Encrypted storage capacity in GiB (new installations)', c.get('storage_size_gib', 8), storage_size)
+    size = field('Encrypted storage capacity in GiB (new installations)', c.get('storage_size_gib', 32), storage_size)
     channel = field('Update channel: stable or preview', c.get('channel', 'stable'), choice('stable', 'preview'))
     auto = field('Check daily for tested images in that channel? yes/no', 'yes' if c.get('auto_updates', True) else 'no', choice('yes', 'no'))
     return network.validate({**({'geodata': c['geodata']} if c.get('geodata') else {}), 'wg_port': wg, 'web_port': web, 'endpoint_ip': endpoint, 'bind_ip': bind, 'web_host': host, 'admin_subnets': nets, 'channel': channel, 'auto_updates': auto == 'yes', 'dns_upstream_ip': dns, 'dns_upstream_port': dns_port, 'storage_size_gib': size})
@@ -620,6 +673,13 @@ def systemd(root):
 def install_helpers(root):
     for source, target in ((Path(__file__), root / 'bungee-host.py'), (module_path, root / 'network_config.py'), (release_path, root / 'release.json'), (HERE / 'secure_storage.py', root / 'secure_storage.py'), (HERE / 'tls_config.py', root / 'tls_config.py')):
         atomic(target, source.read_text())
+    copy_public_file(HERE / 'regional_maps.py', root / 'regional_maps.py')
+    source = default_basemap()
+    for name in ('geoip.json','dbip-city-ipv4.mmdb.gz','dbip-city-ipv6.mmdb.gz'):
+        copy_public_file(source.parent / name,root / 'basemap' / name)
+    copy_public_file(source.parent / 'us.geojson', root / 'basemap/us.geojson')
+    copy_public_file(source, root / 'basemap/world.mbtiles')
+    atomic(root / 'basemap/world.mbtiles.sha256', source.with_suffix('.mbtiles.sha256').read_text())
 
 
 def build_images():
@@ -642,6 +702,53 @@ def rebuild(host):
     print('Local rebuild installed:', VERSION)
 
 
+def install_basemap(host):
+    host.recover()
+    config = read(host.root / 'generations' / host.current() / 'config.json')
+    existing = host.root / 'datasets' / config.get('geodata', 'empty') / 'map.mbtiles'
+    source = default_basemap()
+    if existing.exists():
+        if checksum(existing) == checksum(source):
+            print('The bundled world overview is already installed; no restart needed.')
+            return
+        raise ValueError('A different basemap is already installed and was preserved. Use datasets --maps to replace it explicitly')
+    host.datasets(maps=source)
+    print('Bundled world overview installed. Import a regional raster MBTiles archive for street-level detail.')
+
+
+def install_default_geodata(host):
+    host.recover()
+    config=read(host.root/'generations'/host.current()/'config.json')
+    current=host.root/'datasets'/config.get('geodata','empty')
+    maps=default_basemap() if not (current/'map.mbtiles').exists() and not (current/'map.pmtiles').exists() else None
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix='geoip-import-',dir=host.root/'datasets') as work:
+        geoip=None; geoip_v6=None
+        if not (current/'geoip.mmdb').exists():
+            seed_geoip(Path(work)); geoip=Path(work)/'geoip.mmdb'; geoip_v6=Path(work)/'geoip-v6.mmdb'
+        if maps or geoip: host.datasets(maps=maps,geoip=geoip,geoip_v6=geoip_v6)
+        else: print('Maps and GeoIP already installed; custom data preserved.')
+
+
+def install_us_maps(host):
+    host.recover()
+    config = read(host.root / 'generations' / host.current() / 'config.json')
+    current = host.root / 'datasets' / config.get('geodata', 'empty')
+    # This command is explicit, but never silently replaces an operator's custom dataset.
+    if (current / 'map.pmtiles').exists():
+        print('A street-map archive is already installed. Use datasets --maps for an explicit replacement.'); return
+    existing=current / 'map.mbtiles'
+    if existing.exists() and checksum(existing)!=checksum(default_basemap()):
+        raise ValueError('Custom map preserved; import a new archive explicitly with datasets --maps')
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix='us-import-',dir=host.root/'datasets') as work:
+        archive=Path(work)/'us.pmtiles'
+        metadata=regional_maps.acquire(host.root,default_basemap().parent/'us.geojson',archive)
+        host.datasets(maps=archive)
+        atomic(host.root/'datasets'/read(host.root/'generations'/host.current()/'config.json')['geodata']/'source.json',metadata)
+    print('US street map installed locally. Open Tracking in the dashboard.')
+
+
 def install(root, config, from_stdin=False):
     preflight(root, installing=True, config=config)
     images = build_images()
@@ -652,7 +759,7 @@ def install(root, config, from_stdin=False):
         del password
     if not verifier.startswith('$argon2id$'): raise ValueError('Server did not return an Argon2id verifier')
     run(['docker', 'run', '--rm', '--network', 'none', '--cap-drop', 'ALL', '--cap-add', 'NET_ADMIN', '--entrypoint', 'sh', images['gateway'], '-ec', 'ip link add bungee-check type wireguard; ip link delete bungee-check'])
-    secure_storage.provision(root, config.get('storage_size_gib', 8))
+    secure_storage.provision(root, config.get('storage_size_gib', 32))
     run(['age-keygen', '-o', secure_storage.KEY.parent / 'backup-identity'])
     (secure_storage.KEY.parent / 'backup-identity').chmod(0o600)
     with (root / 'host.lock').open('a') as lock:
@@ -682,6 +789,13 @@ def install(root, config, from_stdin=False):
             host.engine.no_restart(generation)
             host.engine.down(generation)
             raise RuntimeError('Installation did not finish; admission is closed and existing volumes are preserved. Diagnose with status/local logs, then recover')
+    try:
+        with (root / 'host.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            install_us_maps(host)
+    except Exception as error:
+        print('US street-map download did not complete:', error)
+        print('The server is running with its world overview and GeoIP. Retry: python3 /opt/bungee/bungee-host.py maps-us')
     print('Installed:', network.origin(config))
     fingerprint = hashlib.sha256(ssl.PEM_cert_to_DER_cert(certificate)).hexdigest().upper()
     print('Local CA SHA-256 fingerprint:', ':'.join(fingerprint[i:i+2] for i in range(0, len(fingerprint), 2)))
@@ -693,7 +807,7 @@ def install(root, config, from_stdin=False):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['install', 'configure', 'update', 'recover', 'status', 'datasets', 'uninstall', 'password', 'rebuild'])
+    parser.add_argument('command', choices=['install', 'configure', 'update', 'recover', 'status', 'datasets', 'basemap', 'geodata', 'maps-us', 'uninstall', 'password', 'rebuild'])
     parser.add_argument('--password-stdin', action='store_true', help='With install/password: read the new password from a dedicated stdin pipe')
     parser.add_argument('--root', type=Path, default=Path('/opt/bungee'))
     parser.add_argument('--config', type=Path, help='Explicit JSON answers for unattended installation/configuration')
@@ -702,7 +816,7 @@ if __name__ == '__main__':
     parser.add_argument('--yes', action='store_true', help='With uninstall: apply without an interactive confirmation')
     parser.add_argument('--start', action='store_true', help='With recover: explicitly start a stopped/unfinished installation')
     parser.add_argument('--manual', action='store_true', help='With update: explicitly check even if automatic checks are disabled')
-    parser.add_argument('--maps', type=Path, help='With datasets: local raster OpenStreetMap MBTiles file')
+    parser.add_argument('--maps', type=Path, help='With datasets: local raster MBTiles or vector PMTiles v3 archive')
     parser.add_argument('--geoip', type=Path, help='With datasets: local City MMDB file')
     parser.add_argument('--clear-maps', action='store_true', help='With datasets: remove the basemap from the active generation')
     parser.add_argument('--clear-geoip', action='store_true', help='With datasets: disable future GeoIP enrichment; saved history remains')
@@ -755,6 +869,12 @@ if __name__ == '__main__':
                     finally:
                         del password
                 elif args.command == 'rebuild': rebuild(host)
+                elif args.command == 'geodata': install_default_geodata(host)
+                elif args.command == 'maps-us':
+                    install_default_geodata(host)
+                    install_us_maps(host)
+                elif args.command == 'basemap':
+                    install_basemap(host)
                 elif args.command == 'update': host.update(manual=args.manual)
                 elif args.command == 'datasets': host.datasets(args.maps, args.geoip, args.clear_maps, args.clear_geoip)
                 elif args.command == 'configure': host.apply(CONFIG, host.metadata(host.current()))

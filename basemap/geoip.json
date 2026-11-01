@@ -1,0 +1,20 @@
+{
+  "provider": "DB-IP IP to City Lite",
+  "mirror": "sapics/ip-location-db",
+  "license": "CC-BY-4.0",
+  "acquired": "2026-11-01",
+  "assets": {
+    "dbip-city-ipv4.mmdb.gz": {
+      "source": "https://github.com/sapics/ip-location-db/releases/download/latest/dbip-city-ipv4.mmdb",
+      "uncompressed_sha256": "187cf7b9a928c555b483cb40a9b9fd2975b9f5a4003748064f40d8c451d17a21",
+      "sha256": "d9a068de39b277ae7d24cba24926fc4212a43a8326376c68d13ac5399fbbf68b",
+      "bytes": 30512637
+    },
+    "dbip-city-ipv6.mmdb.gz": {
+      "source": "https://github.com/sapics/ip-location-db/releases/download/latest/dbip-city-ipv6.mmdb",
+      "uncompressed_sha256": "d605f2416c5b1aa9a7ba84bd0fd0da671dcef3fac44db23eec869757ab480ec4",
+      "sha256": "28aa39a693633247a6c92809566a59358e7c6585d6915edfb17d67fe73e1b274",
+      "bytes": 30018217
+    }
+  }
+}

@@ -10,6 +10,7 @@ class FailedUnlockGate {
     private var previous = 0
     private var fired = false
     private val attempts = ArrayDeque<Long>()
+    val progress: Int get() = (previous - baseline).coerceIn(0, 3)
     fun reset(current: Int = 0) { baseline = current.coerceAtLeast(0); previous = baseline; fired = false }
     fun failed(count: Int, elapsed: Long): Boolean {
         if (count < 0 || elapsed < 0) return false

@@ -10,7 +10,7 @@ Bungee is a self-hosted device finder for Android 12+ and GrapheneOS. Pair house
 
 The Kotlin app connects through an app-contained WireGuard tunnel to a Rust server and web dashboard. Only Bungee traffic uses that tunnel; Android's VPN slot remains available. Phone records stay on your server until you erase them or revoke the device.
 
-**Version 1.1.4.** Physical GrapheneOS testing and an independent security audit are pending. See the [validation record](docs/VALIDATION.md) for completed checks and [security design](docs/SECURITY.md) for the trust model.
+**Version 1.1.5.** Physical GrapheneOS testing and an independent security audit are pending. See the [validation record](docs/VALIDATION.md) for completed checks and [security design](docs/SECURITY.md) for the trust model.
 
 ![Bungee dashboard in dark mode](docs/screenshots/dashboard.png)
 
@@ -34,7 +34,7 @@ The Kotlin app connects through an app-contained WireGuard tunnel to a Rust serv
 | Messages | Up to 240 characters in Android recovery notifications; lock-screen and heads-up illustrations in the dashboard; normal credential entry remains accessible |
 | Lost mode | Saved state survives outages, one lock attempt per revision when permitted, contact notification and more frequent check-ins |
 | Theft photos | One-time local approval, visible Camera2 foreground service, one front-camera attempt after three new eligible failed PIN/password entries while ready, five-minute/six-per-hour attempt limits, labelled test photos, EXIF removal and JPEGs up to 12 KiB |
-| Photo recovery | Encrypted three-photo queue, same-boot process recovery preserves failure counts/rate limits; optional boot/update restoration after first Android unlock through a brief startup screen and separately granted special access |
+| Photo recovery | RAM-only three-photo queue, same-boot process recovery preserves failure counts/rate limits; optional boot/update restoration after first Android unlock through a brief startup screen and separately granted special access |
 | Photo gallery | Signed uploads, authenticated paginated gallery, capture/receipt times, local-test labels and separate photo erasure; old erased generations cannot upload again |
 | Phone consent | QR or pasted invitation, separate GPS/command consent, commands off by default, visible sharing notification, optional restart after first unlock, background-location grant for automatic GPS recovery, authenticated unpairing |
 | Local recovery | Separate offline launcher independent of pairing keys, Compose and native transport; authenticated stop, saved stop across reboot/update, cleanup results, Android Settings links and explicit manual restart |
@@ -53,7 +53,7 @@ The Kotlin app connects through an app-contained WireGuard tunnel to a Rust serv
 | Server updates | Host systemd timer with Compose image replacement, immutable two-image bundles, staged downloads, admission closed during trials, coherent encrypted cold snapshots, failed-trial recovery and three retained snapshots |
 | Builds | ARM64/x86_64 APK, coordinated `release.json`, CI checks and checksums, operator-owned stable signing option, source and synthetic test fixtures |
 
-Bungee does not support device-owner/work-profile management, forced system DNS, app suspension, hidden launchers, lock-screen overlays, airplane-mode cycling, radio schedules, power-off/reboot/wipe, credential reset, arbitrary scripts or software deployment. Powered-off finding, a crowdsourced offline network, relay/NAT traversal, household roles/MFA and hardware attestation are also unavailable. Street-map and production GeoIP datasets are supplied separately.
+Bungee does not support device-owner/work-profile management, forced system DNS, app suspension, hidden launchers, lock-screen overlays, airplane-mode cycling, radio schedules, power-off/reboot/wipe, credential reset, arbitrary scripts or software deployment. Powered-off finding, a crowdsourced offline network, relay/NAT traversal, household roles/MFA and hardware attestation are also unavailable. Guided installs include a world overview and DB-IP Lite City data, then download a US street-map extract if storage and connectivity permit.
 
 ## Install the server
 
@@ -92,7 +92,11 @@ Revoking a device erases its saved records and removes tunnel access. Keep a mis
 
 ## Recovery controls
 
-**Sound alarm** plays for up to 30 seconds at Android's alarm volume. Do Not Disturb, routing and interruption settings can affect audibility. Stop it from the dashboard, the phone notification or local recovery. **Preview alarm sound** plays only in the browser.
+Overview shows all household phones and their last reported battery/network state. Click a phone or use the Devices submenu for its recovery controls and cancelable tasks. **Cancel** removes a queued task; **Stop retries** prevents redelivery of an offered task, which may already be running. A late receipt remains visible.
+
+**Tracking** separates the current weighted estimate, GPS history, IP observations, check-ins and household photos. Updated phones average fresh GPS samples; optional lost-mode haste samples roughly every 10 seconds with a shorter window. **Best guess** requests a longer GPS burst. GPS history filters passive, homing, haste and best-guess records before pagination/recurrence. Raw saved records stay available; estimates do not claim survey accuracy. A reported system VPN warns about GeoIP exit-location reliability, not satellite GPS quality. **Tunnels** shows signed API round trips, jitter and probe success since the phone process started, with last-report timestamps.
+
+**Sound alarm** plays for up to 30 seconds, temporarily maximizes Android’s alarm volume and restores the prior level. **Alarm + flash** and **Flash only** use the rear flashlight when the phone grants camera access. Do Not Disturb, routing and interruption settings can affect audibility. Stop it from the dashboard, the phone notification after unlocking, or local recovery. System/hardware controls can still silence or stop the app. **Preview alarm sound** plays only in the browser.
 
 Recovery messages use Android notifications. Android controls heads-up and lock-screen visibility; Bungee leaves credential entry accessible. The dashboard preview is an illustration:
 
@@ -100,7 +104,7 @@ Recovery messages use Android notifications. Android controls heads-up and lock-
 
 Enable **Automatic theft photos** on the phone before it is lost. Start sharing, approve commands, enable removable administration and grant camera/notification access. Choose **Enable theft photos** and authenticate once. While **Ready**, three new eligible failed PIN/password entries trigger one capture attempt. Biometric failures may not produce callbacks.
 
-For restoration after reboot or an app update, separately enable **Automatic recovery after reboot** and grant Android's **Display over other apps** access. After the first Android unlock, a brief startup screen restores the approved service and closes automatically. Keys and photos remain credential-encrypted until that first unlock. Force-stop, revoked permissions and OS restrictions can require manual attention. See [camera setup, limits and device checks](docs/RECOVERY_CONTROLS.md).
+For restoration after reboot or an app update, separately enable **Automatic recovery after reboot** and grant Android's **Display over other apps** access. After the first Android unlock, a brief startup screen restores the approved service and closes automatically. Pairing keys remain credential-encrypted until that first unlock. Unsent photos are RAM-only and disappear if the process exits. Force-stop, revoked permissions and OS restrictions can require manual attention. See [camera setup, limits and device checks](docs/RECOVERY_CONTROLS.md).
 
 ![Recovery gallery with a synthetic test image](docs/screenshots/recovery-photos.png)
 
@@ -112,7 +116,7 @@ See the [removal audit](docs/REMOVAL_AUDIT.md) for ownership, partial-pairing, u
 
 ## History and data handling
 
-**History** searches GPS, IP observations and check-ins by time range, interval or daily recurrence. CSV exports use the same filters and stream to the browser's Downloads panel, where they can be cancelled. Exports are plaintext sensitive records; store them on encrypted media. Lines between GPS samples show their order, not a measured continuous route.
+**Tracking** searches GPS, IP observations and check-ins by time range, interval or daily recurrence. CSV exports use the same filters and stream to the browser's Downloads panel, where they can be cancelled. Exports are plaintext sensitive records; store them on encrypted media. Lines between GPS samples show their order, not a measured continuous route.
 
 ![Daily history lookup](docs/screenshots/history-daily.png)
 

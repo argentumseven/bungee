@@ -12,9 +12,39 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{env, fs, net::IpAddr, path::PathBuf, sync::Mutex};
 
+pub async fn vector_archive(
+    State(app): State<App>,
+    request: axum::extract::Request,
+) -> ApiResult<axum::response::Response> {
+    require_admin(&app, request.headers())?;
+    let path = app
+        .geography
+        .pmtiles
+        .as_ref()
+        .ok_or(Error(StatusCode::NOT_FOUND, "No street map installed"))?;
+    // PMTiles uses bounded byte ranges, never a full-world response in memory.
+    let range = request
+        .headers()
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("bytes="))
+        .and_then(|v| v.split_once('-'))
+        .and_then(|(a, b)| Some((a.parse::<u64>().ok()?, b.parse::<u64>().ok()?)));
+    if !range.is_some_and(|(a, b)| b >= a && b - a < 16 * 1024 * 1024) {
+        return Err(bad("Use a single byte range up to 16 MiB"));
+    }
+    tower_http::services::ServeFile::new(path)
+        .try_call(request)
+        .await
+        .map(IntoResponse::into_response)
+        .map_err(|_| Error(StatusCode::INTERNAL_SERVER_ERROR, "Map archive unavailable"))
+}
+
 pub struct Geography {
     tiles: Option<Mutex<Connection>>,
     geoip: Option<Reader<Vec<u8>>>,
+    geoip_v6: Option<Reader<Vec<u8>>>,
+    pmtiles: Option<PathBuf>,
     pub status: Value,
 }
 impl Geography {
@@ -23,7 +53,36 @@ impl Geography {
         Self::open(root)
     }
     fn open(root: PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut status = json!({"maps":null,"geoip":null});
+        let mut status = json!({"maps":null,"geoip":null,"vector":null});
+        let pmtiles = if root.join("map.pmtiles").try_exists()? {
+            use std::io::Read;
+            let path = root.join("map.pmtiles");
+            let mut file = fs::File::open(&path)?;
+            let size = file.metadata()?.len();
+            let mut header = [0u8; 127];
+            file.read_exact(&mut header)?;
+            if &header[..8] != b"PMTiles\x03"
+                || header[99] != 1
+                || ![1, 2].contains(&header[97])
+                || ![1, 2].contains(&header[98])
+                || header[100] > header[101]
+                || header[101] > 22
+                || size > 25_000_000_000
+            {
+                return Err("Expected a vector MVT PMTiles v3 archive within 25 GB".into());
+            }
+            for at in [8, 24, 40, 56] {
+                let offset = u64::from_le_bytes(header[at..at + 8].try_into()?);
+                let length = u64::from_le_bytes(header[at + 8..at + 16].try_into()?);
+                if offset.checked_add(length).is_none_or(|end| end > size) {
+                    return Err("PMTiles section exceeds archive".into());
+                }
+            }
+            status["vector"] = json!({"min_zoom":header[100],"max_zoom":header[101],"format":"pmtiles","name":"Local street map","bytes":size});
+            Some(path)
+        } else {
+            None
+        };
         let tiles = if root.join("map.mbtiles").try_exists()? {
             let db = Connection::open_with_flags(
                 root.join("map.mbtiles"),
@@ -68,7 +127,7 @@ impl Geography {
             db.prepare(
                 "SELECT tile_data FROM tiles WHERE zoom_level=? AND tile_column=? AND tile_row=?",
             )?;
-            status["maps"] = json!({"min_zoom":min,"max_zoom":max,"name":metadata("name")?,"attribution":"© OpenStreetMap contributors","dataset_attribution":metadata("attribution")?,"format":format});
+            status["maps"] = json!({"min_zoom":min,"max_zoom":max,"name":metadata("name")?,"attribution":"© OpenStreetMap contributors","dataset_attribution":metadata("attribution")?,"format":format,"overview":metadata("bungee_map_kind")?.as_deref()==Some("overview")});
             Some(Mutex::new(db))
         } else {
             None
@@ -83,9 +142,19 @@ impl Geography {
         } else {
             None
         };
+        let geoip_v6 = if root.join("geoip-v6.mmdb").try_exists()? {
+            if fs::metadata(root.join("geoip-v6.mmdb"))?.len() > 256 * 1024 * 1024 {
+                return Err("GeoIP IPv6 dataset exceeds 256 MiB".into());
+            }
+            Some(Reader::open_readfile(root.join("geoip-v6.mmdb"))?)
+        } else {
+            None
+        };
         Ok(Self {
             tiles,
             geoip,
+            geoip_v6,
+            pmtiles,
             status,
         })
     }
@@ -93,7 +162,27 @@ impl Geography {
         if !public_ip(ip) {
             return None;
         }
-        let reader = self.geoip.as_ref()?;
+        let reader = if ip.is_ipv6() {
+            self.geoip_v6.as_ref().or(self.geoip.as_ref())
+        } else {
+            self.geoip.as_ref()
+        }?;
+        // The bundled DB-IP Lite mirror uses flat field names, unlike MaxMind City.
+        if let Some(record) = reader.lookup(ip).ok()?.decode::<Value>().ok()?
+            && record.get("country_code").is_some()
+        {
+            let number = |key| {
+                record
+                    .get(key)
+                    .and_then(Value::as_f64)
+                    .filter(|v| v.is_finite())
+            };
+            let latitude = number("latitude").filter(|v| (-90.0..=90.0).contains(v));
+            let longitude = number("longitude").filter(|v| (-180.0..=180.0).contains(v));
+            return Some(
+                json!({"latitude":latitude,"longitude":longitude,"accuracy_radius_km":null,"city":record.get("city"),"region":record.get("state1"),"country":record.get("country_code"),"database_type":format!("DBIP Lite · {}",reader.metadata().database_type),"database_build_epoch":reader.metadata().build_epoch}),
+            );
+        }
         let city = reader.lookup(ip).ok()?.decode::<geoip2::City>().ok()??;
         let lat = city
             .location
@@ -229,6 +318,27 @@ pub fn record(r: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bundled_overview_is_a_valid_global_offline_basemap() {
+        let root = std::env::temp_dir().join(format!("bungee-world-map-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        fs::copy(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../basemap/world.mbtiles"),
+            root.join("map.mbtiles"),
+        )
+        .unwrap();
+        {
+            let geography = Geography::open(root.clone()).unwrap();
+            assert_eq!(geography.status["maps"]["overview"], true);
+            assert_eq!(geography.status["maps"]["max_zoom"], 6);
+            let db = geography.tiles.as_ref().unwrap().lock().unwrap();
+            let count: i64 = db
+                .query_row("SELECT COUNT(*) FROM tiles", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(count, 5461);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn no_geoip_for_local_or_reserved_addresses() {
         for ip in [

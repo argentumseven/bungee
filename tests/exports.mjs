@@ -9,7 +9,7 @@ test("streamed history export: large data, filters, cancellation and authorizati
   const f=await fixture(t);
   const id="1b9426b2-3572-4000-bf90-b360b3bc5550";
   f.sql("INSERT INTO devices(id,name,wg_key,address,created,public_key) VALUES(?,?,'export-fixture-key','10.77.0.2',1,'fixture-signing-key')",[id,"Synthetic export fixture"]);
-  f.sql("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<500000) INSERT INTO location_history SELECT ?,x,x,1.0,2.0,3.0 FROM n",[id]);
+  f.sql("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<500000) INSERT INTO location_history(device_id,observed_at,received_at,latitude,longitude,accuracy) SELECT ?,x,x,1.0,2.0,3.0 FROM n",[id]);
   const path=`/api/devices/${id}/history.csv?from=0&to=600000`;
   const rowCount=async response=>{
     assert.equal(response.status,200);

@@ -150,6 +150,14 @@ pub fn commit(
     if epoch != Some(current.as_str()) {
         return Ok(None);
     }
+    let erased: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM erased_photos WHERE device_id=? AND photo_id=?)",
+        params![id, photo.id],
+        |row| row.get(0),
+    )?;
+    if erased {
+        return Ok(Some(photo.id.clone()));
+    }
     type Stored = (i64, u32, String, Vec<u8>);
     let existing: Option<Stored> = db.query_row("SELECT captured_at,failed_attempts,reason,jpeg FROM recovery_photos WHERE device_id=? AND photo_id=?", params![id,photo.id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
     if let Some((at, attempts, reason, stored)) = existing {
@@ -252,7 +260,74 @@ pub fn erase_in(db: &Connection, id: &str) -> ApiResult<()> {
         params![token(), id],
     )?;
     db.execute("DELETE FROM recovery_photos WHERE device_id=?", [id])?;
+    db.execute("DELETE FROM erased_photos WHERE device_id=?", [id])?;
     Ok(())
+}
+
+pub async fn erase_one(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path((id, photo)): Path<(String, String)>,
+) -> ApiResult<Json<Value>> {
+    require_admin(&app, &headers)?;
+    if uuid::Uuid::parse_str(&photo).is_err() {
+        return Err(bad("Invalid photo ID"));
+    }
+    let mut db = app.db.lock().unwrap();
+    let tx = db.transaction()?;
+    enrolled(&tx, &id)?;
+    tx.execute(
+        "INSERT OR IGNORE INTO erased_photos(device_id,photo_id) VALUES(?,?)",
+        params![id, photo],
+    )?;
+    tx.execute(
+        "DELETE FROM recovery_photos WHERE device_id=? AND photo_id=?",
+        params![id, photo],
+    )?;
+    store::audit(&tx, "photo.erased", Some(&id), "One recovery photo erased")?;
+    tx.commit()?;
+    Ok(Json(json!({"cleared":true})))
+}
+
+pub async fn list_all(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Query(page): Query<Page>,
+) -> ApiResult<Json<Value>> {
+    require_admin(&app, &headers)?;
+    if page.before.is_some_and(|value| value <= 0) {
+        return Err(bad("Invalid photo cursor"));
+    }
+    let db = app.db.lock().unwrap();
+    let mut q = db.prepare("SELECT p.sequence,p.photo_id,p.captured_at,p.received_at,p.failed_attempts,p.reason,d.id,d.name FROM recovery_photos p JOIN devices d ON d.id=p.device_id WHERE d.revoked=0 AND p.sequence<? ORDER BY p.sequence DESC LIMIT 20")?;
+    let rows = q.query_map([page.before.unwrap_or(i64::MAX)], |r| Ok(json!({"sequence":r.get::<_,i64>(0)?,"id":r.get::<_,String>(1)?,"captured_at":r.get::<_,i64>(2)?,"received_at":r.get::<_,i64>(3)?,"failed_attempts":r.get::<_,u32>(4)?,"reason":r.get::<_,String>(5)?,"device_id":r.get::<_,String>(6)?,"device_name":r.get::<_,String>(7)?})))?.collect::<Result<Vec<_>,_>>()?;
+    let next = if rows.len() == 20 {
+        rows.last().map(|row| row["sequence"].clone())
+    } else {
+        None
+    };
+    Ok(Json(json!({"photos":rows,"next_before":next})))
+}
+
+pub async fn erase_all(State(app): State<App>, headers: HeaderMap) -> ApiResult<Json<Value>> {
+    require_admin(&app, &headers)?;
+    let mut db = app.db.lock().unwrap();
+    let tx = db.transaction()?;
+    let ids = tx
+        .prepare("SELECT id FROM devices WHERE revoked=0")?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    for id in &ids {
+        erase_in(&tx, id)?;
+    }
+    store::audit(
+        &tx,
+        "photos.all_erased",
+        None,
+        "Recovery photos erased across devices; photo generations rotated",
+    )?;
+    tx.commit()?;
+    Ok(Json(json!({"cleared":true})))
 }
 pub async fn erase(
     State(app): State<App>,

@@ -67,7 +67,7 @@ func TestWireGuardRoundTripAndRequestBoundaries(t *testing.T) {
 			<-release
 			return
 		}
-		if r.URL.Path != "/v1/telemetry" || r.Method != "POST" || r.Header.Get("X-Bungee-Nonce") != "test-nonce" {
+		if (r.URL.Path != "/v1/telemetry" && r.URL.Path != "/v1/command-check") || r.Method != "POST" || r.Header.Get("X-Bungee-Nonce") != "test-nonce" {
 			t.Error("unexpected request")
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -87,6 +87,9 @@ func TestWireGuardRoundTripAndRequestBoundaries(t *testing.T) {
 	}
 	if !strings.Contains(result, `"status":200`) || !strings.Contains(result, `accepted`) {
 		t.Fatal(result)
+	}
+	if _, e = Exchange("/v1/command-check", `{}`, `{"X-Bungee-Nonce":"test-nonce"}`); e != nil {
+		t.Fatal("cancellation check could not traverse the fixed-home transport", e)
 	}
 	for _, path := range []string{"https://example.com/", "/v1/telemetry?redirect=evil", "/v1/../api/session", "/"} {
 		if _, e = Exchange(path, `{}`, `{}`); e == nil {

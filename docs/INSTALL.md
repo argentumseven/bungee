@@ -75,7 +75,7 @@ Example answers (replace documentation addresses):
   "admin_subnets": ["192.168.1.0/24"],
   "dns_upstream_ip": "",
   "dns_upstream_port": 53,
-  "storage_size_gib": 8,
+  "storage_size_gib": 32,
   "auto_updates": true,
   "channel": "stable"
 }
@@ -152,16 +152,35 @@ Encrypted archives are under `/opt/bungee/backups/<generation>/*.tar.age`; the s
 
 A host-stored key enables unattended boot. It protects a stolen data image/archive without its key; it does **not** protect against root compromise, a provider reading guest memory, or a full-host snapshot that contains the host key. Use a provider/hypervisor you trust, a patched minimal OS, SSH keys, restricted SSH/admin sources and encrypted host/backup media. Avoid hibernation and plaintext crash/memory dumps. Provider disk encryption alone does not hide data from that provider.
 
-## Upgrade from 1.1.4
+## Legacy plaintext-storage installations
 
-This changes the host/storage contract to version 2. The old host helper refuses incompatible releases; there is no silent conversion of its plaintext volumes. Preserve data and follow [the migration procedure](MIGRATION-1.1.4.md). Do not run an old Compose file against new paths, copy live SQLite files, or delete old volumes before encrypted recovery has been verified.
+The guided host uses storage contract 2. Current contract-2 installations update with the rebuild command above. Older plaintext-volume deployments need migration. The old host helper refuses incompatible releases; there is no silent conversion of its plaintext volumes. Preserve data and follow [the migration procedure](MIGRATION-1.1.4.md). Do not run an old Compose file against new paths, copy live SQLite files, or delete old volumes before encrypted recovery has been verified.
 
 `compose.yaml` and `.env.example` describe the two-container runtime for an **already provisioned** encrypted installation. Use the installer to create keys, certificates, directories and boot ordering; `docker compose up` alone does not provide these host safeguards.
 
 ## Offline maps and GeoIP
 
+Fresh guided installs seed a 7.7 MB Natural Earth world overview and bundled DB-IP Lite City data (IPv4/IPv6), then acquire a local US street-map extract. The storage prompt defaults to 32 GiB. Street-map acquisition checks the size of US tiles at zoom 15, then zoom 14 if needed; it refuses extracts above 25 GB or available encrypted capacity. The world overview stays usable if a download fails. No map provider is contacted while tracking a phone.
+
+For an existing installation, first update its runtime/helper from the current checkout:
+
 ```sh
-sudo python3 /opt/bungee/bungee-host.py datasets --maps /path/map.mbtiles --geoip /path/City.mmdb
+cd /usr/local/src/bungee
+git pull --ff-only origin main
+python3 scripts/bungee-host.py rebuild
+python3 /opt/bungee/bungee-host.py maps-us
 ```
 
-Only local raster MBTiles and City MMDB files are accepted. A new immutable dataset directory is validated offline before downtime and mounted read-only. Rollback keeps the previous dataset generation. See [GEOGRAPHY.md](GEOGRAPHY.md) for provenance, bounds and licensing.
+`maps-us` adds missing default GeoIP data and downloads/imports the US street map. It preserves custom maps and reports insufficient encrypted space before large downloads. It never resizes or replaces existing storage. To install only the bundled overview and GeoIP, without a street download:
+
+```sh
+python3 /opt/bungee/bungee-host.py geodata
+```
+
+Custom imports still work:
+
+```sh
+python3 /opt/bungee/bungee-host.py datasets --maps /path/map.pmtiles --geoip /path/City.mmdb
+```
+
+Local raster PNG/JPEG MBTiles, vector MVT PMTiles v3 and City MMDB files are accepted. Data is validated offline before downtime and mounted read-only. Rollback keeps the previous dataset generation. See [GEOGRAPHY.md](GEOGRAPHY.md) for provenance, bounds and licensing.

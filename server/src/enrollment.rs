@@ -132,6 +132,7 @@ pub async fn purge_binding(
             "state_history",
             "network_history",
             "recovery_photos",
+            "erased_photos",
             "dns_summary",
             "device_policies",
         ] {
@@ -234,6 +235,8 @@ fn issue(
                     "location_history",
                     "state_history",
                     "network_history",
+                    "recovery_photos",
+                    "erased_photos",
                     "dns_summary",
                     "device_policies",
                 ] {

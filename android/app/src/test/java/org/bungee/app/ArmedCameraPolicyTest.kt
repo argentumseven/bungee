@@ -48,6 +48,26 @@ class ArmedCameraPolicyTest {
         PhotoOutbox.acknowledge(queue, photos[2].getString("id")); assertEquals(2, queue.getJSONArray("records").length())
         assertEquals("local-session", queue.getString("session"))
     }
+    @Test fun memoryQueueSurvivesCameraSessionRestartButClearAndAckRemoveBytes() {
+        PendingPhotos.clear(); PendingPhotos.resume("before")
+        val captured = photo(); PendingPhotos.append(captured, "before")
+        val metadata=PendingPhotos.metadata().getJSONObject(0)
+        assertEquals(captured.getString("id"),metadata.getString("id")); assertFalse(metadata.has("jpeg"))
+        PendingPhotos.resume("after")
+        assertEquals("after", PendingPhotos.session())
+        assertNull(PendingPhotos.first("before"))
+        assertEquals(captured.toString(), PendingPhotos.first("after")!!.toString())
+        PendingPhotos.acknowledge(captured.getString("id"), "after")
+        assertNull(PendingPhotos.session()); assertEquals(0,PendingPhotos.report().first); assertEquals(0,PendingPhotos.counts.value.first)
+        PendingPhotos.append(photo(), "after"); PendingPhotos.clear()
+        assertNull(PendingPhotos.session()); assertEquals(0,PendingPhotos.report().first); assertEquals(0,PendingPhotos.counts.value.first)
+    }
+    @Test fun progressCountsOnlyNewFailuresAndResetsOnSuccessfulUnlock() {
+        val gate = FailedUnlockGate(); gate.reset(5)
+        gate.failed(7,0); assertEquals(2,gate.progress)
+        gate.failed(8,0); assertEquals(3,gate.progress)
+        gate.failed(0,1); assertEquals(0,gate.progress)
+    }
     @Test fun outboxRejectsOversizeAndMislabelledTests() {
         assertThrows(IllegalArgumentException::class.java) { PhotoOutbox.append(PhotoOutbox.empty("s"), photo().put("jpeg", "x".repeat(16_385))) }
         assertThrows(IllegalArgumentException::class.java) { PhotoOutbox.append(PhotoOutbox.empty("s"), photo(attempts = 2)) }

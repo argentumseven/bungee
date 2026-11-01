@@ -34,3 +34,19 @@ export function gpsTrail<T extends GpsPoint>(raw:readonly T[]):{points:T[];segme
  for(const p of points){const last=segments[segments.length-1];if(!last||!join(last[last.length-1],p))segments.push([p]);else last.push(p);}
  return {points,segments,ignored:raw.length-points.length};
 }
+
+/** Current stationary estimate uses at most five minutes; raw history stays untouched. */
+export function currentEstimate<T extends GpsPoint>(raw:readonly T[]):(GpsPoint & {samples:number;moving:boolean})|null {
+ const points=gpsTrail(raw).points;
+ const latest=points.at(-1); if(!latest?.observed_at)return null;
+ const recent=points.filter(p=>p.observed_at!>=latest.observed_at!-300);
+ if(recent.length===1)return {...latest,samples:1,moving:false};
+ if(distance(recent[0],latest)>Math.max(30,recent[0].accuracy!+latest.accuracy!))return {...latest,samples:1,moving:true};
+ const anchor=recent.reduce((a,b)=>recent.reduce((s,p)=>s+distance(a,p),0)<=recent.reduce((s,p)=>s+distance(b,p),0)?a:b);
+ const good=recent.filter(p=>distance(p,anchor)<=Math.max(30,2*(p.accuracy!+anchor.accuracy!)));
+ let x=0,y=0,z=0,total=0,radius=0;
+ for(const p of good){const w=1/Math.max(5,p.accuracy!)**2;total+=w;x+=Math.cos(rad(p.latitude))*Math.cos(rad(p.longitude))*w;y+=Math.cos(rad(p.latitude))*Math.sin(rad(p.longitude))*w;z+=Math.sin(rad(p.latitude))*w;radius+=p.accuracy!**2*w;}
+ const center={latitude:Math.atan2(z,Math.hypot(x,y))*180/Math.PI,longitude:Math.atan2(y,x)*180/Math.PI};
+ const spread=Math.sqrt(good.reduce((n,p)=>n+distance(center,p)**2,0)/good.length);
+ return {...center,accuracy:Math.max(5,spread,Math.sqrt(radius/total)),observed_at:latest.observed_at,samples:good.length,moving:false};
+}

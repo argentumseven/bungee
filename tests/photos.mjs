@@ -65,6 +65,25 @@ test("armed recovery photos: private storage, bounded input and erasure generati
     const late = await upload(body(photo(), oldEpoch)); assert.equal((await late.json()).accepted_photo, null); await empty();
     assert.equal((await upload(body(photo()))).status, 200);
   });
+  await t.test("single erasure drains retries without resurrecting images; household erasure covers every device", async () => {
+    const one = photo(); assert.equal((await upload(body(one))).status, 200);
+    assert.equal((await fetch(f.origin + `${path}/${one.id}`, {method:"DELETE",headers:{Origin:f.origin}})).status, 401);
+    assert.equal((await f.admin(`${path}/${one.id}`, "DELETE", undefined, {Origin:"https://example.invalid"})).status, 403);
+    assert.equal((await f.admin(`${path}/${one.id}`, "DELETE")).status, 200);
+    assert.equal((await f.admin(`${path}/${one.id}`)).status, 404);
+    const retry = await upload(body(one)); assert.equal((await retry.json()).accepted_photo, one.id);
+    assert.equal((await f.admin(`${path}/${one.id}`)).status, 404);
+    assert.equal((await upload(body(photo()))).status, 200);
+    const secondEpoch = (await (await second.request("/v1/commands", {})).json()).photo_epoch;
+    assert.equal((await second.request("/v1/telemetry", body(photo(),secondEpoch))).status, 200);
+    const all = await (await f.admin("/api/photos")).json();
+    assert.ok(all.photos.some(row => row.device_id === second.id && row.device_name));
+    assert.equal((await f.admin("/api/photos", "DELETE")).status, 200);
+    assert.deepEqual((await (await f.admin("/api/photos")).json()).photos, []);
+    const stale = await second.request("/v1/telemetry",body(photo(),secondEpoch));
+    assert.equal((await stale.json()).accepted_photo, null);
+    epoch = (await (await p.request("/v1/commands", {})).json()).photo_epoch;
+  });
   await t.test("concurrent upload and erasure leave no old-generation image", async () => {
     for (let i = 0; i < 5; i++) {
       const prepared = body(photo());

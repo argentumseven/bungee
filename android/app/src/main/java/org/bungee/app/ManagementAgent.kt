@@ -41,16 +41,17 @@ object ManagementAgent {
         val state = identity.state("management")
         val signals = identity.state("unlock")
         val attempts = if (identity.allowCommands) runCatching { dpm.currentFailedPasswordAttempts }.getOrNull() else null
-        // Retained photos can exist while the camera service is unavailable after reboot.
+        // Pending photos can exist while the camera service is temporarily unavailable.
         // Do not turn its fresh process-local counters into a false empty-queue report.
         val cameraReport = runCatching {
             val camera = ArmedCameraService.status.value
             val queue = if (LocalSafety.isCameraEnabled(context)) identity.photoQueueReport() else 0 to 0L
             JSONObject().put("armed", camera.armed).put("pending", queue.first).put("dropped", queue.second)
+                .put("failed_in_row", camera.failedInRow).put("queued", PendingPhotos.metadata())
                 .put("status", camera.detail.take(80)).put("reported_at", System.currentTimeMillis()/1000)
         }.getOrDefault(JSONObject.NULL) // A broken photo queue must not block ordinary reporting.
         return JSONObject().put("owner", role == ManagementRole.DEVICE_OWNER || role == ManagementRole.PROFILE_OWNER).put("consent", false)
-            .put("camera", cameraReport)
+            .put("camera", cameraReport).put("connection_health", ConnectionHealth.report(context))
             .put("delivery", identity.backlogReport().put("reported_at", System.currentTimeMillis()/1000).put("gps_access", TelemetryService.status.value.gpsAccess))
             .put("recovery_consent", identity.allowCommands && !LocalSafety.isStopped(context)).put("revision", state.optLong("revision", 0))
             .put("dns_active", false).put("always_on", role == ManagementRole.DEVICE_OWNER && runCatching { dpm.getAlwaysOnVpnPackage(admin(context)) == context.packageName }.getOrDefault(false))
@@ -94,7 +95,7 @@ object ManagementAgent {
         } else if (state.optBoolean("lost_mode_active")) {
             identity.recoveryMessage = null; context.getSystemService(NotificationManager::class.java).cancel(2)
         }
-        state.put("revision", revision).put("lost_mode_active", lost).put("errors", errors).put("policy", json)
+        state.put("revision", revision).put("lost_mode_active", lost).put("haste", lost && policy.haste).put("errors", errors).put("policy", json)
         if (state.toString() != previous) identity.saveState("management", state)
     }
     fun recoveryNotification(context: Context, message: String) {

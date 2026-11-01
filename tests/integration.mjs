@@ -297,7 +297,7 @@ test("live server: household enrollment, device signatures, commands, and revoca
     location: {
       latitude: 37.78,
       longitude: -122.42,
-      accuracy: 12,
+      accuracy: 12, source:"passive",samples:1,system_vpn:null,
       observed_at: Math.floor(Date.now() / 1000),
     },
     capabilities: pair().capabilities,

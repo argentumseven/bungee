@@ -23,7 +23,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import org.json.JSONObject
 import java.util.UUID
 
-data class ArmedCameraStatus(val armed: Boolean = false, val detail: String = "Disabled · enable theft photos once on this phone", val pending: Int = 0, val dropped: Long = 0)
+data class ArmedCameraStatus(val armed: Boolean = false, val detail: String = "Disabled · enable theft photos once on this phone", val pending: Int = 0, val dropped: Long = 0, val failedInRow: Int = 0)
 
 /** One local opt-in; visible starts and same-boot system restarts only. No boot/server camera starts. */
 class ArmedCameraService : Service() {
@@ -34,6 +34,7 @@ class ArmedCameraService : Service() {
     @Volatile private var session: String? = null
     private var captureJob: Job? = null
     private var captureManual = false
+    private var observedFailures: Int? = null
     override fun onBind(intent: Intent?) = null
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "DISARM") { runCatching { disarm(this) }; stopSelf(); return START_NOT_STICKY }
@@ -56,6 +57,7 @@ class ArmedCameraService : Service() {
                     identity = withContext(Dispatchers.IO) { Identity(this@ArmedCameraService) }
                     check(identity.enrolled && identity.allowCommands && identity.photoEpoch != null) { "Pair with the updated server and approve household commands first" }
                     val failures = getSystemService(DevicePolicyManager::class.java).currentFailedPasswordAttempts
+                    observedFailures = failures
                     val boot = android.provider.Settings.Global.getInt(contentResolver, android.provider.Settings.Global.BOOT_COUNT)
                     withContext(Dispatchers.IO) {
                         PrivacySends.fence.checked(stamp, { active === this@ArmedCameraService && enabled() }) {
@@ -80,6 +82,14 @@ class ArmedCameraService : Service() {
                     while (isActive) {
                         prerequisites(this@ArmedCameraService, requireUnlocked = false)
                         check(enabled()) { "Theft photos or household commands were disabled" }
+                        // Some OEMs delay the admin broadcast. Observe Android's
+                        // own counter as well; never infer biometric failures.
+                        val failuresNow = getSystemService(DevicePolicyManager::class.java).currentFailedPasswordAttempts
+                        if (observedFailures != failuresNow) {
+                            observedFailures = failuresNow
+                            if (failuresNow > 0) identity.saveState("unlock", JSONObject().put("failed", failuresNow).put("last_failed_at", System.currentTimeMillis()/1000))
+                            failed(failuresNow)
+                        }
                         delay(1000)
                     }
                 } catch (e: Exception) {
@@ -101,8 +111,8 @@ class ArmedCameraService : Service() {
         val stop = PendingIntent.getService(this, 10, Intent(this, ArmedCameraService::class.java).setAction("DISARM"), PendingIntent.FLAG_IMMUTABLE)
         val open = PendingIntent.getActivity(this, 11, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, "armed_camera").setSmallIcon(R.drawable.ic_bungee)
-            .setContentTitle(if (ready) "Bungee theft photos are ready" else "Starting Bungee camera protection")
-            .setContentText("Automatic front-camera attempt after 3 failed credential entries. Disarm to disable.")
+            .setContentTitle(if (ready) "Bungee camera is armed" else "Starting Bungee camera protection")
+            .setContentText("Waiting for 3 new failed PIN/password entries. Armed does not mean a photo was captured.")
             .setContentIntent(open).setVisibility(NotificationCompat.VISIBILITY_PUBLIC).setOngoing(true)
             .addAction(NotificationCompat.Action.Builder(0, "Disarm camera", stop).setAuthenticationRequired(true).build()).build()
     }
@@ -118,6 +128,7 @@ class ArmedCameraService : Service() {
     private fun failed(attempts: Int, manual: Boolean = false) {
         if (session == null || captureJob?.isActive == true) return
         val permitted = if (manual) gate.test(SystemClock.elapsedRealtime()) else gate.failed(attempts, SystemClock.elapsedRealtime())
+        status.value = status.value.copy(failedInRow = gate.progress)
         try { saveGate() } catch (_: Exception) { markUnavailable("Capture checkpoint could not be saved"); stopSelf(); return }
         if (!permitted) {
             if (manual) status.value = status.value.copy(detail = "Armed · capture rate limit; wait at least five minutes")
@@ -125,6 +136,7 @@ class ArmedCameraService : Service() {
         }
         val armedSession = session ?: return
         captureManual = manual
+        status.value = status.value.copy(detail = if (manual) "Capturing labelled test photo…" else "Capturing after failed credential entries…")
         captureJob = scope.launch {
             val stamp = PrivacySends.fence.stamp()
             val epoch = identity.photoEpoch
@@ -143,11 +155,15 @@ class ArmedCameraService : Service() {
                 val photo = JSONObject().put("id", UUID.randomUUID().toString()).put("captured_at", System.currentTimeMillis()/1000)
                     .put("failed_attempts", attempts).put("reason", if (manual) "local_test" else "failed_unlock").put("jpeg", Identity.encode(jpeg))
                 withContext(Dispatchers.IO) { identity.queuePhoto(photo, armedSession, epoch, stamp, allowed) }
-                status.value = status.value.copy(detail = "Armed · photo saved privately for your server")
+                status.value = status.value.copy(detail = "Photo captured · waiting in memory for upload")
                 refreshQueue(identity, armedSession)
+                TelemetryService.requestPhotoUpload()
             } catch (e: Exception) {
-                if (e is CancellationException && !currentCoroutineContext().isActive) throw e
-                if (session == armedSession) status.value = status.value.copy(detail = "Armed · last photo unavailable; no retry until a new credential-failure streak")
+                if (e is CancellationException && !currentCoroutineContext().isActive) {
+                    if (session == armedSession && enabled()) status.value = status.value.copy(detail="Capture canceled before completion · no new picture queued")
+                    throw e
+                }
+                if (session == armedSession) status.value = status.value.copy(detail = "Capture failed (${e.javaClass.simpleName}) · no photo to upload; try a labelled test while unlocked")
             } finally { ticket?.let { PrivacySends.fence.release(it) } }
         }
     }
@@ -224,6 +240,7 @@ class ArmedCameraService : Service() {
             }
         }
         fun discardPending(context: Context) = synchronized(PhotoOutbox.lock) {
+            PendingPhotos.clear()
             check(context.getSharedPreferences("identity", Context.MODE_PRIVATE).edit().remove("state_armed_photos").commit()) { "Pending photo cleanup failed; use Bungee recovery or Android security settings" }
         }
         private fun clearLease(context: Context) {
@@ -257,8 +274,12 @@ class ArmedCameraService : Service() {
                     val service = active
                     if (service?.session != null) {
                         // A local test's authentication callback can arrive late.
-                        if (!service.captureManual) service.captureJob?.cancel()
+                        if (!service.captureManual && service.captureJob?.isActive==true) {
+                            service.captureJob?.cancel()
+                            status.value=status.value.copy(detail="Capture canceled when the phone unlocked · try a labelled test while unlocked")
+                        }
                         service.gate.reset()
+                        status.value = status.value.copy(failedInRow = 0)
                         service.saveGate()
                     } else {
                         // A successful unlock can wake the receiver before Android restores

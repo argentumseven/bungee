@@ -49,7 +49,7 @@ class SetupTests(unittest.TestCase):
         self.assertGreater(manifest['android_version_code'], 0)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for source, target in [(host.HERE / 'bungee-host.py', 'bungee-host.py'), (host.module_path, 'network_config.py'), (host.release_path, 'release.json'), (host.HERE / 'secure_storage.py', 'secure_storage.py'), (host.HERE / 'tls_config.py', 'tls_config.py')]:
+            for source, target in [(host.HERE / 'bungee-host.py', 'bungee-host.py'), (host.module_path, 'network_config.py'), (host.release_path, 'release.json'), (host.HERE / 'secure_storage.py', 'secure_storage.py'), (host.HERE / 'tls_config.py', 'tls_config.py'), (host.HERE / 'regional_maps.py', 'regional_maps.py')]:
                 (root / target).write_text(source.read_text())
             script = "import importlib.util,sys; s=importlib.util.spec_from_file_location('installed',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.VERSION)"
             result = subprocess.check_output(['python3', '-c', script, str(root / 'bungee-host.py')], text=True)
@@ -230,7 +230,7 @@ class DatasetTests(unittest.TestCase):
     def test_dataset_import_is_validated_before_downtime_and_pins_read_only_generation(self):
         with tempfile.TemporaryDirectory() as directory:
             data = Path(directory) / 'City.mmdb'; data.write_bytes(b'fixture-public-data')
-            self.engine.check_geodata = lambda path, gen: json.dumps({'maps': None, 'geoip': {'database_type': 'fixture'}})
+            self.engine.check_geodata = lambda path, gen: json.dumps({'maps': {'name': 'Bundled world overview'}, 'geoip': {'database_type': 'fixture'}})
             previous = os.umask(0o077)
             try: self.host.datasets(geoip=data)
             finally: os.umask(previous)
@@ -252,7 +252,7 @@ class DatasetTests(unittest.TestCase):
     def test_failed_dataset_trial_keeps_old_dataset_binding(self):
         with tempfile.TemporaryDirectory() as directory:
             data = Path(directory) / 'City.mmdb'; data.write_bytes(b'fixture')
-            self.engine.check_geodata = lambda path, gen: json.dumps({'maps': None, 'geoip': {'database_type': 'fixture'}})
+            self.engine.check_geodata = lambda path, gen: json.dumps({'maps': {'name': 'Bundled world overview'}, 'geoip': {'database_type': 'fixture'}})
             self.engine.fail = 'healthy-new'
             with self.assertRaises(RuntimeError): self.host.datasets(geoip=data)
             self.assertEqual(self.host.current(), self.old)

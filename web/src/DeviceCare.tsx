@@ -20,6 +20,7 @@ type Policy = {
   require_strong_lock: boolean;
   blocked_apps: string[];
   lost_mode: boolean;
+  haste?:boolean;
   recovery_message: string;
 };
 type Report = {
@@ -42,7 +43,7 @@ type Report = {
   unlock_monitoring: boolean;
   failed_unlocks: number;
   last_failed_at: number | null;
-  camera?: { armed: boolean; pending: number; dropped: number; status: string; reported_at: number } | null;
+  camera?: { armed: boolean; pending: number; dropped: number; status: string; reported_at: number; failed_in_row?: number; queued?:{id:string;captured_at:number;reason:string}[] } | null;
   delivery?: null | {
     reported_at: number;
     queued_fixes: number;
@@ -215,9 +216,10 @@ export function DeviceCare({
                 label="Lost mode"
                 checked={draft.lost_mode}
                 disabled={!report?.recovery_consent || busy}
-                onChange={(v) => set("lost_mode", v)}
+                onChange={(v) => setDraft(old=>old?{...old,lost_mode:v,haste:v?old.haste:false}:old)}
                 note="Keep lost mode pending while offline. On reconnect, the phone attempts one lock per revision and shows your message if permissions allow."
               />
+              <Toggle label="Faster GPS (haste)" checked={!!draft.haste} disabled={!draft.lost_mode || !report?.recovery_consent || busy} onChange={v=>set("haste",v)} note="While lost mode is active, sample about every 10 seconds with a shorter averaging window. Uses more battery; precise location permission and local consent still apply."/>
               <label htmlFor="lost-contact">Recovery contact message</label>
               <textarea
                 id="lost-contact"
@@ -294,6 +296,7 @@ export function DeviceCare({
                   </div>
                   <h3 className="delivery-heading">Theft-photo protection</h3>
                   <p className="fine">{report.camera ? `${report.camera.armed ? "Armed at last report" : "Not ready at last report"} · ${time(report.camera.reported_at)}. ${report.camera.status}. Pending ${report.camera.pending}/3; discarded at capacity ${report.camera.dropped}.` : "Not reported. Check the app version and theft-photo settings on the phone."} Enable protection on the phone before it is lost. This server cannot enable it remotely.</p>
+                  {!!report.camera?.queued?.length && <ul className="fine">{report.camera.queued.map(photo=><li key={photo.id}>{photo.reason==="local_test"?"Labelled camera test":"Failed-entry capture"} · {time(photo.captured_at)} · awaiting upload at last report</li>)}</ul>}
                   <h3 className="delivery-heading">Delivery &amp; offline queue</h3>
                   {report.delivery ? (
                     <>
@@ -366,7 +369,7 @@ export function DeviceCare({
                       <dd>
                         {report.dns_active
                           ? "Configured on phone"
-                          : "Disabled for new deployments"}
+                          : "Unchanged · app traffic only"}
                       </dd>
                     </div>
                     <div>
@@ -381,7 +384,7 @@ export function DeviceCare({
                       <dt>Failed credential attempts</dt>
                       <dd>
                         {report.unlock_monitoring
-                          ? report.failed_unlocks
+                          ? (report.camera?.failed_in_row ?? report.failed_unlocks)
                           : "Unavailable"}
                       </dd>
                     </div>
@@ -402,12 +405,12 @@ export function DeviceCare({
                 </>
               )}
               <p className="fine">
-                The app signs these reports; hardware attestation is unavailable.
+                Failure streaks reset after a successful credential unlock. Fingerprint and face failures may not count. The app signs these reports; hardware attestation is unavailable.
                 Failed-credential reports require Android administration and
                 may exclude biometric attempts.
               </p>
               <div className="notice">
-                DNS summaries below come from earlier managed-DNS installations.
+                Bungee’s app-contained tunnel carries only its own API traffic; it does not route system DNS or other apps. Set your DNS resolver in the phone’s actual system VPN or Private DNS configuration. DNS summaries below come from earlier managed-DNS installations.
                 New installations leave system DNS unchanged. Summaries cannot
                 identify the requesting app or show queries that bypassed Bungee.
               </div>
@@ -548,6 +551,7 @@ function Toggle({
       </span>
       <input
         type="checkbox"
+        aria-label={label}
         checked={checked}
         disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}

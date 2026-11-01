@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { api } from "./api";
 import { gpsTrail } from "./gpsTrail";
 
+const VectorMap=lazy(()=>import("./VectorMap"));
 export type GeoIP = {
   latitude: number | null;
   longitude: number | null;
@@ -28,11 +29,13 @@ type Point = {
   observed_at?: number;
 };
 type Geography = {
+  vector?:null|{min_zoom:number;max_zoom:number;format:string};
   maps: null | {
     min_zoom: number;
     max_zoom: number;
     name: string | null;
     dataset_attribution: string | null;
+    overview?: boolean;
   };
   geoip: null | { database_type: string; build_epoch: number };
 };
@@ -71,7 +74,7 @@ export function PrivateMap({
     return () => abort.abort();
   }, []);
   useEffect(() => {
-    if (!container.current || !status) return;
+    if (!container.current || !status || status.vector) return;
     const m = L.map(container.current, {
       attributionControl: false,
       scrollWheelZoom: false,
@@ -157,6 +160,7 @@ export function PrivateMap({
     };
     // Dataset or observation changes replace the map; unrelated dashboard polls do not reset the view.
   }, [status, signature]);
+  if(status?.vector)return <Suspense fallback={<p>Loading local street map…</p>}><VectorMap points={points} selected={selected} network={network} label={label}/></Suspense>;
   return (
     <div className="private-map-wrap">
       <div
@@ -192,9 +196,12 @@ export function PrivateMap({
               ? "No local basemap installed · coordinates remain available"
               : missing
                 ? "Some tiles are outside local coverage · no external fallback"
+                : status.maps.overview
+                  ? "Local world overview · install a regional basemap for street detail"
                 : `Local basemap · ${status.maps.name || "OpenStreetMap"} · no provider requests`)}
       </div>
       <div className="map-attribution">
+        {status?.maps?.overview ? <span>Natural Earth · public domain</span> : <>
         ©{" "}
         <a
           href="https://www.openstreetmap.org/copyright"
@@ -206,6 +213,7 @@ export function PrivateMap({
         {status?.maps?.dataset_attribution && (
           <span> · {status.maps.dataset_attribution}</span>
         )}
+        </>}
       </div>
     </div>
   );

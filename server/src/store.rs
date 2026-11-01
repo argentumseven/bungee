@@ -63,6 +63,33 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
             [],
         )?;
     }
+    for (name, definition) in [
+        ("canceled_at", "INTEGER"),
+        ("canceled_after_offer", "INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        if !command_columns.iter().any(|c| c == name) {
+            tx.execute(
+                &format!("ALTER TABLE commands ADD COLUMN {name} {definition}"),
+                [],
+            )?;
+        }
+    }
+    let location_columns = tx
+        .prepare("PRAGMA table_info(location_history)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    for (name, definition) in [
+        ("source", "TEXT NOT NULL DEFAULT 'passive'"),
+        ("samples", "INTEGER NOT NULL DEFAULT 1"),
+        ("system_vpn", "INTEGER"),
+    ] {
+        if !location_columns.iter().any(|c| c == name) {
+            tx.execute(
+                &format!("ALTER TABLE location_history ADD COLUMN {name} {definition}"),
+                [],
+            )?;
+        }
+    }
     // Upgrade the initial schema without losing an offline phone's existing fix.
     let columns = tx
         .prepare("PRAGMA table_info(devices)")?
@@ -95,6 +122,7 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
         UNIQUE(device_id,photo_id));
         CREATE INDEX IF NOT EXISTS recovery_photos_device_sequence ON recovery_photos(device_id,sequence);
         CREATE INDEX IF NOT EXISTS recovery_photos_device_received ON recovery_photos(device_id,received_at);")?;
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS erased_photos(device_id TEXT NOT NULL REFERENCES devices(id),photo_id TEXT NOT NULL,PRIMARY KEY(device_id,photo_id));")?;
     // Opaque generations never depend on handset clocks. Preserve them across restarts.
     tx.execute(
         "UPDATE devices SET gps_epoch=lower(hex(randomblob(32))) WHERE gps_epoch=''",
@@ -142,7 +170,7 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
     )?;
     if !history_migrated {
         tx.execute(
-            "INSERT OR IGNORE INTO location_history
+            "INSERT OR IGNORE INTO location_history(device_id,observed_at,received_at,latitude,longitude,accuracy)
             SELECT id,json_extract(last_location,'$.observed_at'),COALESCE(last_seen,created),
               json_extract(last_location,'$.latitude'),json_extract(last_location,'$.longitude'),
               json_extract(last_location,'$.accuracy') FROM devices

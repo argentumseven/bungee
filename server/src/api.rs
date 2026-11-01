@@ -191,8 +191,8 @@ pub async fn devices(State(app): State<App>, headers: HeaderMap) -> ApiResult<Js
         "preshared_key":r.get::<_,bool>(10)?,
         "management":r.get::<_,Option<String>>(11)?.and_then(|s|serde_json::from_str::<Value>(&s).ok()),
     }))})?.collect::<Result<Vec<_>,_>>()?;
-    let mut q=db.prepare("SELECT id,device_id,kind,created,expires,status,result,receipt_received_at FROM commands ORDER BY created DESC LIMIT 50")?;
-    let commands=q.query_map([],|r| Ok(json!({"id":r.get::<_,String>(0)?,"device_id":r.get::<_,String>(1)?,"kind":r.get::<_,String>(2)?,"created":r.get::<_,i64>(3)?,"expires":r.get::<_,i64>(4)?,"status":if r.get::<_,i64>(4)?<now() && ["pending","delivered"].contains(&r.get::<_,String>(5)?.as_str()) {"expired".to_owned()} else {r.get(5)?},"result":r.get::<_,Option<String>>(6)?,"receipt_received_at":r.get::<_,Option<i64>>(7)?,"delivery_uncertain":r.get::<_,String>(5)?=="delivered" && r.get::<_,i64>(4)?<now()})))?.collect::<Result<Vec<_>,_>>()?;
+    let mut q=db.prepare("SELECT id,device_id,kind,created,expires,status,result,receipt_received_at,canceled_at,canceled_after_offer FROM commands ORDER BY created DESC LIMIT 50")?;
+    let commands=q.query_map([],|r| Ok(json!({"id":r.get::<_,String>(0)?,"device_id":r.get::<_,String>(1)?,"kind":r.get::<_,String>(2)?,"created":r.get::<_,i64>(3)?,"expires":r.get::<_,i64>(4)?,"status":if r.get::<_,i64>(4)?<now() && ["pending","delivered"].contains(&r.get::<_,String>(5)?.as_str()) {"expired".to_owned()} else {r.get(5)?},"result":r.get::<_,Option<String>>(6)?,"receipt_received_at":r.get::<_,Option<i64>>(7)?,"canceled_at":r.get::<_,Option<i64>>(8)?,"canceled_after_offer":r.get::<_,bool>(9)?,"delivery_uncertain":r.get::<_,String>(5)?=="delivered" && r.get::<_,i64>(4)?<now()})))?.collect::<Result<Vec<_>,_>>()?;
     Ok(Json(
         json!({"devices":rows,"commands":commands,"server_time":now()}),
     ))
@@ -208,7 +208,10 @@ pub struct Pair {
 }
 const CAPABILITIES: &[&str] = &[
     "locate",
+    "best_guess",
     "ring",
+    "ring_flash",
+    "flash",
     "stop_ringing",
     "message",
     "clear_message",
@@ -303,6 +306,18 @@ pub struct Location {
     longitude: f64,
     accuracy: f64,
     observed_at: i64,
+    #[serde(default = "passive_source")]
+    source: String,
+    #[serde(default = "one_sample")]
+    samples: u32,
+    #[serde(default)]
+    system_vpn: Option<bool>,
+}
+fn passive_source() -> String {
+    "passive".into()
+}
+fn one_sample() -> u32 {
+    1
 }
 pub async fn telemetry(
     State(app): State<App>,
@@ -333,6 +348,8 @@ fn commit_telemetry(app: &App, id: &str, mut input: Telemetry) -> ApiResult<Json
             || !(0.0..=100000.0).contains(&l.accuracy)
             || l.observed_at > now() + 120
             || l.observed_at <= 0
+            || !["passive", "homing", "haste", "best_guess"].contains(&l.source.as_str())
+            || !(1..=120).contains(&l.samples)
         {
             return Err(bad("Invalid location values or timestamp"));
         }
@@ -367,7 +384,7 @@ fn commit_telemetry(app: &App, id: &str, mut input: Telemetry) -> ApiResult<Json
         })?;
     if let Some(command) = &input.locate_command {
         let authorized: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM commands WHERE id=? AND device_id=? AND kind='locate' AND status='delivered' AND expires>?)",
+            "SELECT EXISTS(SELECT 1 FROM commands WHERE id=? AND device_id=? AND kind IN ('locate','best_guess') AND status='delivered' AND expires>?)",
             params![command,id,now()], |r| r.get(0))?;
         if !authorized || input.location.is_none() || !input.locations.is_empty() {
             return Err(Error(
@@ -394,8 +411,8 @@ fn commit_telemetry(app: &App, id: &str, mut input: Telemetry) -> ApiResult<Json
     }
     for fix in fixes.into_iter().filter(|_| gps_accepted) {
         // Keep backfilled points in history without moving the last-known point backwards.
-        tx.execute("INSERT OR IGNORE INTO location_history(device_id,observed_at,received_at,latitude,longitude,accuracy) VALUES(?,?,?,?,?,?)",
-            params![id,fix.observed_at,received,fix.latitude,fix.longitude,fix.accuracy])?;
+        tx.execute("INSERT OR IGNORE INTO location_history(device_id,observed_at,received_at,latitude,longitude,accuracy,source,samples,system_vpn) VALUES(?,?,?,?,?,?,?,?,?)",
+            params![id,fix.observed_at,received,fix.latitude,fix.longitude,fix.accuracy,fix.source,fix.samples,fix.system_vpn])?;
         let matches: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM location_history WHERE device_id=? AND observed_at=? AND latitude=? AND longitude=? AND accuracy=?)",
             params![id,fix.observed_at,fix.latitude,fix.longitude,fix.accuracy], |r| r.get(0))?;
         if matches {
@@ -549,6 +566,60 @@ pub async fn command(
         json!({"id":cmd,"status":"pending","expires":now()+300}),
     ))
 }
+pub async fn cancel_command(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path((id, command)): Path<(String, String)>,
+) -> ApiResult<Json<Value>> {
+    require_admin(&app, &headers)?;
+    let mut db = app.db.lock().unwrap();
+    let tx = db.transaction()?;
+    let row: Option<String> = tx
+        .query_row(
+            "SELECT status FROM commands WHERE id=? AND device_id=?",
+            params![command, id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let status = row.ok_or(Error(StatusCode::NOT_FOUND, "Command not found"))?;
+    if status == "canceled" {
+        return Ok(Json(json!({"canceled":true})));
+    }
+    if !["pending", "delivered"].contains(&status.as_str()) {
+        return Err(Error(StatusCode::CONFLICT, "This command already finished"));
+    }
+    let offered = status == "delivered";
+    tx.execute("UPDATE commands SET status='canceled',canceled_at=?,canceled_after_offer=?,result=? WHERE id=? AND device_id=?",params![now(),offered,if offered {"Retries stopped; an already offered command may still complete"} else {"Canceled before delivery"},command,id])?;
+    store::audit(
+        &tx,
+        "command.canceled",
+        Some(&id),
+        if offered {
+            "Retries stopped after offer"
+        } else {
+            "Canceled before offer"
+        },
+    )?;
+    tx.commit()?;
+    Ok(Json(json!({"canceled":true,"already_offered":offered})))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommandCheck {
+    id: String,
+}
+pub async fn check_command(
+    State(app): State<App>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResult<Json<Value>> {
+    let id = verify_device(&app, &headers, "/v1/command-check", &body)?;
+    let input: CommandCheck =
+        serde_json::from_slice(&body).map_err(|_| bad("Invalid command check"))?;
+    let db = app.db.lock().unwrap();
+    let allowed: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM commands WHERE id=? AND device_id=? AND status='delivered' AND expires>?)",params![input.id,id,now()],|r|r.get(0))?;
+    Ok(Json(json!({"allowed":allowed,"server_time":now()})))
+}
 pub async fn poll(
     State(app): State<App>,
     headers: HeaderMap,
@@ -611,6 +682,14 @@ pub async fn ack(
     let disposition = match row {
         None => "unknown_command",
         Some((status, result, created, expires, kind)) => {
+            if status == "canceled" {
+                // Settle the durable phone receipt, while preserving the cancellation.
+                // Work already offered may have run; keep its actual result visible.
+                db.execute("UPDATE commands SET receipt_received_at=?,result=? WHERE id=? AND device_id=? AND canceled_after_offer=1",params![received,format!("Canceled; phone later reported {}: {}",input.status,input.result),input.id,id])?;
+                return Ok(Json(
+                    json!({"accepted":false,"settled":true,"receipt_status":"canceled","server_time":received}),
+                ));
+            }
             let offered = status == "delivered"
                 || (status == "accepted" && kind == "reboot" && input.status == "failed");
             if !offered && status != "pending" {
@@ -667,6 +746,7 @@ pub async fn revoke(
     tx.execute("DELETE FROM state_history WHERE device_id=?", [&id])?;
     tx.execute("DELETE FROM network_history WHERE device_id=?", [&id])?;
     tx.execute("DELETE FROM recovery_photos WHERE device_id=?", [&id])?;
+    tx.execute("DELETE FROM erased_photos WHERE device_id=?", [&id])?;
     tx.execute("DELETE FROM dns_summary WHERE device_id=?", [&id])?;
     tx.execute("DELETE FROM device_policies WHERE device_id=?", [&id])?;
     store::audit(

@@ -2,11 +2,13 @@
 
 ## Alarm
 
-**Sound alarm** plays the bundled rising/falling siren for up to 30 seconds using Android's alarm audio stream. It follows the phone's alarm volume, routing and interruption settings, including Do Not Disturb. A muted stream or audio failure can make it inaudible.
+**Sound alarm** plays the bundled rising/falling siren for up to 30 seconds using Android's alarm audio stream. It saves the current alarm-stream volume, raises it to maximum for playback, and restores it on completion, error or stop. A recovery checkpoint also restores volume on the next service launch after an interrupted process. Routing and interruption settings, including Do Not Disturb, still apply. A muted stream or audio failure can make it inaudible.
 
-Stop it from the dashboard, **Stop sound** in the phone notification, local recovery or Android app controls. Withdrawing command consent also stops playback. The player is released on completion, error, cancellation or service teardown. An execution receipt confirms the app attempted playback; it cannot confirm that anyone heard it.
+Stop it from the dashboard, **Stop alarm** in the phone notification after unlocking, local recovery or Android app controls. Withdrawing command consent also stops playback. The player is released on completion, error, cancellation or service teardown. An execution receipt confirms the app attempted playback; it cannot confirm that anyone heard it.
 
 **Preview alarm sound** plays one two-second cycle in the browser without sending a command. The phone repeats the same waveform for its 30-second resource. `scripts/generate-alarm.py` reproduces both assets.
+
+**Alarm + flash** and **Flash only** optionally blink the rear camera flashlight at one cycle per second for up to 30 seconds. Camera permission and flash hardware must be available; camera contention can prevent this. Stopping releases the torch. A personal removable app cannot guarantee that lock-screen system controls, hardware buttons, force-stop or shutdown cannot silence it; Bungee does not intercept those exits.
 
 ## Recovery messages
 
@@ -28,9 +30,9 @@ Enable protection on the phone before it is lost. While ready, Bungee attempts o
 2. Choose **Enable removable device administration**. Android's force-lock/watch-login grant enables screen locking and eligible credential callbacks.
 3. Grant camera permission and allow notifications, including the camera-protection channel. The app checks for a front camera.
 4. Choose **Enable theft photos** and authenticate with the phone lock. Keep Bungee visible and the phone unlocked for the initial service start.
-5. Wait for **Ready** and **Bungee theft photos are ready**. Starting or enabled-but-not-ready states do not indicate usable capture.
+5. Wait for **Ready** and **Bungee camera is armed**. Starting or enabled-but-not-ready states do not indicate usable capture.
 
-Approval stays saved until withdrawn. The server cannot enable it remotely. Idle protection holds no camera open. **Disarm camera** in the notification requests Android authentication when locked. The sharing notification's **Stop sharing** action does too; **Stop sound** remains separate. Swiping away a notification does not disarm protection. Android's own app/service controls remain available.
+Approval stays saved until withdrawn. The server cannot enable it remotely. Idle protection holds no camera open. **Disarm camera** in the notification requests Android authentication when locked. The sharing notification's **Stop sharing** action does too; **Stop alarm** also requires unlock. Swiping away a notification does not disarm protection. Android's own app/service controls remain available.
 
 ### Restore after reboot or an app update
 
@@ -40,11 +42,11 @@ After Android's first normal unlock, **Restoring theft protection** restores the
 
 The boot receiver requests the screen; only its resumed, unlocked activity can start the camera foreground service. A saved claim precedes launch, with one automatic attempt per boot/app version. Duplicate events, failed launches and consumed/expired offers cannot cause repeated startup windows. A pending request can wait for unlock. Failure posts an attention notification when possible.
 
-Turning off automatic boot recovery cancels pending launches while keeping current camera/sharing consent. Revoking special access removes background-launch authority. Without these grants, opening Bungee while unlocked resumes standing camera consent. Force-stop can require a manual launch in either mode. Pairing keys, checkpoints and photos remain credential-encrypted and unavailable before first unlock.
+Turning off automatic boot recovery cancels pending launches while keeping current camera/sharing consent. Revoking special access removes background-launch authority. Without these grants, opening Bungee while unlocked resumes standing camera consent. Force-stop can require a manual launch in either mode. Pairing keys and checkpoints remain credential-encrypted and unavailable before first unlock. Unsent pictures exist only in RAM.
 
 ### Process recovery and capture limits
 
-Android may restore the service through `START_STICKY`. An encrypted checkpoint from the same boot retains the session, failure streak and rate budget; queued photos are retained. Successful-credential callbacks can reset a saved streak before the service returns, without starting it. Missing, corrupt, future or cross-boot checkpoints cannot authorize a background restart.
+Android may restore the service through `START_STICKY`. An encrypted checkpoint from the same boot retains the session, failure streak and rate budget; unsent photos are lost on process exit. Successful-credential callbacks can reset a saved streak before the service returns, without starting it. Missing, corrupt, future or cross-boot checkpoints cannot authorize a background restart.
 
 A new visible session takes the current OS failure count as its baseline and requires three new failures. Same-boot restoration preserves that baseline. Successful credential entry resets the streak. Android's watch-login callbacks cover eligible device/profile credentials for this user; biometric failures and other app logins may be excluded.
 
@@ -52,13 +54,13 @@ Each session/boot allows one attempt per qualifying streak, at least five minute
 
 Capture has an eight-second timeout and closes the camera, reader and session on completion, error or cancellation. It uses no flash or microphone. Camera privacy controls, another camera app, background/battery restrictions and hardware availability can prevent output.
 
-Disarm, local stop, command withdrawal and administration deactivation disable camera recovery and cancel pending startup/capture/uploads. They clear unsent photos and checkpoints; cleanup failures are reported. Clearing local stop does not restore old consent. Unexpected process or connection-service loss preserves authorized queued data for recovery. Withdrawal invalidates earlier prepared work even after re-enabling; bytes already transmitted cannot be recalled.
+Disarm, local stop, command withdrawal and administration deactivation disable camera recovery and cancel pending startup/capture/uploads. They clear unsent photos and checkpoints; cleanup failures are reported. Clearing local stop does not restore old consent. Connection-service loss preserves RAM-held pictures while the process lives; process exit discards unsent pictures. Withdrawal invalidates earlier prepared work even after re-enabling; bytes already transmitted cannot be recalled.
 
 ### Photo storage and erasure
 
-Images are decoded and re-encoded in memory to remove EXIF, resized to a longest edge of 320 pixels (160 if needed) and limited to 12 KiB. The phone keeps at most three unsent images under Keystore AES-256-GCM encryption. At capacity the oldest is discarded and the loss count is reported. These small images can have limited detail.
+Images are decoded and re-encoded in memory to remove EXIF, resized to a longest edge of 320 pixels (160 if needed) and limited to 12 KiB. The phone keeps at most three unsent images only in process memory, without writing JPEGs to disk. At capacity the oldest is discarded and the loss count is reported. These small images can have limited detail.
 
-A live authorized camera session uploads photos separately from GPS through signed `/v1/telemetry` requests over the fixed-home WireGuard transport. Photo failures have their own retry delay. Requests retain the 32-KiB body limit and native path allowlist. Exact-content retries acknowledge the same photo ID; conflicting reuse is rejected. The server admits at most six new photos per device per rolling hour.
+With camera consent still enabled, the connection uploads queued photos separately from GPS, even if the camera service is temporarily unavailable, through signed `/v1/telemetry` requests over the fixed-home WireGuard transport. Photo failures have their own retry delay. Requests retain the 32-KiB body limit and native path allowlist. Exact-content retries acknowledge the same photo ID; conflicting reuse is rejected. The server admits at most six new photos per device per rolling hour.
 
 **Device care → Recovery photos → View saved photos** opens an authenticated, paginated gallery. Images load only when opened, from the home server, with `image/jpeg`, `nosniff` and `no-store`. The gallery records capture/receipt times and failure count or local-test label. Signed reports have no hardware attestation and do not establish a person's identity or prove theft. Camera status is dated; an offline phone's present state is unknown.
 
@@ -95,3 +97,13 @@ Use a personal test phone with a stable signer. Record the GrapheneOS build, per
 - [GrapheneOS DeviceAdminReceiver](https://github.com/GrapheneOS/platform_frameworks_base/blob/ef402132a86b78aa4627daa823766e79b1f601e1/core/java/android/app/admin/DeviceAdminReceiver.java): failed/successful password callbacks and `WATCH_LOGIN` authority.
 - [Android notification channels](https://developer.android.com/develop/ui/views/notifications/channels): user control over channel importance and notification behavior.
 - [Android AudioAttributes](https://developer.android.com/reference/android/media/AudioAttributes#USAGE_ALARM): alarm audio usage is not a grant to override system volume or interruption settings.
+
+## Capture and delivery diagnostics
+
+“Camera armed” means ready to observe a trigger, not that a photo was captured. The phone shows the new failed-PIN/password streak (up to 3), capture result and upload errors; Device care shows the last signed report and pending capture timestamps/reasons. Android resets the streak after a successful credential unlock; biometric failures may not count. The app observes Android’s own counter as a fallback for delayed admin broadcasts, without guessing failures. A labelled local test while unlocked separates camera permission/hardware failures from lock-screen restrictions.
+
+Photos are resized and stripped of EXIF metadata, held in RAM only (maximum three), uploaded independently of whether the camera service is currently armed, then removed after server acknowledgement. Upload errors wait at least ten seconds before the next connection cycle; normal network backoff still applies. No JPEG is written to phone preferences/files. Updating removes the old persisted photo queue instead of importing it. Process death, disarm or local stop discards unsent images. A photo upload failure does not block normal telemetry. Photo HTTP requests are capped at the native transport’s ten-second limit and run before potentially long GPS commands.
+
+The gallery supports erasing one photo, all photos for a device, or all household photos from Tracking → Photos. Single deletion retains an ID tombstone so a retry cannot resurrect that photo; bulk erasure rotates photo generations. Existing server backups/media blocks are unaffected by logical deletion.
+
+Queued commands can be canceled individually on the device page. Commands already offered may be executing; Stop retries prevents future redelivery, and updated phones recheck immediately before beginning an action. Cancellation cannot recall an action that has started. Late receipts are retained with the cancellation result.

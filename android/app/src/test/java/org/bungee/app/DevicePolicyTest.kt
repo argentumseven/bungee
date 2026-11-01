@@ -6,6 +6,11 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DevicePolicyTest {
+    @Test fun hasteNeedsLostModeAndDefaultsToOff() {
+        assertFalse(DevicePolicy.parse(JSONObject()).haste)
+        assertFalse(DevicePolicy.parse(JSONObject().put("haste",true)).haste)
+        assertTrue(DevicePolicy.parse(JSONObject().put("lost_mode",true).put("haste",true).put("recovery_message","Call home")).haste)
+    }
     @Test fun personalModeDoesNotEnableAnyManagedControlByDefault() {
         val policy = DevicePolicy.parse(JSONObject())
         assertFalse(policy.managedDns); assertFalse(policy.alwaysOn); assertFalse(policy.protectSettings)
