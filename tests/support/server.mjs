@@ -12,8 +12,10 @@ async function freePort() {
 }
 export async function fixture(t, {legacy = false, geodata = undefined, dns = undefined} = {}) {
   const dir=await mkdtemp(join(tmpdir(),"bungee-review2-"));
-  const port=await freePort(), devicePort=await freePort();
-  const dnsPort=dns?await freePort():null;
+  const chosenPorts=new Set();
+  const distinctPort=async()=>{let value;do {value=await freePort();} while(chosenPorts.has(value));chosenPorts.add(value);return value;};
+  const port=await distinctPort(), devicePort=await distinctPort();
+  const dnsPort=dns?await distinctPort():null;
   const origin=`http://127.0.0.1:${port}`, deviceOrigin=`http://127.0.0.1:${devicePort}`;
   const password=randomBytes(24).toString("base64url");
   const verifier = legacy ? password : execFileSync(resolve("server/target/debug/bungee-server"), ["--hash-admin-password"], {input:password, encoding:"utf8"});

@@ -50,7 +50,7 @@ BOOT_FILES = (Path('/etc/crypttab'), Path('/etc/fstab'))
 SYSTEMD = Path('/etc/systemd/system')
 SYSTEMD_VENDOR_ROOTS = (Path('/usr/lib/systemd'), Path('/lib/systemd'))
 BOOT_COMPONENTS = (
-    ('system/systemd-cryptsetup@.service', 'systemd cryptsetup service'),
+    ('system/cryptsetup.target', 'systemd cryptsetup target'),
     ('system-generators/systemd-cryptsetup-generator', 'systemd cryptsetup generator'),
     ('systemd-cryptsetup', 'systemd unlock helper'),
 )

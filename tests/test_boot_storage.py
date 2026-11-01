@@ -19,15 +19,20 @@ class BootStorageTests(unittest.TestCase):
         for path in (self.image,self.key):path.write_bytes(b'original data');path.chmod(0o600)
         for module,name,value in [(storage,'BOOT_FILES',self.boot),(storage,'SYSTEMD',self.systemd),(storage,'IMAGE',self.image),(storage,'KEY',self.key),(storage,'SYSTEMD_VENDOR_ROOTS',(self.vendor,))]:
             p=patch.object(module,name,value);p.start();self.addCleanup(p.stop)
-        for relative,_ in storage.BOOT_COMPONENTS:
+        self.components=('system/cryptsetup.target','system-generators/systemd-cryptsetup-generator','systemd-cryptsetup')
+        for relative in self.components:
             path=self.vendor/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_text('test component');path.chmod(0o755)
         for path,entry in zip(self.boot,storage.boot_entries(self.root,legacy=True)):
             path.write_text('# keep comment\nother /other none defaults\n'+entry+'\n');path.chmod(0o640)
         self.dropin=self.systemd/'docker.service.d/bungee-storage.conf'
         self.dropin.parent.mkdir(parents=True);self.dropin.write_text(storage.storage_dropin(self.root))
 
+    def test_debian_installs_a_target_and_generator_instead_of_a_service_template(self):
+        self.assertFalse((self.vendor/'system/systemd-cryptsetup@.service').exists())
+        storage.require_boot_support()
+
     def test_missing_unlock_components_are_detected_before_storage_allocation(self):
-        for relative,_ in storage.BOOT_COMPONENTS:
+        for relative in self.components:
             path=self.vendor/relative;content=path.read_bytes();path.unlink()
             with patch.object(storage,'run') as run:
                 with self.assertRaisesRegex(ValueError,'systemd-cryptsetup'):storage.provision(self.root)
@@ -80,6 +85,23 @@ class BootStorageTests(unittest.TestCase):
 
 
 class SystemdGeneratorTests(unittest.TestCase):
+    def test_real_cryptsetup_generator_creates_an_optional_unlock_unit(self):
+        vendors=[Path(os.environ['BUNGEE_TEST_SYSTEMD_DIR'])] if os.environ.get('BUNGEE_TEST_SYSTEMD_DIR') else list(storage.SYSTEMD_VENDOR_ROOTS)
+        generator=next((base/'system-generators/systemd-cryptsetup-generator' for base in vendors if (base/'system-generators/systemd-cryptsetup-generator').is_file()),None)
+        if generator is None:self.skipTest('systemd cryptsetup generator unavailable in this development environment')
+        with tempfile.TemporaryDirectory() as temporary:
+            base=Path(temporary);image=base/'storage.luks';key=base/'storage.key'
+            image.write_bytes(b'generator-only fixture');key.write_bytes(b'generator-only fixture')
+            crypttab=base/'crypttab';crypttab.write_text(f'bungee {image} {key} luks,nofail\n')
+            for name in ('normal','early','late'):(base/name).mkdir()
+            result=subprocess.run([str(generator),*[str(base/name) for name in ('normal','early','late')]],env={**os.environ,'SYSTEMD_CRYPTTAB':str(crypttab)},capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            unit=base/'normal/systemd-cryptsetup@bungee.service'
+            self.assertTrue(unit.is_file(),result.stderr)
+            self.assertIn(f'RequiresMountsFor={image}',unit.read_text())
+            self.assertTrue((base/'normal/cryptsetup.target.wants/systemd-cryptsetup@bungee.service').is_symlink())
+            self.assertFalse((base/'normal/cryptsetup.target.requires/systemd-cryptsetup@bungee.service').exists())
+
     @unittest.skipUnless(Path('/usr/lib/systemd/system-generators/systemd-fstab-generator').is_file(),'systemd fstab generator unavailable')
     def test_generated_mount_is_wanted_rather_than_required_by_host_boot(self):
         with tempfile.TemporaryDirectory() as temporary:
