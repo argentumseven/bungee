@@ -727,7 +727,7 @@ def install_default_geodata(host):
         if not (current/'geoip.mmdb').exists():
             seed_geoip(Path(work)); geoip=Path(work)/'geoip.mmdb'; geoip_v6=Path(work)/'geoip-v6.mmdb'
         if maps or geoip: host.datasets(maps=maps,geoip=geoip,geoip_v6=geoip_v6)
-        else: print('Maps and GeoIP already installed; custom data preserved.')
+        else: print('Existing map and GeoIP datasets preserved. This step does not install street detail.')
 
 
 def install_us_maps(host):

@@ -227,6 +227,16 @@ if __name__ == '__main__': unittest.main()
 
 class DatasetTests(unittest.TestCase):
     setUp = TransactionTests.setUp
+    def test_forbidden_street_map_download_does_not_interrupt_running_server(self):
+        old = self.host.current()
+        before = list(self.engine.events)
+        with patch.object(host.regional_maps, 'acquire', side_effect=RuntimeError('Street-map catalogue download: HTTP 403')):
+            with self.assertRaisesRegex(RuntimeError, 'catalogue download: HTTP 403'):
+                host.install_us_maps(self.host)
+        self.assertEqual(self.host.current(), old)
+        self.assertEqual(self.engine.events, before)
+        self.assertFalse((self.root / 'transaction.json').exists())
+        self.assertEqual([p.name for p in (self.root / 'datasets').iterdir()], ['empty'])
     def test_dataset_import_is_validated_before_downtime_and_pins_read_only_generation(self):
         with tempfile.TemporaryDirectory() as directory:
             data = Path(directory) / 'City.mmdb'; data.write_bytes(b'fixture-public-data')
