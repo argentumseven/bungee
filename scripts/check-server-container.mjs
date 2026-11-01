@@ -1,7 +1,7 @@
 // Exercise the built Rust image with synthetic keys and no reverse proxy.
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {mkdtemp,chmod,readdir,readFile,rm,mkdir,writeFile} from 'node:fs/promises';
+import {mkdtemp,chmod,readdir,readFile,rm,mkdir,writeFile,copyFile,stat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import https from 'node:https';
@@ -21,11 +21,17 @@ try {
   const maps=join(dir,'maps'),status=join(dir,'map-status');
   for(const path of [maps,status,requests]){await mkdir(path);await chmod(path,0o755);}
   await chmod(requests,0o700);
-  await writeFile(join(maps,'library.json'),JSON.stringify({format:1,regions:[]}));
-  await writeFile(join(status,'state.json'),JSON.stringify({catalog:[{id:'us-pacific',name:'Pacific'}],job:{state:'completed'},updated_at:Math.floor(Date.now()/1000)}));
-  await chmod(join(maps,'library.json'),0o644);await chmod(join(status,'state.json'),0o644);
+  // Use the real host publisher under the systemd/CLI umask. A hand-written
+  // fixture followed by chmod would conceal the UID-10001 permission regression.
+  const publish=(path,value)=>execFileSync('python3',['-c',"import os,sys,json;sys.path.insert(0,'scripts');import map_manager;os.umask(0o077);map_manager.atomic(sys.argv[1],json.loads(sys.argv[2]))",path,JSON.stringify(value)]);
+  publish(join(maps,'library.json'),{format:1,regions:[]});
+  publish(join(status,'state.json'),{catalog:[{id:'us-pacific',name:'Pacific'}],job:{state:'completed'},updated_at:Math.floor(Date.now()/1000)});
+  assert.equal((await stat(join(maps,'library.json'))).mode&0o777,0o644);
+  assert.equal((await stat(join(status,'state.json'))).mode&0o777,0o644);
+  const datasets=join(dir,'datasets');await mkdir(datasets);await chmod(datasets,0o755);
+  await copyFile('basemap/world.mbtiles',join(datasets,'map.mbtiles'));await chmod(join(datasets,'map.mbtiles'),0o644);
   docker(['run','--rm','--user','0:0','--network','none','--cap-drop','ALL','--cap-add','CHOWN','--mount',`type=bind,src=${requests},dst=/requests`,'--entrypoint','chown','bungee-server:dev','10001:10001','/requests']);
-  const mapMounts=['--mount',`type=bind,src=${updates},dst=/app-updates,readonly`,'--mount',`type=bind,src=${maps},dst=/maps,readonly`,'--mount',`type=bind,src=${status},dst=/map-control/status,readonly`,'--mount',`type=bind,src=${requests},dst=/map-control/requests`];
+  const mapMounts=['--mount',`type=bind,src=${datasets},dst=/datasets,readonly`,'--mount',`type=bind,src=${updates},dst=/app-updates,readonly`,'--mount',`type=bind,src=${maps},dst=/maps,readonly`,'--mount',`type=bind,src=${status},dst=/map-control/status,readonly`,'--mount',`type=bind,src=${requests},dst=/map-control/requests`];
   docker(['run','-d','--rm','--name',name,'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true','--ulimit','core=0','--tmpfs','/state:uid=10001,gid=10001,mode=0700','--tmpfs','/tmp:size=16m','--mount',`type=bind,src=${issued},dst=/tls,readonly`,...mapMounts,'-p','127.0.0.1::8443','--health-cmd','curl --fail --silent http://127.0.0.1:8081/healthz','-e','BUNGEE_PUBLIC_ORIGIN=https://127.0.0.1','-e','BUNGEE_ADMIN_BIND=0.0.0.0:8443','-e','BUNGEE_ADMIN_INTERFACE=eth0','-e','BUNGEE_ADMIN_SUBNETS=127.0.0.1/32 172.16.0.0/12 192.168.0.0/16','-e','BUNGEE_DEVICE_BIND=127.0.0.1:8081','-e','BUNGEE_TLS_CERT_FILE=/tls/current/server.crt','-e','BUNGEE_TLS_KEY_FILE=/tls/current/server.key','--entrypoint','sh','bungee-server:dev','-ec','printf "%s\\n" "$1" > /state/admin-password.hash; exec /usr/local/bin/bungee-server','bootstrap',verifier]);
   const port=Number(docker(['port',name,'8443/tcp']).split(':').at(-1));
   const ca=await readFile(join(issued,'root.crt'),'utf8');
@@ -40,6 +46,13 @@ try {
   const login=await query('/api/session','POST',{password:'test-only-container-password-not-a-secret'});assert.equal(login.status,200);
   const cookie=login.headers['set-cookie'][0].split(';')[0];
   assert.equal((await query('/api/maps/manage','GET',undefined,cookie)).status,200);
+  assert.equal(JSON.parse((await query('/api/geography','GET',undefined,cookie)).body).maps.overview,true);
+  await chmod(join(maps,'library.json'),0o000);
+  const fallback=await query('/api/geography','GET',undefined,cookie);assert.equal(fallback.status,200);
+  assert.equal(JSON.parse(fallback.body).maps.overview,true);assert.match(JSON.parse(fallback.body).regional_error,/permissions.*repair/i);
+  assert.equal((await query('/api/maps/0/0/0','GET',undefined,cookie)).status,200);
+  await chmod(join(maps,'library.json'),0o644);
+
   assert.equal((await query('/api/app-updates','GET',undefined,cookie)).status,200);
   const job=await query('/api/maps/jobs','POST',{action:'plan',regions:['us-pacific']},cookie);assert.equal(job.status,202,job.body);
   const jobId=JSON.parse(job.body).id,request=JSON.parse(docker(['exec',name,'cat',`/map-control/requests/${jobId}.json`]));assert.deepEqual(request.regions,['us-pacific']);

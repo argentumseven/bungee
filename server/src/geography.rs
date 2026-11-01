@@ -235,7 +235,14 @@ fn public_ip(ip: IpAddr) -> bool {
 pub async fn status(State(app): State<App>, headers: HeaderMap) -> ApiResult<Json<Value>> {
     require_admin(&app, &headers)?;
     let mut status = app.geography.status.clone();
-    status["regions"] = crate::maps::installed()?;
+    // A broken optional download catalogue must not hide the bundled raster map.
+    match crate::maps::installed() {
+        Ok(regions) => status["regions"] = regions,
+        Err(error) => {
+            status["regions"] = json!([]);
+            status["regional_error"] = json!(error.1);
+        }
+    }
     Ok(Json(status))
 }
 pub async fn tile(

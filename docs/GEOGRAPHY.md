@@ -38,6 +38,16 @@ python3 /opt/bungee/bungee-host.py maps --regions us-pacific,us-mountain
 
 The `maps` command opens the checklist; `--regions` supplies IDs directly. Map `--plan` contacts providers to calculate sizes but installs no archives. `maps-us` selects all eight US regions and also accepts `--plan`. The old `geodata` command can still seed missing overview/GeoIP, and local `datasets` imports remain supported.
 
+If **Map host worker is unavailable** appears while the included overview is blank, update the checkout and repair the host’s public map metadata:
+
+```sh
+cd /usr/local/src/bungee &&
+git pull --ff-only origin main &&
+python3 scripts/bungee-host.py repair-maps
+```
+
+Run as root. This corrects the earlier `0077` file-mask bug, refreshes the installed map helper and restarts its worker. It does not rebuild/restart server containers, replace installed maps, or change phone pairing/history. Refresh the manager afterward. Cancel or finish a running map download before repairing. A pending server update is left untouched and must be recovered separately. Fresh installs and normal rebuilds include the same permission fix.
+
 Map capacity uses unprivileged-available filesystem blocks (`f_bavail`), so ext4 reserved blocks are not offered as map capacity. Existing swap files, retained datasets and rollback data already reduce available space and are not subtracted twice. Additional reserves protect a new full private-volume cold snapshot (logical bytes plus archive headroom), history/system data, temporary work and swap growth; the backing filesystem must also have tool/swap headroom. Capacity and the total map limit are checked again on installation and while downloading; shrinking free space cancels an unsafe download. Storage is never resized automatically.
 
 Managed downloads stage on the same encrypted filesystem, verify, then publish the archive/manifest atomically without an import copy or server restart. Interrupted/failed/canceled downloads preserve installed maps; abandoned staging is cleaned under the map-job lock. The web UI shows installed regions, actual archive sizes, job progress and removal controls. A root-owned host worker consumes only small, validated action/region/plan-ID requests: no URL, shell command or filesystem path can be supplied by the web client. Container mounts keep archives/status read-only and expose only the request directory for writes. Plan IDs must match the reviewed selection and expire after one hour.

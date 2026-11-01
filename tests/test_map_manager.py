@@ -46,6 +46,36 @@ class MapManagerTests(unittest.TestCase):
         identifier=str(uuid.uuid4());path=self.root/'map-control/requests'/(identifier+'.json')
         path.write_text(json.dumps({'action':action,'regions':regions,'plan_id':plan_id}));return identifier,path
     def state(self):return json.loads((self.root/'map-control/status/state.json').read_text())
+    def test_worker_umask_keeps_public_metadata_readable_and_private_requests_private(self):
+        previous=os.umask(0o077)
+        try:
+            maps.atomic(self.root/'maps/library.json',{'format':1,'regions':[]})
+            maps.public_status(self.root,self.catalog,{})
+            identifier,path=self.request('plan',['test-one'])
+            self.assertEqual(path.stat().st_mode&0o777,0o600)
+            for relative in ('maps/library.json','map-control/status/state.json'):
+                self.assertEqual((self.root/relative).stat().st_mode&0o777,0o644)
+            self.assertEqual((self.root/'map-control/requests').stat().st_mode&0o777,0o700)
+        finally: os.umask(previous)
+    def test_setup_repairs_old_public_metadata_without_changing_private_data(self):
+        maps.public_status(self.root,self.catalog,{})
+        originals={}
+        for relative in ('maps/library.json','map-control/status/state.json'):
+            path=self.root/relative;originals[relative]=path.read_bytes();path.chmod(0o600)
+        private=self.root/'private-key';private.write_text('test-only-secret');private.chmod(0o600)
+        maps.setup(self.root)
+        for relative,data in originals.items():
+            path=self.root/relative
+            self.assertEqual(path.read_bytes(),data);self.assertEqual(path.stat().st_mode&0o777,0o644)
+        self.assertEqual(private.stat().st_mode&0o777,0o600)
+    def test_metadata_repair_refuses_symlinks_and_hardlinks_without_exposing_the_target(self):
+        path=self.root/'maps/library.json';path.unlink()
+        private=self.root/'private-key';private.write_text('test-only-secret');private.chmod(0o600)
+        path.symlink_to(private)
+        with self.assertRaises(OSError):maps.setup(self.root)
+        path.unlink();os.link(private,path)
+        with self.assertRaises(ValueError):maps.setup(self.root)
+        self.assertEqual(private.stat().st_mode&0o777,0o600)
     def test_regions_are_allowlisted_and_duplicate_or_nontext_ids_are_refused(self):
         catalog=regional_maps.region_catalog(self.catalog)
         for selection in (['../outside'],['test-one','test-one'],[{}],[],['test-one']*25):

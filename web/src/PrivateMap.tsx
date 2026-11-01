@@ -29,6 +29,7 @@ type Point = {
   observed_at?: number;
 };
 type Geography = {
+  regional_error?: string;
   regions?:import("./VectorMap").MapRegion[];
   vector?:null|{min_zoom:number;max_zoom:number;format:string};
   maps: null | {
@@ -172,6 +173,7 @@ export function PrivateMap({
   if(status?.vector||status?.regions?.length)return <Suspense fallback={<p>Loading local street map…</p>}><VectorMap points={points} selected={selected} network={network} label={label} legacy={!!status.vector} regions={status.regions} overview={!!status.maps?.overview}/></Suspense>;
   return (
     <div className="private-map-wrap">
+      {status?.regional_error&&<p className="notice" role="status">Regional street maps need host repair. Open Maps &amp; storage for the repair command.</p>}
       {status?.maps?.overview&&<div className="map-setup-notice"><strong>Street detail is not installed.</strong><span>This world overview shows countries and major places. Your GPS point is still available.</span><button className="secondary" type="button" onClick={()=>window.dispatchEvent(new Event("bungee:maps"))}>Choose regional street maps</button></div>}
       <div
         className="private-map"

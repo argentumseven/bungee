@@ -1,10 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {mkdir,readFile,writeFile,copyFile} from "node:fs/promises";
+import {mkdir,readFile,writeFile,copyFile,mkdtemp,rm,chmod} from "node:fs/promises";
+import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {randomUUID} from "node:crypto";
 import {execFileSync} from "node:child_process";
 import {fixture} from "./support/server.mjs";
+test("unreadable regional metadata cannot suppress the bundled overview or its authenticated tiles",async t=>{
+ const data=await mkdtemp(join(tmpdir(),'bungee-overview-fallback-'));t.after(()=>rm(data,{recursive:true,force:true}));
+ await copyFile('basemap/world.mbtiles',join(data,'map.mbtiles'));
+ const f=await fixture(t,{geodata:data});await setup(f);
+ const library=join(f.dir,'maps/library.json');await chmod(library,0o000);
+ const status=await f.admin('/api/geography');assert.equal(status.status,200);
+ const geography=await status.json();assert.equal(geography.maps.overview,true);assert.deepEqual(geography.regions,[]);assert.match(geography.regional_error,/permissions.*repair/i);
+ const tile=await f.admin('/api/maps/0/0/0');assert.equal(tile.status,200);assert.equal(tile.headers.get('content-type'),'image/png');
+ await chmod(library,0o644);assert.equal((await (await f.admin('/api/geography')).json()).regional_error,undefined);
+});
 async function setup(f){
  const root=join(f.dir,"map-control");await mkdir(join(root,"requests"),{recursive:true});await mkdir(join(root,"status"));await mkdir(join(f.dir,"maps","archives"),{recursive:true});
  const region={id:"us-pacific",name:"Pacific",group:"United States",estimated_bytes:1024,max_zoom:15,bounds:[-125,32,-113,50]};

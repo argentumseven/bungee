@@ -1,12 +1,37 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {mkdtemp,rm,mkdir,writeFile,readFile,unlink,stat} from "node:fs/promises";
+import {mkdtemp,rm,mkdir,writeFile,readFile,unlink,stat,chmod,copyFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {execFileSync} from "node:child_process";
 import {chromium} from "playwright-core";
 import {fixture} from "./support/server.mjs";
 import {phone} from "./support/phone.mjs";
+
+test("the included overview renders with unreadable regional metadata and the download panel recovers after repair",async t=>{
+ const data=await mkdtemp(join(tmpdir(),'bungee-map-permissions-browser-'));t.after(()=>rm(data,{recursive:true,force:true}));
+ await copyFile('basemap/world.mbtiles',join(data,'map.mbtiles'));
+ const f=await fixture(t,{geodata:data}),p=await phone(f);
+ await mkdir(join(f.dir,'maps'));await mkdir(join(f.dir,'map-control/status'),{recursive:true});await mkdir(join(f.dir,'map-control/requests'));
+ const library=join(f.dir,'maps/library.json'),status=join(f.dir,'map-control/status/state.json');
+ await writeFile(library,JSON.stringify({format:1,regions:[]}));
+ await writeFile(status,JSON.stringify({enabled:true,updated_at:Math.floor(Date.now()/1000),catalog:[{id:'us-pacific',name:'Pacific',group:'United States',estimated_bytes:1048576}],installed:[],disk:{available_bytes:2e9,free_bytes:3e9,total_bytes:4e9,reserve_bytes:1e9,swap_used_bytes:0,swap_total_bytes:0,swap_growth_reserve_bytes:1e9,backing_free_bytes:4e9},job:{id:'ready',state:'completed',message:'Ready'}}));
+ await chmod(library,0o000);await chmod(status,0o000);
+ assert.equal((await p.request('/v1/telemetry',{battery:90,charging:false,device_owner:false,capabilities:['locate'],gps_epoch:p.epoch,location:{latitude:33,longitude:-80,accuracy:10,observed_at:Math.floor(Date.now()/1000)}})).status,200);
+ const browser=await chromium.launch({executablePath:process.env.CHROME_BIN||'/usr/bin/chromium',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});t.after(()=>browser.close());
+ const context=await browser.newContext(),[name,value]=f.cookie.split('=');await context.addCookies([{name,value,url:f.origin}]);const page=await context.newPage();
+ const tile=page.waitForResponse(r=>/\/api\/maps\/\d+\/\d+\/\d+$/.test(r.url())&&r.status()===200);
+ await page.goto(f.origin);await page.getByRole('button',{name:'Tracking',exact:true}).click();await tile;
+ await page.locator('.leaflet-tile-loaded').first().waitFor();
+ assert.ok(await page.locator('.leaflet-tile-loaded').first().evaluate(img=>img.naturalWidth>0));
+ await page.screenshot({path:'work/map-permissions-overview.png'});
+ await page.getByRole('button',{name:'Settings',exact:true}).click();const manager=page.locator('.map-manager');
+ await manager.getByText(/Map metadata permissions need repair/).waitFor();
+ assert.equal(await manager.getByText('Loading maps and capacity…',{exact:true}).count(),0);
+ await chmod(library,0o644);await chmod(status,0o644);
+ await manager.getByRole('button',{name:'Refresh map status'}).click();
+ await manager.getByText('Pacific',{exact:true}).waitFor();assert.equal(await manager.getByRole('alert').count(),0);
+});
 
 test("an old broad saved GPS fix remains visible after reconnect, including failed street tiles",async t=>{
  const data=await mkdtemp(join(tmpdir(),"bungee-coarse-history-"));t.after(()=>rm(data,{recursive:true,force:true}));

@@ -21,10 +21,14 @@ fn archive_root() -> PathBuf {
     PathBuf::from(env::var("BUNGEE_MAPS_DIR").unwrap_or("/maps".into()))
 }
 fn read_json(path: &std::path::Path, limit: u64) -> ApiResult<Value> {
-    let file = fs::File::open(path).map_err(|_| {
+    let file = fs::File::open(path).map_err(|error| {
         Error(
             StatusCode::SERVICE_UNAVAILABLE,
-            "Map host worker is unavailable; update the guided host installation",
+            if error.kind() == std::io::ErrorKind::PermissionDenied {
+                "Map metadata permissions need repair. Run: python3 scripts/bungee-host.py repair-maps"
+            } else {
+                "Map host status is unavailable. Run: python3 scripts/bungee-host.py repair-maps"
+            },
         )
     })?;
     let mut bytes = Vec::new();

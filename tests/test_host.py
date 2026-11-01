@@ -119,6 +119,31 @@ class TransactionTests(unittest.TestCase):
         self.engine.old = self.old
         host.atomic(self.root / 'current.json', {'generation': self.old})
         host.atomic(self.root / 'control/status', 'open')
+    def test_map_repair_keeps_containers_generation_data_and_installed_maps(self):
+        state=self.root/'map-control/status/state.json'
+        state.write_text(json.dumps({'job':{'id':'old','state':'completed','message':'Ready'}}));state.chmod(0o600)
+        library=self.root/'maps/library.json';before=library.read_bytes();library.chmod(0o600)
+        saved=self.root/'volumes/server-data/saved-history';saved.write_text('keep this history')
+        current=(self.root/'current.json').read_bytes()
+        with patch.object(host,'install_helpers',side_effect=lambda root,**kw:host.map_manager.setup(root)) as helpers,patch.object(host,'systemd') as units,patch.object(host,'run') as command,patch.object(host.map_manager,'capacity',return_value={'available_bytes':123}):
+            host.repair_maps(self.host)
+        helpers.assert_called_once_with(self.root,restart_services=False)
+        units.assert_called_once_with(self.root)
+        self.assertEqual(self.engine.events,[])
+        self.assertEqual((self.root/'current.json').read_bytes(),current)
+        self.assertEqual(saved.read_text(),'keep this history');self.assertEqual(library.read_bytes(),before)
+        for path in (library,state):self.assertEqual(path.stat().st_mode&0o777,0o644)
+        self.assertEqual(command.call_args_list[0].args[0],['systemctl','restart','bungee-maps.service'])
+        self.assertEqual(command.call_args_list[1].args[0],['systemctl','is-active','--quiet','bungee-maps.service'])
+    def test_map_repair_refuses_pending_transactions_or_active_map_jobs(self):
+        journal=self.root/'transaction.json';journal.write_text('{}')
+        with patch.object(host,'install_helpers') as helpers:
+            with self.assertRaisesRegex(ValueError,'interrupted update'):host.repair_maps(self.host)
+            journal.unlink()
+            with (self.root/'maps.lock').open('a') as lock:
+                host.fcntl.flock(lock,host.fcntl.LOCK_EX|host.fcntl.LOCK_NB)
+                with self.assertRaisesRegex(ValueError,'map operation is running'):host.repair_maps(self.host)
+            helpers.assert_not_called()
     def test_local_rebuild_preserves_configuration_and_refreshes_helper_after_acceptance(self):
         images = {service: 'sha256:' + 'b' * 64 for service in ('server', 'gateway')}
         with patch.object(host, 'build_images', return_value=images), patch.object(host, 'install_helpers') as helper:

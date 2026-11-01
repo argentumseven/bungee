@@ -5,10 +5,10 @@ type Region={id:string;name:string;group:string;estimated_bytes:number;bytes?:nu
 type State={enabled:boolean;message?:string;catalog?:Region[];installed?:Region[];legacy_map_bytes?:number;map_limit_bytes?:number;job?:{id:string;state:string;message:string};last_plan?:{id:string;planned_bytes:number;regions:Region[]};disk?:{total_bytes:number;free_bytes:number;available_bytes:number;reserve_bytes:number;swap_total_bytes:number;swap_used_bytes:number;swap_growth_reserve_bytes:number;backing_free_bytes:number;note:string}};
 const size=(n:number)=>n>=1024**3?`${(n/1024**3).toFixed(2)} GiB`:`${Math.ceil(n/1024**2)} MiB`;
 export function MapManager(){
- const [state,setState]=useState<State|null>(null),[error,setError]=useState("");
+ const [state,setState]=useState<State|null>(null),[error,setError]=useState(""),[loadError,setLoadError]=useState("");
  const [chosen,setChosen]=useState<string[]>([]),[search,setSearch]=useState(""),[group,setGroup]=useState("United States");
  const [sending,setSending]=useState(false),[queued,setQueued]=useState<string|null>(null);
- const load=()=>api<State>("/maps/manage").then(value=>{setState(value);setChosen(old=>old.filter(id=>!value.installed?.some(item=>item.id===id)));if(value.job?.id===queued&&!["running","queued"].includes(value.job.state))setQueued(null);}).catch(e=>setError(e.message));
+ const load=()=>api<State>("/maps/manage").then(value=>{setState(value);setLoadError("");setChosen(old=>old.filter(id=>!value.installed?.some(item=>item.id===id)));if(value.job?.id===queued&&!["running","queued"].includes(value.job.state))setQueued(null);}).catch(e=>setLoadError(e.message));
  useEffect(()=>{void load();const timer=window.setInterval(load,3000);return()=>window.clearInterval(timer);},[queued]);
  const busy=sending||!!queued||["running","queued"].includes(state?.job?.state??"");
  const installed=new Set(state?.installed?.map(item=>item.id));
@@ -24,8 +24,10 @@ export function MapManager(){
  return <section className="panel map-manager" id="map-downloads">
   <div className="panel-heading"><h2><Map size={18}/>Maps &amp; storage</h2><button className="text-button" type="button" onClick={()=>void load()} aria-label="Refresh map status"><RefreshCw size={16}/></button></div>
   <p>Download regional street maps once; every tracking view uses them locally. Up to 24 regional archives can be installed. The world overview is included. Nearby street labels are approximate; these archives do not provide a complete postal-address database.</p>
+  {loadError&&<p className="error" role="alert">{loadError}</p>}
   {error&&<p className="error" role="alert">{error}</p>}
-  {!state&&<p role="status">Loading maps and capacity…</p>}
+  {!state&&!loadError&&<p role="status">Loading maps and capacity…</p>}
+  {(loadError||state?.enabled===false)&&<div className="notice"><p>On the server, from its Bungee checkout, run the map repair. It preserves installed maps, pairing and history.</p><code>python3 scripts/bungee-host.py repair-maps</code><p>Then refresh this panel.</p></div>}
   {state&&!state.enabled&&<p className="notice">{state.message}</p>}
   {state?.disk&&<><div className="map-capacity"><div><HardDrive size={18}/><strong>{size(state.disk.available_bytes)}</strong><span>available for new maps after reserves</span></div><div><strong>{size(state.disk.free_bytes)} / {size(state.disk.total_bytes)}</strong><span>free / total Bungee storage</span></div><div><strong>{size(state.disk.reserve_bytes)}</strong><span>storage safety reserve</span></div><div><strong>{size(state.disk.swap_used_bytes)} / {size(state.disk.swap_total_bytes)}</strong><span>swap used / configured; growth headroom {size(state.disk.swap_growth_reserve_bytes)}</span></div><div><strong>{size(state.disk.backing_free_bytes)}</strong><span>free on the host backing filesystem</span></div></div><p className="fine">{state.disk.note} Space is checked before and during downloads. Existing maps stay available if a download fails. Installed street maps are limited to 25 GB in total.</p></>}
   <h3>Installed maps</h3>

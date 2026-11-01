@@ -713,7 +713,7 @@ def systemd(root):
     run(['systemctl', 'enable', '--now', 'bungee-app-updates.service'])
 
 
-def install_helpers(root):
+def install_helpers(root, restart_services=True):
     for source, target in ((Path(__file__), root / 'bungee-host.py'), (module_path, root / 'network_config.py'), (release_path, root / 'release.json'), (HERE / 'secure_storage.py', root / 'secure_storage.py'), (HERE / 'tls_config.py', root / 'tls_config.py')):
         atomic(target, source.read_text())
     copy_public_file(HERE / 'regional_maps.py', root / 'regional_maps.py')
@@ -731,9 +731,35 @@ def install_helpers(root):
     copy_public_file(source, root / 'basemap/world.mbtiles')
     atomic(root / 'basemap/world.mbtiles.sha256', source.with_suffix('.mbtiles.sha256').read_text())
     map_manager.setup(root)
-    if (root/'current.json').exists():
+    if restart_services and (root/'current.json').exists():
         systemd(root)
         run(['systemctl','restart','bungee-maps.service','bungee-app-updates.service'])
+
+
+def repair_maps(host):
+    """Repair public map metadata and refresh host helpers without replacing images/data."""
+    root=host.root
+    if (root/'transaction.json').exists():
+        raise ValueError('An interrupted update needs local recovery before map repair; existing data preserved')
+    generation=host.current()
+    targets={mount.get('target') for mount in read(root/'generations'/generation/'compose.json')['services']['server']['volumes'] if isinstance(mount,dict)}
+    if not {'/maps','/map-control/status','/map-control/requests'}.issubset(targets):
+        raise ValueError('This server generation has no regional-map mounts; run rebuild with this checkout first')
+    with (root/'maps.lock').open('a') as lock:
+        try: fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError: raise ValueError('A map operation is running; let it finish or cancel it in the manager before repair')
+        install_helpers(root,restart_services=False)
+        # setup above normalizes existing metadata. Publish immediately so the
+        # manager does not depend on waiting for the service's next timer tick.
+        state={}
+        with contextlib.suppress(OSError,ValueError): state=read(root/'map-control/status/state.json')
+        if state.get('job',{}).get('state')=='running':
+            state['job'].update(state='failed',message='Previous map operation was interrupted; existing maps preserved. Plan and retry.')
+        map_manager.public_status(root,default_basemap().parent/'regions.json',{key:state[key] for key in ('job','last_plan') if key in state})
+        systemd(root)
+        run(['systemctl','restart','bungee-maps.service'])
+        run(['systemctl','is-active','--quiet','bungee-maps.service'])
+    print('Map permissions and downloader repaired. Refresh Maps & storage. Server containers, phone pairing, GPS history and installed maps were preserved.')
 
 
 def build_images():
@@ -872,7 +898,7 @@ def install(root, config, from_stdin=False):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['install', 'configure', 'update', 'recover', 'status', 'datasets', 'basemap', 'geodata', 'maps-us', 'maps', 'map-worker', 'apk-worker', 'uninstall', 'password', 'rebuild'])
+    parser.add_argument('command', choices=['install', 'configure', 'update', 'recover', 'status', 'datasets', 'basemap', 'geodata', 'maps-us', 'maps', 'map-worker', 'apk-worker', 'repair-maps', 'uninstall', 'password', 'rebuild'])
     parser.add_argument('--password-stdin', action='store_true', help='With install/password: read the new password from a dedicated stdin pipe')
     parser.add_argument('--root', type=Path, default=Path('/opt/bungee'))
     parser.add_argument('--config', type=Path, help='Explicit JSON answers for unattended installation/configuration')
@@ -941,6 +967,7 @@ if __name__ == '__main__':
                         print(run(['docker', 'compose', '--project-name', 'bungee', '--file', root / 'generations' / host.current() / 'compose.json', 'exec', '-T', 'server', '/usr/local/bin/bungee-server', '--set-admin-password'], input=password))
                     finally:
                         del password
+                elif args.command == 'repair-maps': repair_maps(host)
                 elif args.command == 'rebuild': rebuild(host)
                 elif args.command == 'geodata': install_default_geodata(host)
                 elif args.command == 'maps':

@@ -23,7 +23,11 @@ def atomic(path, value):
     try:
         fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o644)
         with os.fdopen(fd,'w') as stream:
-            json.dump(value,stream,separators=(',',':'));stream.write('\n');stream.flush();os.fsync(stream.fileno())
+            json.dump(value,stream,separators=(',',':'));stream.write('\n');stream.flush()
+            # The host and systemd workers intentionally use umask 0077. These
+            # two public metadata files must still be readable by runtime UID 10001.
+            os.fchmod(stream.fileno(),0o644)
+            os.fsync(stream.fileno())
         os.replace(temporary,path)
         fd=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY)
         try: os.fsync(fd)
@@ -39,6 +43,16 @@ def setup(root):
         path.mkdir(exist_ok=True)
         path.chmod(0o700 if relative.endswith('requests') else 0o755)
     if os.geteuid()==0: os.chown(root/'map-control/requests',10001,10001)
+    for relative in ('maps/library.json','map-control/status/state.json'):
+        try: fd=os.open(root/relative,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        except FileNotFoundError: continue
+        try:
+            info=os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1:
+                raise ValueError('Map metadata must be a single-link regular file')
+            if stat.S_IMODE(info.st_mode)!=0o644:
+                os.fchmod(fd,0o644);os.fsync(fd)
+        finally: os.close(fd)
     if not (root/'maps/library.json').exists(): atomic(root/'maps/library.json',{'format':1,'regions':[]})
 
 
