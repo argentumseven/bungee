@@ -20,5 +20,5 @@ export async function tlsFixture(t){
  const ca=await readFile(join(dir,'tls/root.crt'));
  const ready=()=>new Promise((resolve,reject)=>{const req=https.get(origin+'/healthz',{ca,rejectUnauthorized:true,minVersion:'TLSv1.3',ecdhCurve:'X25519MLKEM768'},res=>{res.resume();res.on('end',()=>resolve(res.statusCode===200));});req.on('error',reject);req.setTimeout(2000,()=>req.destroy(Error('Fixture startup timeout')));});
  let up=false;for(let n=0;n<150;n++){try{if(await ready()){up=true;break;}}catch{}if(server.exitCode!==null)throw Error(logs);await new Promise(r=>setTimeout(r,30));}
- assert.ok(up,logs);return {origin,password};
+ assert.ok(up,logs);return {origin,password,ca};
 }

@@ -229,16 +229,20 @@ pub fn require_admin(app: &App, headers: &HeaderMap) -> ApiResult<()> {
     require_admin_db(&app.db.lock().unwrap(), headers)
 }
 
-pub fn require_admin_db(db: &rusqlite::Connection, headers: &HeaderMap) -> ApiResult<()> {
-    let cookie = headers
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let value = cookie
-        .split(';')
+/// HTTP/2 permits cookies to be split across multiple header fields (RFC 9113).
+/// Hyper preserves those fields, so reading only HeaderMap::get loses cookies.
+pub fn session_cookie(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(';'))
         .map(str::trim)
-        .find_map(|c| c.strip_prefix("bungee_session="))
-        .ok_or_else(denied)?;
+        .find_map(|cookie| cookie.strip_prefix("bungee_session="))
+}
+
+pub fn require_admin_db(db: &rusqlite::Connection, headers: &HeaderMap) -> ApiResult<()> {
+    let value = session_cookie(headers).ok_or_else(denied)?;
     if value.len() > 128 {
         return Err(denied());
     }

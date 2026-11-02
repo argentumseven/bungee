@@ -50,6 +50,8 @@ for(const [name,engine] of engines)test(`fresh ${name} accepts a local certifica
  const f=await tlsFixture(t);
  const browser=await engine.launch(name==='Chromium'?{executablePath:process.env.CHROME_BIN||'/usr/bin/chromium',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']}:{headless:true});t.after(()=>browser.close());
  const context=await browser.newContext({ignoreHTTPSErrors:true}),page=await context.newPage();
+ // Cookies from another service on this host can precede Bungee's cookie.
+ await context.addCookies([{name:'other_service',value:'fixture',url:f.origin}]);
  await page.goto(f.origin);await page.getByRole('heading',{name:'Sign in to Bungee'}).waitFor();
  await page.locator('#password').pressSequentially(f.password);
  const accepted=page.waitForResponse(r=>r.url().endsWith('/api/session')&&r.request().method()==='POST');

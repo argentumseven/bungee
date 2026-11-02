@@ -148,15 +148,7 @@ pub async fn session(State(app): State<App>, headers: HeaderMap) -> ApiResult<Js
 }
 pub async fn logout(State(app): State<App>, headers: HeaderMap) -> ApiResult<impl IntoResponse> {
     require_admin(&app, &headers)?;
-    if let Some(value) = headers
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|c| {
-            c.split(';')
-                .map(str::trim)
-                .find_map(|c| c.strip_prefix("bungee_session="))
-        })
-    {
+    if let Some(value) = session_cookie(&headers) {
         app.db
             .lock()
             .unwrap()
