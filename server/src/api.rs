@@ -34,7 +34,10 @@ pub async fn login(
     rate_limit(&app, RateClass::AdminSource, source.to_string(), 5)?;
     rate_limit(&app, RateClass::AdminAggregate, "household".into(), 30)?;
     if input.password.len() > 1024 {
-        return Err(denied());
+        return Err(Error(
+            StatusCode::UNAUTHORIZED,
+            "Incorrect administrator password",
+        ));
     }
     let expected = credentials::current(&app.db.lock().unwrap())?.ok_or_else(denied)?;
     let checked = expected.clone();
@@ -49,14 +52,20 @@ pub async fn login(
     .await
     .unwrap_or(false);
     if !valid {
-        return Err(denied());
+        return Err(Error(
+            StatusCode::UNAUTHORIZED,
+            "Incorrect administrator password",
+        ));
     }
     let value = token();
     let db = app.db.lock().unwrap();
     let tx = db.unchecked_transaction()?;
     // A reset/change while Argon2 was running must not issue an old-password session.
     if credentials::current(&tx)?.as_ref() != Some(&expected) {
-        return Err(denied());
+        return Err(Error(
+            StatusCode::UNAUTHORIZED,
+            "Incorrect administrator password",
+        ));
     }
     tx.execute("DELETE FROM sessions WHERE expires<?", [now()])?;
     tx.execute(

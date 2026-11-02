@@ -34,7 +34,7 @@ import {
 import QRCode from "qrcode";
 import { version as releaseVersion } from "../../release.json";
 import "./style.css";
-import { api } from "./api";
+import { api, ApiError } from "./api";
 import { gpsTrail, currentEstimate, savedPosition, uncertainPosition } from "./gpsTrail";
 import {
   PrivateMap,
@@ -127,7 +127,6 @@ function App() {
   const [loginNotice, setLoginNotice] = useState("");
   const appearance = useAppearance();
   const [auth, setAuth] = useState<boolean | null>(null),
-    [password, setPassword] = useState(""),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   const [devices, setDevices] = useState<Device[]>([]),
@@ -225,19 +224,35 @@ function App() {
         .catch(() => { if (current) setError("Could not create the QR. Copy the enrollment text instead."); });
     return () => { current = false; };
   }, [bundle]);
-  async function login(e: React.FormEvent) {
+  async function login(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (busy) return;
+    const form = e.currentTarget;
+    // Autofill/password managers can update the native field without notifying
+    // React. Read the form before changing state; preserve the password exactly.
+    const password = new FormData(form).get("password");
+    if (typeof password !== "string" || !password) {
+      setError("Enter the administrator password.");
+      return;
+    }
     setBusy(true);
     setError("");
+    let accepted = false;
     try {
       await api("/session", {
         method: "POST",
         body: JSON.stringify({ password }),
       });
-      setPassword("");
+      accepted = true;
+      form.reset();
+      // Confirm the browser sends its new HttpOnly cookie before showing any
+      // household data. A blocked cookie must not look like a wrong password.
+      await api("/session");
       setAuth(true);
     } catch (e) {
-      setError((e as Error).message);
+      setError(accepted && e instanceof ApiError && e.status === 401
+        ? "Your password was accepted, but this browser could not confirm its session. Allow cookies for this server and try again."
+        : (e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -366,12 +381,13 @@ function App() {
               <label htmlFor="password">Server administrator password</label>
               <input
                 id="password"
+                name="password"
                 type="password"
                 autoComplete="current-password"
                 required
                 minLength={16}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                autoCapitalize="none"
+                spellCheck={false}
               />
               {error && (
                 <div className="error" role="alert">
@@ -799,7 +815,6 @@ function App() {
               <MapManager/>
               <PasswordSettings onChanged={() => {
                 window.dispatchEvent(new Event("bungee:session-expired"));
-                setPassword("");
                 setError("");
                 setLoginNotice("Password changed. Sign in with your new password.");
               }} />

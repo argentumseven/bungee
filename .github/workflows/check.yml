@@ -24,7 +24,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install --yes age openssl
       - run: npm run test:tls
       - run: python3 -m unittest discover -s tests -p 'test_*.py' -v
-      - run: npx playwright-core install --with-deps chromium
+      - run: npx playwright-core install --with-deps chromium firefox
       - run: CHROME_BIN=$(find "$HOME/.cache/ms-playwright" -path '*/chrome-linux*/chrome' -type f | head -1) npm run test:browser
   android:
     runs-on: ubuntu-24.04

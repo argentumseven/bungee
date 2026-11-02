@@ -16,11 +16,13 @@ class AppUpdateStateTest {
         assertEquals(AppUpdatePhase.AVAILABLE,available.phase)
         assertEquals("1.1.11",available.serverVersion);assertTrue(available.canDownload)
     }
-    @Test fun changedSignerIsBlockedEvenOnEqualVersionsAndRepeatedChecks() {
+    @Test fun changedSignerBlocksANewerUpdateWithoutMisreportingMatchingVersions() {
         for(code in listOf(25L,27L,28L)) {
             val result=AppUpdateStatus().observed(release,"1.1.11",null,code,"c".repeat(64),true)
-            assertEquals(AppUpdatePhase.BLOCKED,result.phase);assertFalse(result.canDownload)
-            assertTrue(result.message.contains("different signing keys"));assertTrue(result.message.contains("recovery"))
+            assertEquals(if(code<release.code) AppUpdatePhase.BLOCKED else AppUpdatePhase.CURRENT,result.phase)
+            assertFalse(result.canDownload)
+            if(code==release.code) assertTrue(result.message.contains("up to date"))
+            if(code<release.code) assertTrue(result.message.contains("signing certificates differ"))
             assertTrue(result.signerMismatch)
             assertTrue(result.copy(phase=AppUpdatePhase.ERROR).signerMismatch)
             assertEquals(result,result.observed(release,"1.1.11",null,code,"c".repeat(64),true))

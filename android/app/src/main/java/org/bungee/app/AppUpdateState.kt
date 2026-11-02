@@ -40,10 +40,12 @@ data class AppUpdateStatus(
             message = preparation?.optString("message")?.takeIf { it.isNotBlank() }?.take(240)
                 ?: "The server has not prepared its APK yet. Open manager Settings → Phone app updates for its preparation status.", installedSigner = signer)
         val (phase, message) = when {
-            release.signer != signer -> AppUpdatePhase.BLOCKED to "Android cannot install this update: the installed app and server APK have different signing keys. Checking again will not change the installed key. Open Update recovery below."
-            release.code > installedCode -> AppUpdatePhase.AVAILABLE to "Bungee ${release.version} is available from your paired server."
-            release.code == installedCode -> AppUpdatePhase.CURRENT to "Bungee ${release.version} is up to date with your server."
-            else -> AppUpdatePhase.CURRENT to "Your phone is newer than the server. Update the server first; app downgrades are blocked."
+            release.code == installedCode -> AppUpdatePhase.CURRENT to (
+                "Bungee ${release.version} is up to date with your server." +
+                    if (release.signer != signer) " The signing certificates differ; matching versions do not establish update compatibility. See Signing key details." else "")
+            release.code < installedCode -> AppUpdatePhase.CURRENT to "Your phone is newer than the server. Update the server first; app downgrades are blocked."
+            release.signer != signer -> AppUpdatePhase.BLOCKED to "Bungee ${release.version} is available, but Android cannot install it over this app because the signing certificates differ. Open Update recovery below."
+            else -> AppUpdatePhase.AVAILABLE to "Bungee ${release.version} is available from your paired server."
         }
         return AppUpdateStatus(release, server, phase, message, installedSigner = signer, updateAvailable = release.compatible(installedCode, signer))
     }

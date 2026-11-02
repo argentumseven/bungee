@@ -311,7 +311,9 @@ class MainActivity : FragmentActivity() {
                     Column(Modifier.padding(18.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
                         Text("App updates",fontWeight=FontWeight.SemiBold)
                         Text("Installed ${BuildConfig.VERSION_NAME} · paired server ${appUpdate.serverVersion ?: "not checked"}",fontSize=12.sp)
-                        if(appUpdate.signerMismatch) Text("Signing key mismatch · update blocked",color=MaterialTheme.colorScheme.error,fontWeight=FontWeight.SemiBold)
+                        if(appUpdate.signerMismatch) Text(
+                            if(appUpdate.phase==AppUpdatePhase.BLOCKED) "Signing certificates differ · update blocked" else "Signing certificates differ · check future update compatibility",
+                            color=if(appUpdate.phase==AppUpdatePhase.BLOCKED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,fontWeight=FontWeight.SemiBold)
                         Text(appUpdate.message,fontSize=12.sp)
                         appUpdate.progress?.let { progress ->
                             LinearProgressIndicator(progress={progress/100f},modifier=Modifier.fillMaxWidth())
@@ -326,7 +328,7 @@ class MainActivity : FragmentActivity() {
                                 Text(if(appUpdate.phase==AppUpdatePhase.VERIFYING) "Verifying update…" else "Checking server…",fontSize=12.sp)
                             }
                         } else {
-                            if(!appUpdate.signerMismatch) OutlinedButton(enabled=enrolled && !locallyStopped,onClick=checkAppUpdates) { Text("Check for updates") }
+                            if(appUpdate.phase!=AppUpdatePhase.BLOCKED) OutlinedButton(enabled=enrolled && !locallyStopped,onClick=checkAppUpdates) { Text("Check for updates") }
                             if(appUpdate.ready) Button(onClick={scope.launch {try {AppUpdates.install(this@MainActivity)}catch(e:Exception){AppUpdates.fail(e.message?:"Android could not open the update")}}}) {Text("Install update")}
                             else if(appUpdate.canDownload) Button(enabled=!locallyStopped,onClick={
                                 updateBusy=true
@@ -338,8 +340,9 @@ class MainActivity : FragmentActivity() {
                             }) {Text(if(appUpdate.downloadedBytes>0 || appUpdate.phase==AppUpdatePhase.PAUSED) "Resume download" else "Download update")}
                         }
                         if(appUpdate.signerMismatch) {
-                            Button(onClick={showUpdateHelp=!showUpdateHelp}) {Text(if(showUpdateHelp) "Hide update recovery" else "Update recovery")}
+                            Button(onClick={showUpdateHelp=!showUpdateHelp}) {Text(if(showUpdateHelp) "Hide signing key details" else if(appUpdate.phase==AppUpdatePhase.BLOCKED) "Update recovery" else "Signing key details")}
                             if(showUpdateHelp) {
+                                Text("The app compares signing certificates, not just version numbers. A GitHub APK and a server-issued APK can have the same version and different certificates. This check does not prove that the server’s key changed.",fontSize=12.sp)
                                 Text("Already used this server’s APK? Restore its original APK signing key from the encrypted server backup. Do not reinstall while checking this.",fontSize=12.sp)
                                 Text("Installed an older GitHub APK? Its disposable key cannot sign a replacement. A one-time switch is required:",fontSize=12.sp)
                                 Text("1. Let queued GPS and photos upload. Uninstalling removes unsent phone data. Keep the saved device in the manager.",fontSize=12.sp)
