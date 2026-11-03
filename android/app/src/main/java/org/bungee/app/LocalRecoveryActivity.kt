@@ -68,8 +68,16 @@ class PairingRecoveryPanel(private val activity: FragmentActivity, private val o
             val role = ManagementAgent.role(activity)
             role.removalNotice ?: "Bungee has no device/profile ownership. Ordinary administration, if enabled, does not block pairing reset."
         } }
+        button("Remove DNS setup · restore previous DNS") { authenticate { work("Restoring DNS…") {
+            PrivateDns.disable(activity,remove=true)
+            "Previous Android DNS restored and Bungee DNS setup removed. You may now revoke the ADB grant or uninstall Bungee."
+        } } }
         button("Open Android app settings", whileRunning = true) {
             activity.startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:${activity.packageName}")))
+        }
+        button("Open Android Private DNS settings", whileRunning = true) {
+            runCatching { activity.startActivity(Intent("android.settings.PRIVATE_DNS_SETTINGS")) }
+                .onFailure { activity.startActivity(Intent(android.provider.Settings.ACTION_WIRELESS_SETTINGS)) }
         }
         button("Open Android security settings", whileRunning = true) { activity.startActivity(Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)) }
         button("Back to Bungee") { openBungee() }
@@ -103,6 +111,7 @@ class PairingRecoveryPanel(private val activity: FragmentActivity, private val o
     }
     private fun stop(): List<String> = RecoveryCoordinator.run({ LocalSafety.setStopped(activity, true) }, listOf(
         "Could not close the Bungee connection; use Android Settings to force-stop Bungee." to { RecoveryConnection.current.stop() },
+        "DNS restoration failed. Open Android Private DNS settings and select Automatic before resetting or uninstalling Bungee." to { PrivateDns.disable(activity); Unit },
         "Could not finish camera cleanup." to { ArmedCameraService.disarm(activity) },
         "Could not stop sharing." to { activity.stopService(Intent(activity, TelemetryService::class.java)); Unit },
         "Could not clear Bungee notifications." to { activity.getSystemService(NotificationManager::class.java).cancelAll() }

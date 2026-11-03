@@ -104,7 +104,7 @@ class TelemetryService : Service() {
                 startForeground(1, notification(), fallbackType)
             }
         } catch (_: RuntimeException) {
-            RecoveryStartup.showResumeNotification(this)
+            RecoveryStartup.reportResumeNeeded(this)
             stopSelf(); return START_NOT_STICKY
         }
         updateLocationStatus()
@@ -184,6 +184,10 @@ class TelemetryService : Service() {
                     if (elapsed() < deadline) { withContext(Dispatchers.IO) {
                         val desired = api.request("/v1/sync", JSONObject().put("report", ManagementAgent.report(this@TelemetryService, identity)))
                         runCatching { AppUpdates.observe(this@TelemetryService,desired.optJSONObject("app_update"),desired.optString("server_version").takeIf { it.isNotBlank() },desired.optJSONObject("app_update_preparation")) }
+                        runCatching {
+                            val dns=api.request("/v1/private-dns",PrivateDns.report(this@TelemetryService)).getJSONObject("dns")
+                            if(!dns.getBoolean("enabled")||dns.getBoolean("removed"))PrivateDns.apply(this@TelemetryService,dns)
+                        }
                         identity.reconcileGpsEpoch(desired.getString("gps_epoch"))
                         synchronized(actionsLock) { if (generation == actionGeneration)
                             ManagementAgent.apply(this@TelemetryService, identity, desired.getLong("revision"), desired.getJSONObject("policy")) }
@@ -235,7 +239,7 @@ class TelemetryService : Service() {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val pause = PendingIntent.getService(this, 1, Intent(this, TelemetryService::class.java).setAction("STOP"), PendingIntent.FLAG_IMMUTABLE)
         val hush = PendingIntent.getService(this, 2, Intent(this, TelemetryService::class.java).setAction("STOP_RING"), PendingIntent.FLAG_IMMUTABLE)
-        return NotificationCompat.Builder(this, "sharing").setSmallIcon(R.drawable.ic_bungee).setContentTitle("Bungee sharing is active")
+        return NotificationCompat.Builder(this, "sharing").setSilent(true).setOnlyAlertOnce(true).setSmallIcon(R.drawable.ic_bungee).setContentTitle("Bungee sharing is active")
             .setContentText(if (locationForeground) "GPS fixes queue locally until home is reachable" else "Connection active · open Bungee to resume GPS")
             .setContentIntent(open).setOngoing(true).setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .addAction(NotificationCompat.Action.Builder(0, "Stop sharing", pause).setAuthenticationRequired(true).build())

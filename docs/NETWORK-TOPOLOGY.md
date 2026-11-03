@@ -20,7 +20,7 @@ The drawings use a Linux/VPS host with a reachable phone UDP endpoint, a separat
 
 The network picture is one logical security topology. Its orange path carries WireGuard ciphertext across the routed underlay and host/Docker transport, ending at kernel WireGuard in the shared namespace. Green paths are decrypted packets for local C2 or optional legacy DNS. Blue is the separate internal management TLS path. Host DNAT is summarized in the host heading; its port mappings are operations on those paths, not extra routers. The resolver arrow is a new socket originated by the Rust DNS service. The companion backend picture expands process, control-file and storage relationships.
 
-The phone runs `wireguard-go` and a gVisor TCP/IP stack inside Bungee's process. `P/32` belongs to that private userspace stack. Bungee creates no Android OS WireGuard interface, VPN service, system route or system DNS setting. Its transport only dials TCP `10.77.0.1:8081`. The OS carries WireGuard's ordinary UDP socket over the phone's existing Wi-Fi, cellular or other network path. Other apps keep that existing path.
+The phone runs `wireguard-go` and a gVisor TCP/IP stack inside Bungee's process. `P/32` belongs to that private userspace stack. The app-contained transport creates no Android OS WireGuard interface, VPN service, system route or system DNS setting. The separately approved optional [Private DNS controller](DNS.md) changes only the system DNS selection. Its transport only dials TCP `10.77.0.1:8081`. The OS carries WireGuard's ordinary UDP socket over the phone's existing Wi-Fi, cellular or other network path. Other apps keep that existing path.
 
 | Stage | Packet or socket | Handling |
 | --- | --- | --- |
@@ -113,3 +113,8 @@ These links pin the audited implementation so this document remains checkable wh
 - [Rust shared App state, routers and listener creation](https://github.com/argentumseven/bungee/blob/e5c68987784d985406832bc728c51e10c59760d9/server/src/main.rs); [socket-source enforcement](https://github.com/argentumseven/bungee/blob/e5c68987784d985406832bc728c51e10c59760d9/server/src/security.rs).
 - [Interface-bound TLS listener](https://github.com/argentumseven/bungee/blob/e5c68987784d985406832bc728c51e10c59760d9/server/src/tls.rs); [management isolation fixture](https://github.com/argentumseven/bungee/blob/e5c68987784d985406832bc728c51e10c59760d9/scripts/check-management-isolation.mjs).
 - [Peer-file publication](https://github.com/argentumseven/bungee/blob/e5c68987784d985406832bc728c51e10c59760d9/server/src/enrollment.rs); [DNS sockets and upstream exchange](https://github.com/argentumseven/bungee/blob/e5c68987784d985406832bc728c51e10c59760d9/server/src/dns.rs); [SQLite/WAL initialization](https://github.com/argentumseven/bungee/blob/e5c68987784d985406832bc728c51e10c59760d9/server/src/store.rs).
+
+
+## Optional public Private DNS listener
+
+The opt-in DoT relay is separate from the legacy branch in the diagrams above. Android's OS resolver connects directly over its existing network to public TCP 853, published to container TCP 8853 on eth0. It uses a per-phone random hostname and a separate trusted wildcard certificate. Rust forwards each accepted query through the existing explicit resolver allowlist and records the profile's phone ID. It does not enter the app-contained WireGuard stack. This adds no general IP forwarding or management access; public TLS ingress is closed when `private_dns_host` is empty. The internal manager's TLS and wg0 admission remain unchanged. See [configuration and removal](DNS.md).

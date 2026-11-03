@@ -483,6 +483,7 @@ mod tests {
             state_dir: directory.clone(),
             wg_endpoint: Some("203.0.113.10:47937".into()),
             dns: None,
+            private_dns: None,
             geography: Arc::new(crate::geography::Geography::load().unwrap()),
         };
         for prepare in [

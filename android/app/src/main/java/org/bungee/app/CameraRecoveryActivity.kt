@@ -22,7 +22,7 @@ import kotlinx.coroutines.flow.first
 class CameraRecoveryActivity : FragmentActivity() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val handler = Handler(Looper.getMainLooper())
-    private val close = Runnable { ArmedCameraService.showAttention(this); finish() }
+    private val close = Runnable { finish() }
     override fun onCreate(savedInstanceState: Bundle?) {
         AppearancePreference.applyTo(this)
         super.onCreate(savedInstanceState)
@@ -57,7 +57,7 @@ class CameraRecoveryActivity : FragmentActivity() {
                 delay(400)
             } catch (e: Exception) {
                 if (e is CancellationException && !isActive) throw e
-                ArmedCameraService.showAttention(this@CameraRecoveryActivity)
+                ArmedCameraService.refreshReadiness(this@CameraRecoveryActivity,"automatic startup was restricted; open Bungee")
             } finally { if (isActive) finish() }
         }
     }

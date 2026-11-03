@@ -22,7 +22,7 @@ There is no remote wipe, reset-on-failed-unlocks, PIN/password reset, lock-task/
 
 ## Network and offline behavior
 
-Only app-contained WireGuard carries Bungee's fixed home API. No Android VPN routes, system DNS setting, always-on package, VPN lockdown or default internet route is installed. A missing server or broken tunnel leaves other applications on their existing connection. Another VPN may carry/filter the outer UDP socket; Bungee does not override that VPN's policy.
+Only app-contained WireGuard carries Bungee's fixed home API. By default no Android VPN routes, system DNS setting, always-on package, VPN lockdown or default internet route is installed. The separately approved [Private DNS controller](DNS.md) is an optional exception for the DNS setting only. A missing server or broken tunnel leaves other applications on their existing connection. Another VPN may carry/filter the outer UDP socket; Bungee does not override that VPN's policy.
 
 A server outage does not execute a fallback device policy. It preserves timestamped history and the bounded encrypted local GPS queue. Timed-out commands expire instead of becoming permanent restrictions. Lost mode is a contact notification plus at most one attempted screen lock per revision when ordinary administration is approved; it cannot replace or cover credential entry. The local user can stop Bungee or deactivate administration. Android notification/audio/permission rules continue to apply.
 
@@ -37,7 +37,7 @@ explicit confirmation. Intent extras cannot trigger changes.
 
 - **Stop Bungee** saves the local stop, closes an existing connection, stops
   sharing, disarms the camera and clears unsent photos/notifications. It preserves
-  pairing keys, queued GPS and server history, and changes no Android policies.
+  pairing keys, queued GPS and server history, and restores any Bungee-controlled DNS setting. It changes no device-owner policies.
 - **Allow manual start · keep pairing** clears only the local stop after checking
   Android ownership. It starts no services and restores no camera/restart consent.
   A paired phone can also resume sharing directly in the normal app.
@@ -82,7 +82,7 @@ Android/GrapheneOS owner-release verification is still outstanding.
 
 ## Server pairing cleanup
 
-In **Settings → Inactive pairings**, purge a revoked device or an expired,
+In **Pairing & history**, remove the inactive pairing for a revoked device or an expired,
 never-redeemed invitation to release its public-key binding and remaining records.
 A paired phone is still in use even when offline. Purge rejects live invitations
 and non-revoked paired phones; explicitly revoke first when retiring a pairing.
@@ -103,7 +103,7 @@ Any future control that can outlive the app or remove a local recovery path must
 
 The optional `camera` foreground service uses one locally authenticated, persistent opt-in. Initial and restored visible starts require an unlocked resumed activity; system sticky restarts require an encrypted same-boot checkpoint. Eligible failed-credential callbacks only notify a live service; a server command cannot activate it. No owner role, root or shell bridge is introduced.
 
-Optional **Automatic recovery after reboot** requires a second local opt-in and Android's revocable **Display over other apps** special access. A boot/update receiver may then request a bounded real startup activity after first Android unlock. That activity resumes the approved camera service and closes without user interaction. It is non-exported, no-history, absent from recents, never shown over the lock screen and uses no overlay, transparent window, credential prompt or navigation restriction. A durable claim precedes the one automatic launch attempt per boot/app version. Failed launches do not retry in a UI loop; a twelve-second activity close deadline and attention fallback bound the normal failure path. No private key or photo is moved out of credential-encrypted storage. Force-stop and Android app controls remain effective exits.
+Optional **Automatic recovery after reboot** requires a second local opt-in and Android's revocable **Display over other apps** special access. A boot/update receiver may then request a bounded real startup activity after first Android unlock. That activity resumes the approved camera service and closes without user interaction. It is non-exported, no-history, absent from recents, never shown over the lock screen and uses no overlay, transparent window, credential prompt or navigation restriction. A durable claim precedes the one automatic launch attempt per boot/app version. Failed launches do not retry in a UI loop; a twelve-second activity close deadline and an in-app status message bound the normal failure path. No private key or photo is moved out of credential-encrypted storage. Force-stop and Android app controls remain effective exits.
 
 Disarm, local stop, command withdrawal and ordinary-administration deactivation disable both camera choices and independently cancel pending startup, stop capture and clear checkpoints/unsent photos. Local recovery initializes no Identity or camera hardware and continues other cleanup when a step fails. Clearing local stop does not restore either opt-in. Disabling only automatic boot recovery leaves current protection alone; revoking the Android special access removes future background-launch authority. Unexpected process/connection-service loss preserves authorized data for permitted recovery and never overrides withdrawal. Camera mode and the additional activity permission cannot change airplane mode. See [behavior and unperformed physical acceptance](RECOVERY_CONTROLS.md).
 
@@ -117,7 +117,7 @@ Network callbacks, monotonic retries, independent GPS sampling and bounded uploa
 
 ## Restart location permission
 
-Automatic GPS recovery after first unlock requires precise and background location permission, explicitly granted through Android Settings, plus the sharing restart opt-in or standing theft-photo opt-in. The grant is optional and can be revoked normally. Without it, automatic restart can reconnect in a connection-only foreground service and reports GPS paused; open Bungee and resume GPS from the visible screen. A blocked foreground-service start posts an attention notification when notifications are allowed. No identity or GPS access is promised before first unlock. Physical GrapheneOS cold-boot/lock/Doze acceptance is still open; see [the review follow-up](REVIEW-2026-10.md).
+Automatic GPS recovery after first unlock requires precise and background location permission, explicitly granted through Android Settings, plus the sharing restart opt-in or standing theft-photo opt-in. The grant is optional and can be revoked normally. Without it, automatic restart can reconnect in a connection-only foreground service and reports GPS paused; open Bungee and resume GPS from the visible screen. A blocked foreground-service start is reported inside Bungee without posting a reboot reminder. No identity or GPS access is promised before first unlock. Physical GrapheneOS cold-boot/lock/Doze acceptance is still open; see [the review follow-up](REVIEW-2026-10.md).
 
 ## Command consent and storage failure
 
@@ -131,3 +131,10 @@ Stop sharing persists the independent local stop. The stopped screen says **Open
 ## Removal audit
 
 [REMOVAL_AUDIT.md](REMOVAL_AUDIT.md) records ownership, asynchronous deactivation, pairing cancellation, service/permission failures and OS removal paths. A foreground-service task-manager Stop ends current execution; use Bungee local stop for a saved opt-out across boot/update. Android can require ordinary administration deactivation before offering force-stop or uninstall.
+
+
+## Explicit optional Private DNS
+
+The optional ADB-approved controller is distinct from the rejected device-owner `managed_dns` policy. It needs a reachable public DoT hostname/certificate, the revocable development permission, and local phone approval. The separate DNS monitor cannot take Android's VPN slot or depend on GPS/camera permissions. Saved undo state is independent of pairing keys; failed restoration blocks pairing erasure. Off restores prior DNS, while the selected failure fallback restores Automatic and remains latched until retry. Manual Android DNS changes pause automatic control. Planned removal restores and verifies DNS before clearing approval/recovery data. The host requires restoration confirmation before removing a relay; offline restoration can be explicitly confirmed and audited by its administrator.
+
+Private DNS is an OS-persisted setting. A dead/force-stopped/uninstalled app cannot run its watchdog or cleanup; revoking its grant before restoration can also prevent automatic recovery. This optional mode therefore does not guarantee normal connectivity under those conditions. Restore through Bungee before removal, or select Automatic in Android Private DNS settings/ADB directly. Android Settings remains available. Public service prerequisites and physical validation still pending are documented in [DNS.md](DNS.md) and [VALIDATION.md](VALIDATION.md).

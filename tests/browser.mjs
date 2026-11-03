@@ -449,9 +449,10 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       await page
         .getByRole("heading", { name: "Recovery & management", exact: true })
         .waitFor();
-      await page
-        .getByRole("cell", { name: "example.org", exact: false })
-        .waitFor();
+      assert.equal(await page.locator(".dns-panel").count(),0);
+      await page.getByRole("button",{name:"DNS",exact:true}).click();
+      await page.getByRole("cell",{name:"example.org",exact:false}).waitFor();
+      await page.getByRole("button",{name:"Device care",exact:true}).click();
       await page
         .getByRole("heading", { name: "Delivery & offline queue" })
         .waitFor();
@@ -598,7 +599,8 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await page
       .getByRole("heading", { name: "Device consent & management" })
       .waitFor();
-    await page.locator(".settings-device strong").filter({hasText:"Browser test phone"}).first().waitFor();
+    await page.getByRole("button",{name:"Open pairing & history",exact:true}).click();
+    await page.getByRole("region",{name:"Pairing and history for Browser test phone"}).waitFor();
   });
   await t.test(
     "history supports time slices, selecting a point, state logs and private CSV export",
@@ -703,8 +705,9 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     },
   );
   await t.test(
-    "saved location can be erased from settings while the phone stays paired",
+    "saved history can be erased from Pairing & history while the phone stays paired",
     async () => {
+      await page.getByRole("button",{name:"Pairing & history",exact:true}).click();
       await page
         .getByRole("button", { name: "Erase saved history", exact: true })
         .click();
@@ -737,8 +740,8 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       return r.json();
     },key);
     execFileSync("python3",["-c","import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('DELETE FROM enrollments WHERE device_id=?',(sys.argv[2],)); c.commit()",join(dir,"bungee.sqlite3"),original.device_id]);
-    await page.getByRole("button",{name:"Settings",exact:true}).click();
-    const deviceRow=page.locator(".settings-device").filter({hasText:"Expired invitation fixture"});
+    await page.getByRole("button",{name:"Pairing & history",exact:true}).click();
+    const deviceRow=page.locator(".record-card").filter({hasText:"Expired invitation fixture"});
     await deviceRow.getByRole("button",{name:"Reissue invitation"}).click();
     assert.equal(await page.getByLabel("Phone’s WireGuard public key",{exact:true}).inputValue(),key);
     await page.getByRole("button",{name:"Create one-time enrollment"}).click();
@@ -755,12 +758,11 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       return response.json();
     }, key);
     execFileSync("python3", ["-c", "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('UPDATE enrollments SET expires=1 WHERE device_id=?',(sys.argv[2],)); c.commit()", join(dir,"bungee.sqlite3"), old.device_id]);
-    await page.getByRole("button", {name:"Settings",exact:true}).click();
-    const inactive = page.locator(".settings-card").filter({has:page.getByRole("heading",{name:"Inactive pairings",exact:true})});
-    const row = inactive.locator(".settings-device").filter({hasText:"Stale binding fixture"});
-    await row.getByRole("button",{name:"Purge binding",exact:true}).click();
-    await page.getByRole("heading",{name:"Purge this inactive binding?"}).waitFor();
-    await page.getByRole("dialog").getByRole("button",{name:"Purge binding",exact:true}).click();
+    await page.getByRole("button", {name:"Pairing & history",exact:true}).click();
+    const row = page.locator(".record-card").filter({hasText:"Stale binding fixture"});
+    await row.getByRole("button",{name:"Remove inactive pairing",exact:true}).click();
+    await page.getByRole("heading",{name:"Remove this inactive pairing?"}).waitFor();
+    await page.getByRole("dialog").getByRole("button",{name:"Remove inactive pairing",exact:true}).click();
     await page.getByRole("dialog").waitFor({state:"hidden"});
     await page.getByRole("button",{name:"Create another invitation",exact:true}).click();
     assert.equal(await page.getByLabel("Phone’s WireGuard public key",{exact:true}).inputValue(), "");

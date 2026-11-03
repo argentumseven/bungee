@@ -46,7 +46,10 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
         queries INTEGER NOT NULL, activities INTEGER NOT NULL, last_window INTEGER NOT NULL,
         first_at INTEGER NOT NULL,last_at INTEGER NOT NULL, answers INTEGER NOT NULL,nxdomain INTEGER NOT NULL,
         errors INTEGER NOT NULL,a INTEGER NOT NULL,aaaa INTEGER NOT NULL,https INTEGER NOT NULL,other INTEGER NOT NULL,
-        PRIMARY KEY(device_id,bucket,domain));")?;
+        PRIMARY KEY(device_id,bucket,domain));
+      CREATE INDEX IF NOT EXISTS dns_summary_bucket_device ON dns_summary(bucket,device_id);
+      CREATE TABLE IF NOT EXISTS dns_profiles(device_id TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE, revision INTEGER NOT NULL, enabled INTEGER NOT NULL, fallback INTEGER NOT NULL, removed INTEGER NOT NULL, hostname TEXT NOT NULL, report TEXT);
+      CREATE UNIQUE INDEX IF NOT EXISTS dns_profiles_hostname ON dns_profiles(hostname) WHERE hostname<>'';")?;
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS network_history(
         device_id TEXT NOT NULL REFERENCES devices(id), observed_at INTEGER NOT NULL,

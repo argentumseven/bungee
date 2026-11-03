@@ -46,7 +46,7 @@ pub async fn check_path(
     if !active {
         return Err(denied());
     }
-    record(&db, &id, "[Bungee DNS path test]", RecordType::A, code)?;
+    record(&db, &id, crate::dns_history::PATH_TEST, RecordType::A, code)?;
     Ok(Json(
         json!({"reachable":reachable,"upstream":config.upstream.to_string(),"query":"example.com","response_code":code.to_string(),"answers":response.as_ref().map(|reply|reply.answers().len()).unwrap_or(0),"phone_dns_routed":false,"routing":"app_only","server_time":now()}),
     ))
@@ -403,6 +403,44 @@ pub async fn erase(
     crate::store::audit(&db, "dns.erased", Some(&id), "DNS summaries erased")?;
     Ok(Json(json!({"erased":true})))
 }
+/// TLS relay profiles are attributed by a random per-phone hostname, never by a shared NAT address.
+pub async fn forward_profile(app: &App, id: &str, host: &str, data: &[u8]) -> Option<Vec<u8>> {
+    rate_limit(app, RateClass::Dns, format!("profile:{id}"), 1200).ok()?;
+    let query = Message::from_vec(data).ok()?;
+    if query.message_type() != MessageType::Query
+        || query.op_code() != OpCode::Query
+        || query.queries().len() != 1
+    {
+        return error_reply(&query, ResponseCode::Refused).to_vec().ok();
+    }
+    let q = query.query()?;
+    if q.query_class() != DNSClass::IN
+        || [RecordType::AXFR, RecordType::IXFR, RecordType::ANY].contains(&q.query_type())
+    {
+        return error_reply(&query, ResponseCode::Refused).to_vec().ok();
+    }
+    let mut reply = upstream(app.dns.as_ref()?, &query, false)
+        .await
+        .unwrap_or_else(|_| error_reply(&query, ResponseCode::ServFail));
+    if crate::private_dns::peer(app, host).as_deref() != Some(id) {
+        return None;
+    }
+    let db = app.db.lock().unwrap();
+    if crate::private_dns::peer_db(&db, host).as_deref() != Some(id) {
+        return None;
+    }
+    record(
+        &db,
+        id,
+        &group(&q.name().to_ascii()),
+        q.query_type(),
+        reply.response_code(),
+    )
+    .ok()?;
+    reply.set_id(query.id());
+    reply.to_vec().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

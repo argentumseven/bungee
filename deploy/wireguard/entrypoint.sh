@@ -41,6 +41,9 @@ for firewall in iptables ip6tables; do
     "$firewall" -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     "$firewall" -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     "$firewall" -A INPUT -p udp --dport "$BUNGEE_WG_PORT" -j ACCEPT
+    if [ -n "${BUNGEE_PRIVATE_DNS_HOST:-}" ]; then
+        "$firewall" -A INPUT -i eth0 -p tcp --dport 8853 -j ACCEPT
+    fi
     printf '%s\n' "$admin_rules" | while read -r family subnet; do
         if { [ "$family" = 4 ] && [ "$firewall" = iptables ]; } || { [ "$family" = 6 ] && [ "$firewall" = ip6tables ]; }; then
             "$firewall" -A INPUT -i eth0 -s "$subnet" -p tcp --dport 8443 -j ACCEPT

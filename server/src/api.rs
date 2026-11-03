@@ -819,6 +819,7 @@ mod privacy_tests {
             state_dir: directory.clone(),
             wg_endpoint: None,
             dns: None,
+            private_dns: None,
             geography: Arc::new(crate::geography::Geography::load().unwrap()),
         };
         let body = json!({"battery":42,"charging":false,"capabilities":[],"device_owner":false,"gps_epoch":epoch,
