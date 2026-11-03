@@ -20,10 +20,10 @@ object DnsPathStatus {
         return result
     }
     fun describe(report: JSONObject): String {
-        if(!report.optBoolean("available"))return "Android DNS configuration is unavailable. Bungee captures no other-app DNS."
+        if(!report.optBoolean("available"))return "Android DNS configuration is unavailable. Bungee’s app connection does not capture other apps’ DNS."
         val servers=report.getJSONArray("servers")
         val list=(0 until servers.length()).joinToString(", ") { servers.getString(it) }.ifEmpty { "none reported" }
         val name=report.optString("private_dns_name","").takeIf { it!="null" && it.isNotEmpty() }
-        return "Android-reported DNS: $list. Private DNS: ${if(report.optBoolean("private_dns_active")) name ?: "active (automatic)" else "not active"}. Bungee captures no other-app DNS."
+        return "Android-reported DNS: $list. Private DNS: ${if(report.optBoolean("private_dns_active")) name ?: "active (automatic)" else "not active"}. Bungee’s app connection does not capture other apps’ DNS."
     }
 }

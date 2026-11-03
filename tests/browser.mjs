@@ -449,9 +449,10 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       await page
         .getByRole("heading", { name: "Recovery & management", exact: true })
         .waitFor();
-      await page
-        .getByRole("cell", { name: "example.org", exact: false })
-        .waitFor();
+      assert.equal(await page.locator(".dns-panel").count(),0);
+      await page.getByRole("button",{name:"DNS",exact:true}).click();
+      await page.getByRole("cell",{name:"example.org",exact:false}).waitFor();
+      await page.getByRole("button",{name:"Device care",exact:true}).click();
       await page
         .getByRole("heading", { name: "Delivery & offline queue" })
         .waitFor();

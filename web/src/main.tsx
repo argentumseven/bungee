@@ -11,6 +11,7 @@ import {
   Clipboard,
   Compass,
   Fingerprint,
+  Globe,
   Heart,
   House,
   KeyRound,
@@ -43,6 +44,7 @@ import {
   type NetworkObservation,
 } from "./PrivateMap";
 import { DeviceCare } from "./DeviceCare";
+import { DnsView } from "./DnsView";
 import { AppearanceControl, useAppearance } from "./Appearance";
 import { RecoveryMessagePreview } from "./RecoveryMessagePreview";
 import { PasswordSettings } from "./PasswordSettings";
@@ -135,6 +137,7 @@ function App() {
     [selected, setSelected] = useState(""),
     [page, setPage] = useState("Overview");
   const [devicesExpanded,setDevicesExpanded]=useState(true);
+  const [dnsDevice,setDnsDevice]=useState("");
   const [trackingTab,setTrackingTab]=useState("Current estimate");
   const [modal, setModal] = useState<
       "enroll" | "message" | "revoke" | "clear_location" | "purge_binding" | "erase_archive" | "reconnect" | "help" | null
@@ -185,6 +188,7 @@ function App() {
       setSelected("");
       setPage("Overview");
       setTrackingTab("Current estimate");
+      setDnsDevice("");
       setModal(null);
       setClearTarget(null);
       setBindingTarget(null);
@@ -435,6 +439,7 @@ function App() {
             { name: "Devices", icon: Smartphone },
             { name: "Device care", icon: ShieldCheck },
             { name: "Tracking", icon: Compass },
+            { name: "DNS", icon: Globe },
             { name: "Tunnels", icon: Radio },
             { name: "Activity", icon: Activity },
             { name: "Settings", icon: Settings },
@@ -514,6 +519,8 @@ function App() {
                       ? "Lost mode, theft photos and the phone’s last reported settings."
                       : page === "Tracking"
                         ? "Current estimates, movement history, network locations and recovery photos."
+                        : page === "DNS"
+                          ? "DNS activity, per-phone totals and the path to your home resolver."
                         : page === "Activity"
                           ? "Enrollment, administrator access and command events."
                           : "Connection, permissions and data retention."}
@@ -614,7 +621,6 @@ function App() {
                       {kind:"best_guess",name:"Best guess",desc:"Collect a longer GPS burst",icon:Compass},
                       {kind:"ring_flash",name:"Alarm + flash",desc:"Sound and rear-camera flash",icon:BellRing},
                       {kind:"flash",name:"Flash only",desc:"Find the phone visually",icon:Zap},
-                      {kind:"dns_check",name:"Test DNS path",desc:"Phone → Bungee → home resolver",icon:Activity},
                       {
                         kind: "message",
                         name: "Leave a message",
@@ -732,6 +738,7 @@ function App() {
               </div>
             </>
           )}
+          {page === "DNS" && <DnsView phones={devices} scope={dnsDevice} onScopeChange={setDnsDevice} commands={commands} onCommandQueued={load}/>}
           {page === "Tunnels" && <TunnelView devices={active}/>}
           {page === "Tracking" && (
             <>
@@ -773,7 +780,7 @@ function App() {
                 ))}
               </select>
               {device ? (
-                <DeviceCare key={device.id} device={device} />
+                <DeviceCare key={device.id} device={device} onOpenDns={()=>{setDnsDevice(device.id);setPage("DNS");}} />
               ) : (
                 <section className="panel history-panel">
                   Pair a phone to configure recovery and review its reported

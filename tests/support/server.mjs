@@ -10,12 +10,13 @@ async function freePort() {
   const listener=createServer(); await new Promise(r=>listener.listen(0,"127.0.0.1",r));
   const port=listener.address().port; await new Promise(r=>listener.close(r)); return port;
 }
-export async function fixture(t, {legacy = false, geodata = undefined, dns = undefined} = {}) {
+export async function fixture(t, {legacy = false, geodata = undefined, dns = undefined, privateDns = undefined} = {}) {
   const dir=await mkdtemp(join(tmpdir(),"bungee-review2-"));
   const chosenPorts=new Set();
   const distinctPort=async()=>{let value;do {value=await freePort();} while(chosenPorts.has(value));chosenPorts.add(value);return value;};
   const port=await distinctPort(), devicePort=await distinctPort();
   const dnsPort=dns?await distinctPort():null;
+  const dotPort=privateDns?await distinctPort():null;
   const origin=`http://127.0.0.1:${port}`, deviceOrigin=`http://127.0.0.1:${devicePort}`;
   const password=randomBytes(24).toString("base64url");
   const verifier = legacy ? password : execFileSync(resolve("server/target/debug/bungee-server"), ["--hash-admin-password"], {input:password, encoding:"utf8"});
@@ -32,7 +33,7 @@ export async function fixture(t, {legacy = false, geodata = undefined, dns = und
     cookie=response.headers.get("set-cookie").split(";")[0];
   };
   const launch=async(credential=password)=>{
-    server=spawn(resolve("server/target/debug/bungee-server"),[],{env:{...process.env,BUNGEE_STATE_DIR:dir,BUNGEE_APP_UPDATES_DIR:join(dir,"app-updates"),BUNGEE_MAP_CONTROL_DIR:join(dir,"map-control"),BUNGEE_MAPS_DIR:join(dir,"maps"),...(dns?{BUNGEE_DNS_UPSTREAM_IP:dns.ip,BUNGEE_DNS_UPSTREAM_PORT:String(dns.port),BUNGEE_DNS_BIND:`127.0.0.1:${dnsPort}`} :{}),...(geodata?{BUNGEE_GEODATA_DIR:geodata}:{}),BUNGEE_ADMIN_BIND:`127.0.0.1:${port}`,BUNGEE_DEVICE_BIND:`127.0.0.1:${devicePort}`,BUNGEE_PUBLIC_ORIGIN:origin,BUNGEE_WG_ENDPOINT:"203.0.113.10:47937"},stdio:["ignore","pipe","pipe"]});
+    server=spawn(resolve("server/target/debug/bungee-server"),[],{env:{...process.env,BUNGEE_STATE_DIR:dir,BUNGEE_APP_UPDATES_DIR:join(dir,"app-updates"),BUNGEE_MAP_CONTROL_DIR:join(dir,"map-control"),BUNGEE_MAPS_DIR:join(dir,"maps"),...(dns?{BUNGEE_DNS_UPSTREAM_IP:dns.ip,BUNGEE_DNS_UPSTREAM_PORT:String(dns.port),BUNGEE_DNS_BIND:`127.0.0.1:${dnsPort}`} :{}),...(geodata?{BUNGEE_GEODATA_DIR:geodata}:{}),...(privateDns?{BUNGEE_PRIVATE_DNS_HOST:privateDns.host,BUNGEE_PRIVATE_DNS_CERT_FILE:privateDns.cert,BUNGEE_PRIVATE_DNS_KEY_FILE:privateDns.key,BUNGEE_PRIVATE_DNS_BIND:`127.0.0.1:${dotPort}`} :{}),BUNGEE_ADMIN_BIND:`127.0.0.1:${port}`,BUNGEE_DEVICE_BIND:`127.0.0.1:${devicePort}`,BUNGEE_PUBLIC_ORIGIN:origin,BUNGEE_WG_ENDPOINT:"203.0.113.10:47937"},stdio:["ignore","pipe","pipe"]});
     server.stdout.on("data",b=>logs+=b); server.stderr.on("data",b=>logs+=b);
     let ready=false;
     for(let n=0;n<200;n++) { try { if((await fetch(origin+"/healthz")).ok) {ready=true;break;} } catch {} if(server.exitCode!==null)throw Error(logs); await pause(25); }
@@ -45,5 +46,5 @@ export async function fixture(t, {legacy = false, geodata = undefined, dns = und
   await launch();
   const sql=(statement,parameters=[])=>JSON.parse(execFileSync("python3",["-c","import sqlite3,sys,json; c=sqlite3.connect(sys.argv[1]); r=c.execute(sys.argv[2],json.loads(sys.argv[3])); v=r.fetchall(); c.commit(); print(json.dumps(v))",join(dir,"bungee.sqlite3"),statement,JSON.stringify(parameters)],{encoding:"utf8"}));
   const device=(path,body)=>fetch(deviceOrigin+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-  return {dir,origin,deviceOrigin,admin,device,sql,stop,launch,login,password,get cookie(){return cookie;},get pid(){return server.pid;},get logs(){return logs;}};
+  return {dir,origin,deviceOrigin,dotPort,admin,device,sql,stop,launch,login,password,get cookie(){return cookie;},get pid(){return server.pid;},get logs(){return logs;}};
 }

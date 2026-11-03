@@ -14,6 +14,7 @@ class BungeeApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         // No device-owner or always-on activation. Local recovery initializes no pairing keys.
+        runCatching { PrivateDns.interrupted(this) }
         ArmedCameraService.refreshReadiness(this)
     }
 }
@@ -30,6 +31,7 @@ object RecoveryStartup {
     fun startIfApproved(context: Context) {
         runCatching {
             if (!LocalSafety.isConnectionRestartAllowed(context) || ManagementAgent.blocksPersonalOperation(context)) return
+            if (PrivateDns.state(context).consent) PrivateDnsService.start(context)
             val identity = Identity(context)
             if (identity.enrolled) {
                 ContextCompat.startForegroundService(context, Intent(context, TelemetryService::class.java).setAction("AUTO_START"))

@@ -11,7 +11,7 @@ class DnsPathStatusTest {
             .put("private_dns_active",false).put("private_dns_name",JSONObject.NULL)
         val text=DnsPathStatus.describe(report)
         assertTrue(text.contains("10.10.20.3"));assertTrue(text.contains("Private DNS: not active"))
-        assertTrue(text.contains("captures no other-app DNS"));assertFalse(text.contains("null"))
+        assertTrue(text.contains("does not capture other apps’ DNS"));assertFalse(text.contains("null"))
     }
     @Test fun privateDnsIsIdentifiedWithoutCallingItBungeeRouting() {
         val report=JSONObject().put("available",true).put("servers",JSONArray()).put("private_dns_active",true).put("private_dns_name","dns.example.test")

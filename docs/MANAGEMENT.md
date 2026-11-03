@@ -18,9 +18,9 @@ Scheduled airplane-mode cycling requires protected system networking authority t
 
 ## Connection and DNS
 
-The app-contained official WireGuard/gVisor transport carries only Bungee's home API and leaves Android's VPN slot free. Bungee changes no system routes/DNS. Other VPNs can route or filter its outer socket. Ordinary networking remains under the user's Android/VPN configuration.
+The app-contained official WireGuard/gVisor transport carries only Bungee's home API and leaves Android's VPN slot free. By default Bungee changes no system routes/DNS. The optional [Private DNS controller](DNS.md) requires an ADB grant and separate local approval; it uses no VPN slot or device-owner policy. Other VPNs can route or filter its outer socket. Ordinary networking remains under the user's Android/VPN configuration.
 
-The server retains legacy DNS rollup/read/erase and forwarding code for prior-version compatibility/tests. New phones cannot enroll in managed DNS or enable it through the API. Leave BUNGEE_DNS_UPSTREAM_IP empty for new deployments. Existing summaries are five-minute registrable-site groups with folded 10-second activity windows, not app-attributed browsing history. No raw subdomain/answer/payload log is added. Any separately configured legacy private resolver controls its own logging/upstreams.
+The server retains legacy DNS rollup/read/erase and forwarding code for prior-version compatibility/tests. New phones cannot enroll in managed DNS or enable it through the API. The same explicit home resolver can also serve the optional [public DoT relay](DNS.md); configuring an upstream alone does not enable phone-wide DNS. Existing summaries are five-minute registrable-site groups with folded 10-second activity windows, not app-attributed browsing history. No raw subdomain/answer/payload log is added. Any separately configured legacy private resolver controls its own logging/upstreams.
 
 <a id="existing-owner-from-an-older-preview"></a>
 

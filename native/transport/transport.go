@@ -185,7 +185,7 @@ func Exchange(path, body, headersJSON string) (string, error) {
 // Exchange only permits the fixed POST API, with bounded JSON and signed headers.
 // The JSON result contains an HTTP status and body, never a redirect or provider URL.
 func ExchangeRequest(id int64, path, body, headersJSON string, timeoutMillis int64) (string, error) {
-	allowed := map[string]bool{"/v1/enroll": true, "/v1/telemetry": true, "/v1/photos": true, "/v1/commands": true, "/v1/command-check": true, "/v1/dns-check": true, "/v1/ack": true, "/v1/sync": true, "/v1/app-update": true, "/v1/app-update/chunk": true}
+	allowed := map[string]bool{"/v1/enroll": true, "/v1/telemetry": true, "/v1/photos": true, "/v1/commands": true, "/v1/command-check": true, "/v1/dns-check": true, "/v1/private-dns": true, "/v1/ack": true, "/v1/sync": true, "/v1/app-update": true, "/v1/app-update/chunk": true}
 	maxBody, maxTimeout := 32768, int64(10000)
 	if path == "/v1/photos" {
 		maxBody, maxTimeout = 2*1024*1024, 60000

@@ -27,10 +27,10 @@ const denied = (name, ip, port, message) => assert.throws(
 );
 const firewall = readFileSync('deploy/wireguard/entrypoint.sh', 'utf8').split('mkdir -p /private /peers')[0];
 let subnet, resolver;
-const install = (dns = true) => docker(['exec', '-i',
+const install = (dns = true, privateDns = false) => docker(['exec', '-i',
   '-e', 'BUNGEE_WG_PORT=47937', '-e', `BUNGEE_ADMIN_SUBNETS=${subnet}`,
   '-e', `BUNGEE_DNS_UPSTREAM_IP=${dns ? resolver : ''}`,
-  '-e', 'BUNGEE_DNS_UPSTREAM_PORT=8053', gateway, 'sh'], firewall);
+  '-e', 'BUNGEE_DNS_UPSTREAM_PORT=8053', '-e', `BUNGEE_PRIVATE_DNS_HOST=${privateDns?'dns.example.test':''}`, gateway, 'sh'], firewall);
 async function until(check, message) {
   for (let n = 0; n < 80; n++) {
     try { if (check()) return; } catch {}
@@ -120,7 +120,16 @@ setInterval(()=>{if(!sent&&fs.existsSync('/run/send-after')){sent=true;s.write('
   denied(administrator, managementIp, 8081, 'Device API is not exposed on management eth0');
   denied(phone, '10.77.0.1', 8443, 'Rust administration is unreachable from wg0');
   denied(phone, managementIp, 8443, 'Changing the destination to eth0 does not bypass wg0 isolation');
+  // A synthetic TLS-port listener isolates firewall admission from certificate/protocol tests.
+  docker(['exec','-d',gateway,'python3','-c',"import socketserver;socketserver.ThreadingTCPServer.allow_reuse_address=True;socketserver.ThreadingTCPServer(('0.0.0.0',8853),socketserver.BaseRequestHandler).serve_forever()"]);
+  await until(()=>docker(['exec',gateway,'sh','-c',"ss -ltn | grep ':8853 '"]).includes('8853'),'DoT admission fixture did not start');
+  denied(administrator,managementIp,8853,'Public DoT is closed by default');
+  install(true,true);
+  assert.equal(connect(administrator,managementIp,8853),'connected','Optional public TLS listener is admitted separately');
+  denied(phone,'10.77.0.1',8853,'Public TLS admission does not open general wg0 ingress');
+  denied(phone,managementIp,8443,'Public TLS does not expose the manager');
   install(false);
+  denied(administrator,managementIp,8853,'Disabling public TLS closes fresh connections');
   denied(phone, '10.77.0.1', 5353, 'DNS is blocked when the optional service is disabled');
   assert.equal(connect(phone, '10.77.0.1', 8081), 'connected');
 

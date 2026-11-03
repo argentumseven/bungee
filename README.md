@@ -10,7 +10,7 @@ Bungee is a self-hosted device finder for Android 12+ and GrapheneOS. Pair house
 
 The Kotlin app connects through an app-contained WireGuard tunnel to a Rust server and web dashboard. Only Bungee traffic uses that tunnel; Android's VPN slot remains available. Phone records stay on your server until you erase them or revoke the device.
 
-**Version 1.1.15.** Physical GrapheneOS testing and an independent security audit are pending. See the [validation record](docs/VALIDATION.md) for completed checks and [security design](docs/SECURITY.md) for the trust model.
+**Version 1.1.16.** Physical GrapheneOS testing and an independent security audit are pending. See the [validation record](docs/VALIDATION.md) for completed checks and [security design](docs/SECURITY.md) for the trust model.
 
 ![Bungee dashboard in dark mode](docs/screenshots/dashboard.png)
 
@@ -42,7 +42,7 @@ The Kotlin app connects through an app-contained WireGuard tunnel to a Rust serv
 | Appearance | System/Light/Dark themes on web and Android, saved local choices, slate/charcoal/teal palettes and pink home/location icon |
 | VPN coexistence | Userspace WireGuard/TCP carries the fixed home API without OS routes, root or VpnService. Other VPNs can route or filter the outer UDP socket |
 | Device status | Desired/applied policy revision and errors, Android/security-patch version, screen-lock state, eligible failed-credential counts, lost mode and dated queue/camera reports |
-| DNS diagnostics | Signed phone → Bungee → configured home resolver test; Android-reported DNS/Private DNS settings; labelled diagnostic rollups and legacy summary erasure. Browser DNS is not captured; Android’s VPN slot stays unused |
+| Household DNS | Dedicated all-phone/per-phone workspace; separate traffic and path tests; optional ADB-approved Private DNS relay with per-phone off, restoration, removal and failure fallback. Requires a public DoT hostname/certificate; Android’s VPN slot stays unused |
 | Recovery safeguards | Server/client reject persistent policy fields and remote reboot; device/profile ownership blocks operation; owner provisioning disabled; no app suspension, uninstall blocks, forced credentials, kiosk or recovery-settings restrictions |
 | Pairing | Phone-generated identity, one-use ten-minute invitation bound to its public key, safe unpaired-invitation reissue, P-256 proof/signatures, replay protection and unique random 256-bit WireGuard PSK |
 | Network setup | Operator-chosen numeric endpoint and UDP port; 51820 rejected; only `10.77.0.1/32` routed inside Bungee; no default internet route |
@@ -110,7 +110,7 @@ For restoration after reboot or an app update, separately enable **Automatic rec
 
 **Stop all Bungee actions** stops an already playing siren and blinking flashlight, restores alarm volume, cancels remote work and older queued commands, clears the recovery notification, and turns off lost mode/haste. The phone must be reachable; a separate stop check runs while actions are active. Ordinary sharing and pairing stay intact. **Lock device** uses Android's standard screen lock: it does not change the credential or wipe anything. A stop can cancel a lock before it executes but cannot unlock Android afterward; unlock normally on the phone.
 
-Browser DNS does **not** enter Bungee's app-only tunnel. To use AdGuard for phone-wide DNS without taking Android's VPN slot, configure Wi-Fi DNS or Android Private DNS with AdGuard's reachable TLS hostname. **Test DNS path** verifies only the Bungee → home resolver forwarding path, and the phone shows its OS-reported DNS configuration. An empty Bungee DNS log is not evidence of captured browsing traffic.
+Browser DNS does **not** enter Bungee's app-only tunnel. The optional [household Private DNS relay](docs/DNS.md) connects Android's resolver to Bungee and then the home resolver, without using the VPN slot. It requires a reachable public DoT hostname, trusted wildcard certificate, and one-time ADB grant plus local approval. **DNS** provides household/per-phone breakdowns, on/off, fallback and removal; path tests remain separate. It stays off without setup, and apps using their own DoH can bypass it.
 
 **Pairing & recovery** is a visible button inside the normal phone app, including its lock screen. There is one launcher icon; the recovery panel works offline even when pairing keys cannot be opened. Stop preserves pairing and server history; reset pairing separately clears Bungee's local connection and queued records. Phone keys are kept unless you explicitly select fresh keys for a damaged identity. Android management repair is a separate confirmed action and never wipes a phone or removes a profile. Resume sharing in the main app; clearing a stop restores no camera/restart consent.
 
