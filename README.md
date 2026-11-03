@@ -189,3 +189,5 @@ python3 /opt/bungee/bungee-host.py maps
 For a scripted selection, use `maps --regions us-pacific,us-mountain`; add `--plan` to fetch sizes without installing archives. `maps-us` remains an alias for all eight US regions. Full postal-address reverse geocoding is not bundled; nearby mapped street names are explicitly approximate.
 
 ![Regional map picker and storage capacity](docs/screenshots/maps-storage.png)
+
+**Pairing & history** keeps disconnect, reconnect, erasure and inactive pairing cleanup together, with each action’s effects visible before confirmation. Reboot/update reminder alerts are disabled; Android-required running-service notifications remain silent.

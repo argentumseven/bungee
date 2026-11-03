@@ -43,6 +43,7 @@ import {
   geoLabel,
   type NetworkObservation,
 } from "./PrivateMap";
+import { DeviceRecords } from "./DeviceRecords";
 import { DeviceCare } from "./DeviceCare";
 import { DnsView } from "./DnsView";
 import { AppearanceControl, useAppearance } from "./Appearance";
@@ -138,9 +139,11 @@ function App() {
     [page, setPage] = useState("Overview");
   const [devicesExpanded,setDevicesExpanded]=useState(true);
   const [dnsDevice,setDnsDevice]=useState("");
+  const [recordsDevice,setRecordsDevice]=useState("");
+  const [pairingTarget,setPairingTarget]=useState<Device|null>(null);
   const [trackingTab,setTrackingTab]=useState("Current estimate");
   const [modal, setModal] = useState<
-      "enroll" | "message" | "revoke" | "clear_location" | "purge_binding" | "erase_archive" | "reconnect" | "help" | null
+      "enroll" | "message" | "disconnect" | "revoke" | "clear_location" | "purge_binding" | "erase_archive" | "reconnect" | "help" | null
     >(null),
     [toast, setToast] = useState("");
   const [name, setName] = useState(""),
@@ -192,7 +195,7 @@ function App() {
       setModal(null);
       setClearTarget(null);
       setBindingTarget(null);
-      setPurgedBinding(null);setRegistrationTarget(null);
+      setPurgedBinding(null);setRegistrationTarget(null);setPairingTarget(null);setRecordsDevice("");
       setBundle("");
       setPreviousWgKey("");
     };
@@ -299,13 +302,13 @@ function App() {
     }
   }
   async function revoke() {
-    if (!device) return;
+    if (!pairingTarget) return;
     setBusy(true);
     try {
-      await api(`/devices/${device.id}`, { method: "DELETE" });
+      await api(`/devices/${pairingTarget.id}`, { method: "DELETE" });
       setModal(null);
       setToast(
-        "Device revoked. Its location has been erased and its tunnel access removed.",
+        "Device revoked. Saved locations, photos, check-ins and DNS logs were erased; server access was removed.",
       );
       await load();
     } catch (e) {
@@ -438,6 +441,7 @@ function App() {
             { name: "Overview", icon: House },
             { name: "Devices", icon: Smartphone },
             { name: "Device care", icon: ShieldCheck },
+            { name: "Pairing & history", icon: KeyRound },
             { name: "Tracking", icon: Compass },
             { name: "DNS", icon: Globe },
             { name: "Tunnels", icon: Radio },
@@ -448,7 +452,7 @@ function App() {
               key={name}
               className={page === name ? "nav-item active" : "nav-item"}
               aria-expanded={name==="Devices"?devicesExpanded:undefined}
-              onClick={() => { if (name === "Devices" && page === "Devices") setDevicesExpanded(v=>!v); else {setPage(name); if(name==="Devices") setDevicesExpanded(true);} }}
+              onClick={() => { if (name === "Devices" && page === "Devices") setDevicesExpanded(v=>!v); else {setPage(name); if(name==="Pairing & history")setRecordsDevice(""); if(name==="Devices") setDevicesExpanded(true);} }}
             >
               <Icon size={19} />
               {name}{name==="Devices" && <ChevronRight size={14} style={{transform:devicesExpanded?"rotate(90deg)":undefined}}/>}
@@ -517,6 +521,8 @@ function App() {
                     ? "Recovery controls and tasks for this phone."
                     : page === "Device care"
                       ? "Lost mode, theft photos and the phone’s last reported settings."
+                      : page === "Pairing & history"
+                        ? "Manage phone connections, saved history and erasure in one place."
                       : page === "Tracking"
                         ? "Current estimates, movement history, network locations and recovery photos."
                         : page === "DNS"
@@ -558,7 +564,7 @@ function App() {
           {page === "Devices" && (
             <>
               {active.length>1 && <label className="device-picker">Phone<select value={device?.id||""} onChange={e=>setSelected(e.target.value)}>{active.map(d=><option key={d.id} value={d.id}>{d.name}</option>)}</select></label>}
-              {device && <section className="panel care-card device-summary"><h2>{device.name} · {online(device)?"Connected":"Offline"}</h2><p>Last authenticated contact {ago(device.last_contact??device.last_seen)} · Battery {device.telemetry?`${device.telemetry.battery}%`:"not reported"} · {connectionLabel(device)}</p><button className="text-button" onClick={()=>setPage("Device care")}>Device care &amp; theft-photo status</button><button className="text-button" onClick={()=>setPage("Tracking")}>Tracking &amp; history</button></section>}
+              {device && <section className="panel care-card device-summary"><h2>{device.name} · {online(device)?"Connected":"Offline"}</h2><p>Last authenticated contact {ago(device.last_contact??device.last_seen)} · Battery {device.telemetry?`${device.telemetry.battery}%`:"not reported"} · {connectionLabel(device)}</p><button className="text-button" onClick={()=>setPage("Device care")}>Device care &amp; theft-photo status</button><button className="text-button" onClick={()=>setPage("Tracking")}>Tracking &amp; history</button><button className="secondary" onClick={()=>{setRecordsDevice(device.id);setPage("Pairing & history");}}>Pairing &amp; history settings</button></section>}
               <div className="dashboard-grid device-detail-grid">
                 <section className="panel location-panel">
                   <div className="panel-heading">
@@ -816,6 +822,19 @@ function App() {
               ))}
             </section>
           )}
+          {page === "Pairing & history" && <>
+            <DeviceRecords phones={devices} scope={recordsDevice} onScope={setRecordsDevice}
+              onReconnect={d=>{setRegistrationTarget(d);setWgKey("");setModal("reconnect");}}
+              onDisconnect={d=>{setPairingTarget(d);setModal("disconnect");setError("");}}
+              onRevoke={d=>{setPairingTarget(d);setModal("revoke");setError("");}}
+              onEraseHistory={d=>{setClearTarget(d);setModal("clear_location");}}
+              onEraseArchive={d=>{setRegistrationTarget(d);setModal("erase_archive");}}
+              onRemoveKeys={d=>{setBindingTarget(d);setModal("purge_binding");setError("");}}
+              onReissue={d=>{setName(d.name);setWgKey(d.wg_public_key||"");setPreviousWgKey("");setBundle("");setModal("enroll");}}
+              onViewHistory={d=>{setSelected(d.id);setTrackingTab("Current estimate");setPage("Tracking");}}
+              onDns={d=>{setDnsDevice(d.id);setPage("DNS");}}/>
+            {purgedBinding&&<section className="panel records-next"><Check size={19}/><span>Inactive pairing removed for {purgedBinding.name}. Saved history was kept.</span><button className="secondary" onClick={()=>{setName(purgedBinding.name);setWgKey("");setPreviousWgKey(purgedBinding.wg_public_key||"");setBundle("");setModal("enroll");}}>Create another invitation</button></section>}
+          </>}
           {page === "Settings" && (
             <div className="settings-grid">
               <AppUpdates/>
@@ -842,8 +861,8 @@ function App() {
                   <li>One-use enrollment expires in 10 minutes</li>
                   <li>Remote commands expire in 5 minutes</li>
                   <li>
-                    No cloud push, external map/GeoIP lookups, network location,
-                    or public certificate authority
+                    No cloud push, external map/GeoIP lookups or network location.
+                    Optional Private DNS uses an operator-provided public certificate
                   </li>
                   <li>
                     Unique 256-bit WireGuard preshared key for each new phone
@@ -872,66 +891,7 @@ function App() {
                   special access. Recovery messages use Android notifications;
                   their visibility follows the phone’s notification settings.
                 </p>
-                {active.map((d) => (
-                  <div className="settings-device" key={d.id}>
-                    <strong>{d.name}</strong>
-                    <small>
-                      {d.telemetry?.device_owner
-                        ? "Legacy device owner · unsupported"
-                        : "Personal-device mode"}{" "}
-                      · {d.capabilities.join(", ") || "Awaiting consent"}
-                    </small>
-                    {!d.enrolled && d.wg_public_key && (
-                      <button className="text-button" onClick={() => { setName(d.name); setWgKey(d.wg_public_key!); setPreviousWgKey(""); setBundle(""); setModal("enroll"); }}>
-                        Reissue invitation
-                      </button>
-                    )}
-                    {!d.preshared_key && d.enrolled && (
-                      <p className="error">
-                        Re-pair required: this legacy identity has no preshared
-                        key and its tunnel is blocked.
-                      </p>
-                    )}
-                    {d.enrolled && (
-                      <button
-                        className="text-button"
-                        onClick={() => {
-                          setClearTarget(d);
-                          setModal("clear_location");
-                        }}
-                      >
-                        Erase saved history
-                      </button>
-                    )}
-                    <button className="secondary" onClick={()=>{setRegistrationTarget(d);setWgKey("");setModal("reconnect");}}>Reconnect · keep history</button>
-                    <br />
-                    <button
-                      className="danger-text"
-                      onClick={() => {
-                        setSelected(d.id);
-                        setModal("revoke");
-                      }}
-                    >
-                      Disconnect / erase options
-                    </button>
-                  </div>
-                ))}
-                <h3>Saved device history</h3>
-                {devices.filter(d=>d.revoked).map(d=><div className="settings-device" key={d.id}><strong>{d.name}</strong><small>Disconnected · saved records retained</small><button className="text-button" onClick={()=>{setSelected(d.id);setTrackingTab("Current estimate");setPage("Tracking");}}>View saved location &amp; history</button><button className="secondary" onClick={()=>{setRegistrationTarget(d);setWgKey("");setModal("reconnect");}}>Reconnect · keep history</button>{d.binding_released&&<button className="danger-text" onClick={()=>{setRegistrationTarget(d);setModal("erase_archive")}}>Erase saved archive…</button>}</div>)}
-              </section>
-              <section className="panel settings-card">
-                <KeyRound size={26} />
-                <h2>Inactive pairings</h2>
-                <p>Release inactive connection keys for a fresh invitation. Saved history stays available. Paired phones stay protected while offline. To disable a connection, use Disconnect · keep history.</p>
-                {devices.filter(d => d.can_purge_binding).length === 0 && <p>No inactive bindings to remove.</p>}
-                {devices.filter(d => d.can_purge_binding).map(d => <div className="settings-device" key={d.id}>
-                  <strong>{d.name}</strong>
-                  <small>{d.revoked ? "Revoked" : "Expired invitation · never paired"}</small>
-                  <button className="danger-text" onClick={() => { setBindingTarget(d); setModal("purge_binding"); setError(""); }}>Purge binding</button>
-                </div>)}
-                {purgedBinding&&<button className="secondary" onClick={()=>{
-                  setName(purgedBinding.name);setWgKey("");setPreviousWgKey(purgedBinding.wg_public_key||"");setBundle("");setModal("enroll");
-                }}>Create another invitation</button>}
+                <button className="primary" onClick={()=>{setRecordsDevice("");setPage("Pairing & history");}}>Open pairing &amp; history <ArrowRight size={15}/></button>
               </section>
             </div>
           )}
@@ -987,9 +947,10 @@ function App() {
                   ? "Leave a recovery message"
                   : modal === "clear_location"
                     ? "Erase this saved history?"
+                    : modal === "disconnect" ? "Disconnect this phone?"
                     : modal === "revoke"
-                      ? "Disconnect this device?"
-                      : modal === "erase_archive" ? "Erase this saved archive?" : modal === "reconnect" ? "Reconnect this phone · keep history" : modal === "purge_binding" ? "Purge this inactive binding?" : "Pairing instructions"}
+                      ? "Revoke access and erase saved data?"
+                      : modal === "erase_archive" ? "Delete this phone record and history?" : modal === "reconnect" ? "Reconnect this phone · keep history" : modal === "purge_binding" ? "Remove this inactive pairing?" : "Pairing instructions"}
             </h2>
             {modal === "enroll" && !bundle && (
               <form onSubmit={enroll}>
@@ -1077,7 +1038,7 @@ function App() {
                 </p>
               </>
             )}
-            {modal==="erase_archive"&&registrationTarget&&<><p>Permanently erase all saved GPS, IP history, photos and check-ins for <strong>{registrationTarget.name}</strong>? This does not change the phone and cannot be undone from the manager.</p><button className="primary danger full" disabled={busy} onClick={async()=>{setBusy(true);setError("");try{await api(`/devices/${registrationTarget.id}/archive`,{method:"DELETE"});setModal(null);setRegistrationTarget(null);await load();setToast("Saved archive erased.")}catch(e){setError((e as Error).message)}finally{setBusy(false)}}}>Erase this saved archive permanently</button></>}
+            {modal==="erase_archive"&&registrationTarget&&<><p>Permanently delete this phone record and all saved GPS, IP history, photos, check-ins and DNS logs for <strong>{registrationTarget.name}</strong>? This does not change the phone and cannot be undone from the manager.</p><button className="primary danger full" disabled={busy} onClick={async()=>{setBusy(true);setError("");try{await api(`/devices/${registrationTarget.id}/archive`,{method:"DELETE"});setModal(null);setRegistrationTarget(null);setRecordsDevice("");await load();setToast("Saved archive erased.")}catch(e){setError((e as Error).message)}finally{setBusy(false)}}}>Delete phone record & history</button></>}
             {modal==="reconnect"&&registrationTarget&&<form onSubmit={async e=>{
               e.preventDefault();setBusy(true);setError("");
               try{const result=await api(`/devices/${registrationTarget.id}/reconnect`,{method:"POST",body:JSON.stringify({wg_public_key:wgKey})});setBundle(JSON.stringify(result));setName(registrationTarget.name);setModal("enroll");await load();setToast("New invitation ready. The same device’s GPS and saved history were kept.");}catch(e){setError((e as Error).message);}finally{setBusy(false);}
@@ -1119,14 +1080,14 @@ function App() {
             {modal === "clear_location" && (
               <>
                 <p>
-                  Erase all GPS history, IP observations, recovery photos, check-in logs, and the
+                  Erase GPS history, IP observations, recovery photos, check-in logs, and the
                   last-known location for {clearTarget?.name}? The phone stays
                   paired. New fixes can appear while sharing is enabled; older
                   queued fixes will not restore erased history.
                 </p>
                 <p>
                   To stop future location updates, turn off location sharing on
-                  the phone.
+                  the phone. DNS history is erased separately in the DNS area.
                 </p>
                 <button
                   className="primary danger full"
@@ -1137,18 +1098,19 @@ function App() {
                 </button>
               </>
             )}
-            {modal === "revoke" && (
-              <>
-                <p>
-                  Disconnect {device?.name} while keeping its saved GPS, last known position and history. Reconnect it later with a fresh invitation; Android permissions and the phone itself are unchanged.
-                </p>
-                <button className="primary full" disabled={busy} onClick={async()=>{
-                  if(!device)return;setBusy(true);
-                  try{await api(`/devices/${device.id}/disconnect`,{method:"POST",body:"{}"});setModal(null);setToast("Phone disconnected. Saved GPS and history were kept.");await load();}catch(e){setError((e as Error).message);}finally{setBusy(false);}
-                }}>Disconnect · keep history</button>
-                <details className="erase-alternative"><summary>Erase saved data instead</summary><p>This permanently erases this device’s saved locations, photos and logs.</p><button className="primary danger full" disabled={busy} onClick={revoke}>Revoke and erase location</button></details>
-              </>
-            )}
+            {modal === "disconnect" && pairingTarget && <>
+              <p>Disconnect <strong>{pairingTarget.name}</strong>? This removes its current server access and pending commands. Saved GPS, photos, check-ins and DNS history stay available. Reconnecting needs a fresh invitation.</p>
+              <p>Restore household DNS on the phone first if it is enabled. This action does not uninstall the phone app.</p>
+              <div className="record-confirm-actions"><button className="secondary" disabled={busy} onClick={()=>setModal(null)}>Cancel</button><button className="primary" disabled={busy} onClick={async()=>{
+                setBusy(true);setError("");try{await api(`/devices/${pairingTarget.id}/disconnect`,{method:"POST",body:"{}"});setModal(null);setToast("Phone disconnected. Saved GPS and history were kept.");await load();}catch(e){setError((e as Error).message);}finally{setBusy(false)}
+              }}>Disconnect · keep history</button></div>
+            </>}
+            {modal === "revoke" && pairingTarget && <>
+              <p>Permanently erase saved data for <strong>{pairingTarget.name}</strong> and revoke its server access?</p>
+              <ul className="record-delete-list"><li>GPS history and last-known location</li><li>IP observations and check-ins</li><li>Recovery photos and DNS logs</li><li>Pending commands and current connection access</li></ul>
+              <p>This cannot be undone from the manager. The phone app and Android permissions are unchanged. Restore household DNS on the phone before removing its setup.</p>
+              <div className="record-confirm-actions"><button className="secondary" disabled={busy} onClick={()=>setModal(null)}>Cancel</button><button className="primary danger" disabled={busy} onClick={revoke}>Revoke &amp; erase data</button></div>
+            </>}
             {modal === "purge_binding" && bindingTarget && <>
               <p>Release the inactive connection binding for <strong>{bindingTarget.name}</strong>? Its saved GPS, last position and history remain available. Old invitations and connection secrets will not work again.</p>
               <p>Your phone is unchanged. Keep its current keys or generate new ones in Bungee’s Pairing &amp; recovery screen. A fresh invitation is always required.</p>
@@ -1163,7 +1125,7 @@ function App() {
                   setToast("Inactive binding released. Saved history is retained; the phone is unchanged.");
                 } catch(e) { setError((e as Error).message); }
                 finally { setBusy(false); }
-              }}>Purge binding</button>
+              }}>Remove inactive pairing</button>
             </>}
             {modal === "help" && (
               <>
@@ -1188,6 +1150,7 @@ function App() {
                 </div>
               </>
             )}
+            {["clear_location","purge_binding","erase_archive","reconnect"].includes(modal)&&<button className="secondary record-cancel" disabled={busy} onClick={()=>setModal(null)}>Cancel</button>}
             {error && (
               <div className="error" role="alert">
                 {error}

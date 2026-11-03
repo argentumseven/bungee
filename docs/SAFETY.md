@@ -82,7 +82,7 @@ Android/GrapheneOS owner-release verification is still outstanding.
 
 ## Server pairing cleanup
 
-In **Settings → Inactive pairings**, purge a revoked device or an expired,
+In **Pairing & history**, remove the inactive pairing for a revoked device or an expired,
 never-redeemed invitation to release its public-key binding and remaining records.
 A paired phone is still in use even when offline. Purge rejects live invitations
 and non-revoked paired phones; explicitly revoke first when retiring a pairing.
@@ -103,7 +103,7 @@ Any future control that can outlive the app or remove a local recovery path must
 
 The optional `camera` foreground service uses one locally authenticated, persistent opt-in. Initial and restored visible starts require an unlocked resumed activity; system sticky restarts require an encrypted same-boot checkpoint. Eligible failed-credential callbacks only notify a live service; a server command cannot activate it. No owner role, root or shell bridge is introduced.
 
-Optional **Automatic recovery after reboot** requires a second local opt-in and Android's revocable **Display over other apps** special access. A boot/update receiver may then request a bounded real startup activity after first Android unlock. That activity resumes the approved camera service and closes without user interaction. It is non-exported, no-history, absent from recents, never shown over the lock screen and uses no overlay, transparent window, credential prompt or navigation restriction. A durable claim precedes the one automatic launch attempt per boot/app version. Failed launches do not retry in a UI loop; a twelve-second activity close deadline and attention fallback bound the normal failure path. No private key or photo is moved out of credential-encrypted storage. Force-stop and Android app controls remain effective exits.
+Optional **Automatic recovery after reboot** requires a second local opt-in and Android's revocable **Display over other apps** special access. A boot/update receiver may then request a bounded real startup activity after first Android unlock. That activity resumes the approved camera service and closes without user interaction. It is non-exported, no-history, absent from recents, never shown over the lock screen and uses no overlay, transparent window, credential prompt or navigation restriction. A durable claim precedes the one automatic launch attempt per boot/app version. Failed launches do not retry in a UI loop; a twelve-second activity close deadline and an in-app status message bound the normal failure path. No private key or photo is moved out of credential-encrypted storage. Force-stop and Android app controls remain effective exits.
 
 Disarm, local stop, command withdrawal and ordinary-administration deactivation disable both camera choices and independently cancel pending startup, stop capture and clear checkpoints/unsent photos. Local recovery initializes no Identity or camera hardware and continues other cleanup when a step fails. Clearing local stop does not restore either opt-in. Disabling only automatic boot recovery leaves current protection alone; revoking the Android special access removes future background-launch authority. Unexpected process/connection-service loss preserves authorized data for permitted recovery and never overrides withdrawal. Camera mode and the additional activity permission cannot change airplane mode. See [behavior and unperformed physical acceptance](RECOVERY_CONTROLS.md).
 
@@ -117,7 +117,7 @@ Network callbacks, monotonic retries, independent GPS sampling and bounded uploa
 
 ## Restart location permission
 
-Automatic GPS recovery after first unlock requires precise and background location permission, explicitly granted through Android Settings, plus the sharing restart opt-in or standing theft-photo opt-in. The grant is optional and can be revoked normally. Without it, automatic restart can reconnect in a connection-only foreground service and reports GPS paused; open Bungee and resume GPS from the visible screen. A blocked foreground-service start posts an attention notification when notifications are allowed. No identity or GPS access is promised before first unlock. Physical GrapheneOS cold-boot/lock/Doze acceptance is still open; see [the review follow-up](REVIEW-2026-10.md).
+Automatic GPS recovery after first unlock requires precise and background location permission, explicitly granted through Android Settings, plus the sharing restart opt-in or standing theft-photo opt-in. The grant is optional and can be revoked normally. Without it, automatic restart can reconnect in a connection-only foreground service and reports GPS paused; open Bungee and resume GPS from the visible screen. A blocked foreground-service start is reported inside Bungee without posting a reboot reminder. No identity or GPS access is promised before first unlock. Physical GrapheneOS cold-boot/lock/Doze acceptance is still open; see [the review follow-up](REVIEW-2026-10.md).
 
 ## Command consent and storage failure
 

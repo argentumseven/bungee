@@ -112,16 +112,15 @@ class ArmedCameraService : Service() {
     private fun notification(ready: Boolean): Notification {
         val stop = PendingIntent.getService(this, 10, Intent(this, ArmedCameraService::class.java).setAction("DISARM"), PendingIntent.FLAG_IMMUTABLE)
         val open = PendingIntent.getActivity(this, 11, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
-        return NotificationCompat.Builder(this, "armed_camera").setSmallIcon(R.drawable.ic_bungee)
+        return NotificationCompat.Builder(this, "armed_camera").setSilent(true).setOnlyAlertOnce(true).setSmallIcon(R.drawable.ic_bungee)
             .setContentTitle(if (ready) "Bungee camera is armed" else "Starting Bungee camera protection")
             .setContentText("Waiting for 3 new failed PIN/password entries. Armed does not mean a photo was captured.")
-            .setContentIntent(open).setVisibility(NotificationCompat.VISIBILITY_PUBLIC).setOngoing(true)
+            .setContentIntent(open).setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setOngoing(true)
             .addAction(NotificationCompat.Action.Builder(0, "Disarm camera", stop).setAuthenticationRequired(true).build()).build()
     }
     private fun markUnavailable(reason: String) {
         val cleanup = runCatching { invalidate(this) }
         refreshReadiness(this, if (cleanup.isSuccess) reason else "Cancellation incomplete; use local recovery or Android Settings")
-        showAttention(this)
     }
     private fun saveGate() {
         val stamp = PrivacySends.fence.stamp()
@@ -230,18 +229,6 @@ class ArmedCameraService : Service() {
             status.value = ArmedCameraStatus(detail = if (LocalSafety.isCameraEnabled(context))
                 "Enabled · not ready: ${reason ?: if (LocalSafety.isCameraRestartAllowed(context)) "automatic recovery configured; check startup access" else "open Bungee or enable automatic boot recovery"}"
             else "Disabled · enable theft photos once on this phone")
-        }
-        fun showAttention(context: Context) {
-            if (!LocalSafety.isCameraEnabled(context) || currentSession() != null) return
-            runCatching {
-                val nm = context.getSystemService(NotificationManager::class.java)
-                nm.createNotificationChannel(NotificationChannel("camera_attention", "Camera protection needs attention", NotificationManager.IMPORTANCE_DEFAULT))
-                val open = PendingIntent.getActivity(context, 12, Intent(context, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
-                nm.notify(12, NotificationCompat.Builder(context, "camera_attention").setSmallIcon(R.drawable.ic_bungee)
-                    .setContentTitle("Open Bungee to resume theft photos")
-                    .setContentText("Camera protection is enabled but not ready. Open Bungee once; Android permissions still apply.")
-                    .setContentIntent(open).setAutoCancel(true).build())
-            }
         }
         fun discardPending(context: Context) = synchronized(PhotoOutbox.lock) {
             PendingPhotos.clear()

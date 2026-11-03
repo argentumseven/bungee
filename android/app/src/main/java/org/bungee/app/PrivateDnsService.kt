@@ -28,7 +28,7 @@ class PrivateDnsService : Service() {
         val nm=getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel("dns","Private DNS protection",NotificationManager.IMPORTANCE_LOW))
         val open=PendingIntent.getActivity(this,16,Intent(this,MainActivity::class.java),PendingIntent.FLAG_IMMUTABLE)
-        val notification=NotificationCompat.Builder(this,"dns").setSmallIcon(R.drawable.ic_bungee).setContentTitle("Bungee DNS monitor")
+        val notification=NotificationCompat.Builder(this,"dns").setSilent(true).setOnlyAlertOnce(true).setSmallIcon(R.drawable.ic_bungee).setContentTitle("Bungee DNS monitor")
             .setContentText("Checks DNS and restores normal DNS when fallback is enabled").setContentIntent(open).setOngoing(true).build()
         try {startForeground(16,notification,if(Build.VERSION.SDK_INT>=34)ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0)}
         catch(_:RuntimeException){runCatching { PrivateDns.interrupted(this) };stopSelf();return START_NOT_STICKY}

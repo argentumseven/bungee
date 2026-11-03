@@ -3,8 +3,6 @@ package org.bungee.app
 import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
-import android.os.Handler
-import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 
@@ -34,14 +32,13 @@ object CameraBootRecovery {
             if (!allowed(context) || context.getSystemService(KeyguardManager::class.java).isDeviceLocked) return
             if (ArmedCameraService.currentSession() != null) { gate(context).cancel(); return }
             val stamp = PrivacySends.fence.stamp()
-            val launched = PrivacySends.fence.checked(stamp, { allowed(context) }) {
+            PrivacySends.fence.checked(stamp, { allowed(context) }) {
                 gate(context).launch(key(context), SystemClock.elapsedRealtime(), { allowed(context) && !context.getSystemService(KeyguardManager::class.java).isDeviceLocked }) {
                     context.startActivity(Intent(context, CameraRecoveryActivity::class.java).putExtra("request_key", key(context))
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS))
                 }
             }
-            if (launched) Handler(Looper.getMainLooper()).postDelayed({ ArmedCameraService.showAttention(context.applicationContext) }, 15_000)
-        }.onFailure { ArmedCameraService.showAttention(context) }
+        }.onFailure { ArmedCameraService.refreshReadiness(context,"automatic startup was restricted; open Bungee") }
     }
     @Synchronized fun consume(context: Context, requestKey: String?): Boolean = runCatching {
         if (requestKey != key(context)) return false

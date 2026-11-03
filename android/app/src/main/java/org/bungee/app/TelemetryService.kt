@@ -104,7 +104,7 @@ class TelemetryService : Service() {
                 startForeground(1, notification(), fallbackType)
             }
         } catch (_: RuntimeException) {
-            RecoveryStartup.showResumeNotification(this)
+            RecoveryStartup.reportResumeNeeded(this)
             stopSelf(); return START_NOT_STICKY
         }
         updateLocationStatus()
@@ -239,7 +239,7 @@ class TelemetryService : Service() {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val pause = PendingIntent.getService(this, 1, Intent(this, TelemetryService::class.java).setAction("STOP"), PendingIntent.FLAG_IMMUTABLE)
         val hush = PendingIntent.getService(this, 2, Intent(this, TelemetryService::class.java).setAction("STOP_RING"), PendingIntent.FLAG_IMMUTABLE)
-        return NotificationCompat.Builder(this, "sharing").setSmallIcon(R.drawable.ic_bungee).setContentTitle("Bungee sharing is active")
+        return NotificationCompat.Builder(this, "sharing").setSilent(true).setOnlyAlertOnce(true).setSmallIcon(R.drawable.ic_bungee).setContentTitle("Bungee sharing is active")
             .setContentText(if (locationForeground) "GPS fixes queue locally until home is reachable" else "Connection active · open Bungee to resume GPS")
             .setContentIntent(open).setOngoing(true).setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .addAction(NotificationCompat.Action.Builder(0, "Stop sharing", pause).setAuthenticationRequired(true).build())

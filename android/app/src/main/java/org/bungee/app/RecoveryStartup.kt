@@ -1,10 +1,7 @@
 package org.bungee.app
 
 import android.app.Application
-import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.PendingIntent
-import androidx.core.app.NotificationCompat
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -14,39 +11,39 @@ class BungeeApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         // No device-owner or always-on activation. Local recovery initializes no pairing keys.
+        RecoveryStartup.clearStartupReminders(this)
         runCatching { PrivateDns.interrupted(this) }
         ArmedCameraService.refreshReadiness(this)
     }
 }
 object RecoveryStartup {
-    fun showResumeNotification(context: Context) {
-        runCatching {
-            val nm = context.getSystemService(NotificationManager::class.java)
-            nm.createNotificationChannel(NotificationChannel("resume", "Sharing needs your attention", NotificationManager.IMPORTANCE_DEFAULT))
-            val open = PendingIntent.getActivity(context, 4, Intent(context, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-            nm.notify(4, NotificationCompat.Builder(context, "resume").setSmallIcon(R.drawable.ic_bungee).setContentTitle("Open Bungee to resume sharing")
-                .setContentText("Android restricted automatic restart. Open the app and start sharing.").setContentIntent(open).setAutoCancel(true).build())
-        }
+    fun clearStartupReminders(context: Context) {
+        runCatching { context.getSystemService(NotificationManager::class.java).apply { cancel(4);cancel(12) } }
+    }
+    fun reportResumeNeeded(context: Context) {
+        clearStartupReminders(context)
+        TelemetryService.status.value=TelemetryService.status.value.copy(running=false,connected=false,text="Open Bungee to resume sharing; Android restricted automatic restart")
     }
     fun startIfApproved(context: Context) {
         runCatching {
-            if (!LocalSafety.isConnectionRestartAllowed(context) || ManagementAgent.blocksPersonalOperation(context)) return
+            if (LocalSafety.isStopped(context) || ManagementAgent.blocksPersonalOperation(context)) return
             if (PrivateDns.state(context).consent) PrivateDnsService.start(context)
+            if (!LocalSafety.isConnectionRestartAllowed(context)) return
             val identity = Identity(context)
             if (identity.enrolled) {
                 ContextCompat.startForegroundService(context, Intent(context, TelemetryService::class.java).setAction("AUTO_START"))
             }
-        }.onFailure { showResumeNotification(context) }
+        }.onFailure { reportResumeNeeded(context) }
         // Credential-encrypted keys are intentionally unavailable before first unlock.
     }
 }
 class RecoveryBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == Intent.ACTION_BOOT_COMPLETED || intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
-            val automaticCamera = CameraBootRecovery.request(context)
+            RecoveryStartup.clearStartupReminders(context)
+            CameraBootRecovery.request(context)
             RecoveryStartup.startIfApproved(context)
             // Camera starts only from the real resumed startup activity, never this receiver.
-            if (!automaticCamera) ArmedCameraService.showAttention(context)
         }
     }
 }
