@@ -16,13 +16,11 @@ Managed system DNS/always-on, selected-app suspension, uninstall prevention, for
 
 Scheduled airplane-mode cycling requires protected system networking authority that official app/MDM grants do not provide. A foreground service has the same limit. Bungee uses no shell bridge or root. See [the API analysis](AIRPLANE_MODE.md).
 
-## Connection and DNS
+## Connection
 
-The app-contained official WireGuard/gVisor transport carries only Bungee's home API and leaves Android's VPN slot free. By default Bungee changes no system routes/DNS. The optional [Private DNS controller](DNS.md) requires an ADB grant and separate local approval; it uses no VPN slot or device-owner policy. Other VPNs can route or filter its outer socket. Ordinary networking remains under the user's Android/VPN configuration.
+The app-contained WireGuard/gVisor transport carries only Bungee's home API and leaves Android's VPN slot free. Bungee changes no system routes or DNS. Other VPNs can route or filter its outer socket. Ordinary networking remains under Android and the user's network/VPN configuration.
 
-The server retains legacy DNS rollup/read/erase and forwarding code for prior-version compatibility/tests. New phones cannot enroll in managed DNS or enable it through the API. The same explicit home resolver can also serve the optional [public DoT relay](DNS.md); configuring an upstream alone does not enable phone-wide DNS. Existing summaries are five-minute registrable-site groups with folded 10-second activity windows, not app-attributed browsing history. No raw subdomain/answer/payload log is added. Any separately configured legacy private resolver controls its own logging/upstreams.
-
-<a id="existing-owner-from-an-older-preview"></a>
+DNS routing, logs and relay services were removed in 1.1.17. [Upgrade cleanup](DNS-REMOVAL.md) restores settings changed by the previous version without retaining any DNS control or relay functionality.
 
 ## Legacy device-owner enrollment
 
@@ -30,13 +28,25 @@ Do not create an owner with ADB or OS provisioning. If you independently tested 
 
 ## Stable signing and updates
 
-Install the APK from **manager Settings → Phone app updates**. The host automatically downloads the checked public APK for the exact running server commit, verifies its checksum/package/version, and signs it with a persistent household key. Bungee’s phone screen checks for updates through the paired connection and offers Download/Install. It shows installed and server versions, separate checking/downloading/verifying states, downloaded bytes and percentage, pause/resume, and host preparation failures. A check can open the app-contained connection without enabling GPS sharing; local Stop remains authoritative. Background policy sync does not replace a paused download or its error message. Android asks for installation permission and confirmation. Pairing keys, preferences and queued GPS survive in-place updates. No Android VPN slot is used.
+Install the official APK from GitHub Releases or **manager Settings → Phone app updates**. Both serve the exact same APK, with the same checksum and persistent release certificate. CI builds an unsigned release input, tests it, then signs it once in a protected main/tag release job. Pull-request jobs never receive production signing credentials. An unconfigured signer fails publication; there is no disposable-key fallback or installable workflow test APK.
 
-The private signing key/password live in encrypted `volumes/tls-data/android-signing`, included in existing authenticated cold backups, outside the runtime container mounts. Keep that key when restoring or moving a server. A missing established key is an error; the host never silently replaces it. The host worker retries unavailable releases and keeps at most two signed APKs.
+The host downloads the APK for the exact running server commit, verifies its checksum, package, version, alignment and real signing certificate, then serves it unchanged. It stores the first official certificate at encrypted `volumes/tls-data/android-signing/publisher.sha256` and refuses an unexpected change. The publisher private key never reaches a household server or app container. The phone checks and downloads through its paired connection and verifies the checksum, package, newer version and installed certificate before opening Android’s confirmation screen. Local Stop, pause/resume and data-preserving routine updates remain supported.
 
-If an APK previously issued by this same server reports a signing-key mismatch, first restore its original `volumes/tls-data/android-signing` identity from the encrypted backup. Repeated checks cannot change the phone’s installed certificate; do not reinstall while investigating a missing server key.
+Existing household-signed phones keep a compatibility APK made with their original encrypted `bungee.p12`/`password` key. These keys are neither replaced nor created on fresh official installations. The signed check/sync includes the installed certificate so the server selects the compatible APK. Older clients without this field continue receiving their household variant until updated. The manager’s normal download is always the unchanged official GitHub APK. Missing established household keys require restoring their encrypted backup.
 
-Older GitHub builds used disposable CI signing keys. Android requires one reinstall to move to the server’s certificate; the lost private key cannot be recovered from the old APK. Let any local backlog upload first. If removable Android administration is enabled, turn it off before uninstalling. Keep the manager’s saved device, then choose **Reconnect · keep history** with the new app’s public key. This rotates the invitation and authentication keys while preserving the same logical device ID, GPS, IP history and photos. Use server-issued APKs for future updates; reinstalling is unnecessary. Never enroll an APK as device owner.
+Historical GitHub builds used disposable CI keys. Their private keys cannot be recovered from an APK, and the new common identity cannot retroactively match them. For those installations only, let unsent data upload, keep the existing manager device, install the official APK and use **Reconnect · keep history** on that same record. Server history is retained. Ordinary official updates do not require reinstalling or re-pairing.
+
+### Maintainer setup for the shared release key
+
+On a trusted administrator machine with Java `keytool`, Python 3.11+ and GitHub CLI authenticated for repository administration, run once:
+
+```sh
+python3 scripts/setup-release-signing.py
+```
+
+The helper creates a persistent PKCS12 identity outside the checkout, saves a local public certificate pin, and uploads the keystore/password directly to GitHub Actions secrets over stdin. It configures `BUNGEE_RELEASE_KEYSTORE_BASE64`, `BUNGEE_RELEASE_STORE_PASSWORD`, and the public repository variables `BUNGEE_RELEASE_SIGNER_SHA256` / `BUNGEE_RELEASE_KEY_ALIAS`. No secret is printed or committed. The default local backup directory is `~/.local/share/bungee-release-signing`; keep an encrypted offline backup of it. Re-running reuses the same identity and refuses to replace a different established certificate. `--directory` can select an existing PKCS12 key/password directory; the default alias is `bungee`.
+
+The connected GitHub app cannot manage repository secrets. This one-time setup must run with the repository administrator’s GitHub CLI credentials. Once configured, future releases sign automatically. Never paste the private key or password into chat, issues or source. Keep GitHub administration and the release branch/tag permissions restricted to trusted maintainers.
 
 For your own stable release signer, create/back up a private keystore on a trusted development machine outside the checkout. Example with interactive passwords:
 

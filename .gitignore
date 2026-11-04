@@ -10,6 +10,8 @@
 *.log
 *.jks
 *.keystore
+*.p12
+*.pfx
 *.tsbuildinfo
 docs/research/
 android/app/libs/

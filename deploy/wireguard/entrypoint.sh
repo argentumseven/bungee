@@ -8,11 +8,6 @@ case "$BUNGEE_WG_PORT" in ''|*[!0-9]*) echo "Invalid UDP port" >&2; exit 1;; esa
 if [ "$BUNGEE_WG_PORT" -lt 1 ] || [ "$BUNGEE_WG_PORT" -gt 65535 ] || [ "$BUNGEE_WG_PORT" -eq 51820 ]; then
     echo "Choose a custom UDP port other than 51820" >&2; exit 1
 fi
-# One explicit resolver is the only optional new outbound application flow.
-dns_ip=$(python3 /usr/local/lib/bungee/network_config.py dns)
-dns_port="${BUNGEE_DNS_UPSTREAM_PORT:-53}"
-dns_firewall=iptables
-case "$dns_ip" in *:*) dns_firewall=ip6tables;; esac
 # Shared namespace: default deny, no forwarding, no resolver fallback.
 for firewall in iptables ip6tables; do
     "$firewall" -P INPUT DROP
@@ -28,11 +23,6 @@ for firewall in iptables ip6tables; do
     # Even an already established connection must never reach management via wg0.
     if [ "$firewall" = iptables ]; then
         "$firewall" -A INPUT -i wg0 -s 10.77.0.0/24 -d 10.77.0.1 -p tcp --dport 8081 -j ACCEPT
-        if [ -n "$dns_ip" ]; then
-            for protocol in udp tcp; do
-                "$firewall" -A INPUT -i wg0 -s 10.77.0.0/24 -d 10.77.0.1 -p "$protocol" --dport 5353 -j ACCEPT
-            done
-        fi
     fi
     "$firewall" -A INPUT -i wg0 -j DROP
     if [ "$firewall" = iptables ]; then
@@ -41,9 +31,6 @@ for firewall in iptables ip6tables; do
     "$firewall" -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     "$firewall" -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     "$firewall" -A INPUT -p udp --dport "$BUNGEE_WG_PORT" -j ACCEPT
-    if [ -n "${BUNGEE_PRIVATE_DNS_HOST:-}" ]; then
-        "$firewall" -A INPUT -i eth0 -p tcp --dport 8853 -j ACCEPT
-    fi
     printf '%s\n' "$admin_rules" | while read -r family subnet; do
         if { [ "$family" = 4 ] && [ "$firewall" = iptables ]; } || { [ "$family" = 6 ] && [ "$firewall" = ip6tables ]; }; then
             "$firewall" -A INPUT -i eth0 -s "$subnet" -p tcp --dport 8443 -j ACCEPT
@@ -86,12 +73,6 @@ refresh_admission() {
 }
 refresh_admission
 iptables -t nat -F PREROUTING
-if [ -n "$dns_ip" ]; then
-    for protocol in udp tcp; do
-        "$dns_firewall" -A OUTPUT -d "$dns_ip" -p "$protocol" --dport "$dns_port" -j ACCEPT
-        iptables -t nat -A PREROUTING -i wg0 -p "$protocol" --dport 53 -j REDIRECT --to-ports 5353
-    done
-fi
 mkdir -p /private /peers
 # A previous run leaves /peers owned by Rust. CHOWN permits reclaiming it;
 # DAC_OVERRIDE alone does not permit chmod of another UID's directory.

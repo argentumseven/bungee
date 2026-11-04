@@ -45,7 +45,7 @@ From this checkout run:
 sudo python3 scripts/bungee-host.py install
 ```
 
-Choose an internal management bind IP and HTTPS port, explicit internal administrator prefixes, a separate reachable numeric phone endpoint/custom WireGuard UDP port, optional DNS resolver, encrypted storage capacity, and update preference. Port 51820 and allow-everyone administrator prefixes are rejected. No reverse proxy or load balancer is required: Rust serves HTTPS directly.
+Choose an internal management bind IP and HTTPS port, explicit internal administrator prefixes, a separate reachable numeric phone endpoint/custom WireGuard UDP port, encrypted storage capacity, and update preference. Port 51820 and allow-everyone administrator prefixes are rejected. No reverse proxy or load balancer is required: Rust serves HTTPS directly.
 
 After building the images, the installer asks you to choose and confirm an
 administrator password of at least 16 characters. Entry is hidden and supports
@@ -73,8 +73,6 @@ Example answers (replace documentation addresses):
   "web_host": "192.168.1.10",
   "bind_ip": "192.168.1.10",
   "admin_subnets": ["192.168.1.0/24"],
-  "dns_upstream_ip": "",
-  "dns_upstream_port": 53,
   "storage_size_gib": 32,
   "auto_updates": true,
   "channel": "stable"
@@ -161,11 +159,11 @@ Normal reboot unlocks storage, starts Docker, restarts the two containers and ru
 
 HTTPS is published only on the configured **internal management IP** (`bind_ip`), with an explicit administrator source allowlist. The WireGuard UDP endpoint can be public; do not port-forward HTTPS from a WAN router or publish it on the VPS public interface. Wildcard management binds and binds inside `10.77.0.0/24` are rejected. Administrator prefixes that overlap that phone subnet, including a broad `10.0.0.0/8`, are rejected; enter your actual management VLAN/subnet instead. An address class alone does not define trust: use the internal management address and routed source prefixes you control.
 
-Server `wg0` permits only phone C2 at TCP `10.77.0.1:8081` and optional legacy DNS at UDP/TCP `10.77.0.1:5353` after the port-53 redirect. All other `wg0` INPUT is dropped **before** the ESTABLISHED/RELATED accept rules. It cannot reach the dashboard, any administrator API, SSH or another local service, even by targeting the container's `eth0` address. FORWARD remains DROP.
+Server `wg0` permits only phone C2 at TCP `10.77.0.1:8081`. All other `wg0` INPUT is dropped **before** the ESTABLISHED/RELATED accept rules. It cannot reach the dashboard, any administrator API, SSH or another local service, even by targeting the container's `eth0` address. FORWARD remains DROP.
 
 Rust's administrator TLS socket uses `SO_BINDTODEVICE=eth0` in the shared container namespace, independently of its wildcard IPv4 bind. `BUNGEE_ADMIN_INTERFACE` is required for a non-loopback administrator bind and cannot be `wg0`. Unsupported kernel/security policies fail startup; capabilities are never added to work around this. Rust also rejects phone-overlay sources independently of the allowlist. Both layers enforce the actual management-source prefixes; forwarding headers have no authority.
 
-For a VPS without a directly routed internal network, provision a separate management/private network or a distinct host-to-site management tunnel. It must not use the phone `wg0` overlay or overlapping subnet. Bind HTTPS to that management address and restrict host/provider ingress to its routed source prefixes. Restrict host SSH and Docker management to the same internal management zone; the installer does not rewrite the host's SSH daemon or firewall. Do not publish device port 8081 or DNS port 5353.
+For a VPS without a directly routed internal network, provision a separate management/private network or a distinct host-to-site management tunnel. It must not use the phone `wg0` overlay or overlapping subnet. Bind HTTPS to that management address and restrict host/provider ingress to its routed source prefixes. Restrict host SSH and Docker management to the same internal management zone; the installer does not rewrite the host's SSH daemon or firewall. Do not publish device port 8081.
 
 ## Updates, encrypted backups and recovery keys
 
@@ -207,3 +205,7 @@ python3 /opt/bungee/bungee-host.py datasets --maps /path/map.pmtiles --geoip /pa
 ```
 
 Local raster PNG/JPEG MBTiles, vector MVT PMTiles v3 and City MMDB files are accepted. Data is validated offline before downtime and mounted read-only. Rollback keeps the previous dataset generation. See [GEOGRAPHY.md](GEOGRAPHY.md) for provenance, bounds and licensing.
+
+DNS functionality was removed in 1.1.17. Existing installations discard its old answers; see [upgrade cleanup](DNS-REMOVAL.md) if a phone used the retired relay.
+
+Official APK downloads in GitHub Releases and manager Settings → Phone app updates are identical. Household hosts verify and cache the APK without re-signing it. Existing household-signed phones keep compatible in-app updates; new installations use the shared official identity. Release maintainers configure the persistent key once using [the signing setup helper](MANAGEMENT.md#maintainer-setup-for-the-shared-release-key).

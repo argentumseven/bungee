@@ -77,33 +77,16 @@ def bracket(ip):
     return f'[{ip}]' if ':' in ip else ip
 
 
-def dns_upstream(value):
-    if not value: return ''
-    if not isinstance(value, str) or '%' in value: raise ValueError('DNS upstream must be a literal IP')
-    ip = ipaddress.ip_address(value)
-    if (ip.is_unspecified or ip.is_multicast or ip.is_link_local or
-        (ip.version == 4 and (ip.packed[0] == 0 or ip.packed[0] >= 224 or ip in ipaddress.ip_network('10.77.0.0/24') or str(ip) == '127.0.0.11')) or
-        (ip.version == 6 and ip.ipv4_mapped is not None)):
-        raise ValueError('Choose a unicast resolver outside the phone subnet and Docker DNS')
-    return str(ip)
-
 
 def validate(config):
     if not isinstance(config, dict) or set(config) - {'geodata', 'dns_upstream_ip', 'dns_upstream_port', 'storage_size_gib', 'map_regions', 'private_dns_host'} != {'wg_port', 'web_port', 'endpoint_ip', 'web_host', 'bind_ip', 'admin_subnets', 'auto_updates', 'channel'}:
         raise ValueError("Configuration has missing or unknown fields")
-    result = dict(config)
-    if 'private_dns_host' in config:
-        value=config['private_dns_host']
-        if not isinstance(value,str) or (value and (len(value)>200 or hostname(value)!=value or '.' not in value or not any(c.isalpha() for c in value) or ':' in value)):
-            raise ValueError('Private DNS needs a lowercase public hostname, not an IP, URL or port')
-        if value and not config.get('dns_upstream_ip'): raise ValueError('Private DNS needs a home DNS upstream')
-
+    # Accepted only to migrate previous installations; removed from saved answers.
+    result = {k: v for k, v in config.items() if k not in ("dns_upstream_ip", "dns_upstream_port", "private_dns_host")}
     if 'map_regions' in config:
         regions=config['map_regions']
         if not isinstance(regions,list) or len(regions)>256 or any(not isinstance(value,str) or not re.fullmatch('[a-z][a-z0-9-]{1,47}',value) for value in regions) or len(set(regions))!=len(regions):
             raise ValueError('Choose up to 256 distinct map region IDs')
-    if 'dns_upstream_ip' in config: result['dns_upstream_ip'] = dns_upstream(config['dns_upstream_ip'])
-    if 'dns_upstream_port' in config: result['dns_upstream_port'] = port(config['dns_upstream_port'])
     if 'storage_size_gib' in config and (type(config['storage_size_gib']) is not int or not 2 <= config['storage_size_gib'] <= 1048576):
         raise ValueError('Storage size must be 2–1048576 GiB')
     if 'geodata' in config and (not isinstance(config['geodata'], str) or not re.fullmatch(r'[a-f0-9]{24}', config['geodata'])):
@@ -130,9 +113,6 @@ if __name__ == '__main__':
             management_address(os.environ.get('BUNGEE_ADMIN_ADDRESS', '127.0.0.1'))
             for net in admin_networks(os.environ.get('BUNGEE_ADMIN_SUBNETS', '')):
                 print(ipaddress.ip_network(net).version, net)
-        elif sys.argv[1:] == ['dns']:
-            print(dns_upstream(os.environ.get('BUNGEE_DNS_UPSTREAM_IP', '')))
-            port(os.environ.get('BUNGEE_DNS_UPSTREAM_PORT', '53'))
         elif sys.argv[1:] == ['validate']:
             print(json.dumps(validate(json.load(sys.stdin)), indent=2))
         else:

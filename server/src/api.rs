@@ -183,7 +183,7 @@ pub async fn devices(State(app): State<App>, headers: HeaderMap) -> ApiResult<Js
         "created":r.get::<_,i64>(3)?,"last_seen":r.get::<_,Option<i64>>(4)?,"revoked":r.get::<_,bool>(5)?,
         "telemetry":telemetry,"last_location":location,"last_contact":r.get::<_,Option<i64>>(12)?,
         "network":crate::geography::latest(&db,&r.get::<_,String>(0)?)?,
-        "capabilities":serde_json::from_str::<Vec<String>>(&r.get::<_,String>(7)?).unwrap_or_default().into_iter().filter(|kind|kind!="reboot").collect::<Vec<_>>(),
+        "capabilities":serde_json::from_str::<Vec<String>>(&r.get::<_,String>(7)?).unwrap_or_default().into_iter().filter(|kind|kind!="reboot" && kind!="dns_check").collect::<Vec<_>>(),
         "enrolled":r.get::<_,bool>(8)?,
         "enrollment_state":if r.get::<_,bool>(5)? {"revoked"} else if r.get::<_,bool>(8)? {"enrolled"} else if r.get::<_,Option<i64>>(13)?.is_some_and(|v|v>now()) {"pending"} else {"expired"},
         "invitation_expires_at":r.get::<_,Option<i64>>(13)?,
@@ -216,14 +216,17 @@ const CAPABILITIES: &[&str] = &[
     "flash",
     "stop_ringing",
     "stop_all",
-    "dns_check",
     "message",
     "clear_message",
     "lock",
     "reboot",
 ];
 fn valid_capabilities(caps: &[String]) -> bool {
-    caps.len() <= CAPABILITIES.len() && caps.iter().all(|c| CAPABILITIES.contains(&c.as_str()))
+    // Accept and discard this retired capability from older phones during upgrades.
+    caps.len() <= CAPABILITIES.len() + 1
+        && caps
+            .iter()
+            .all(|c| c == "dns_check" || CAPABILITIES.contains(&c.as_str()))
 }
 pub async fn enroll(
     State(app): State<App>,
@@ -266,7 +269,7 @@ pub async fn enroll(
         "UPDATE devices SET public_key=?,capabilities=?,last_seen=?,gps_epoch=?,photo_epoch=? WHERE id=?",
         params![
             input.public_key,
-            serde_json::to_string(&input.capabilities).unwrap(),
+            serde_json::to_string(&input.capabilities.iter().filter(|kind|kind.as_str()!="dns_check").collect::<Vec<_>>()).unwrap(),
             now(),
             gps_epoch,
             photo_epoch,
@@ -438,7 +441,7 @@ fn commit_telemetry(app: &App, id: &str, mut input: Telemetry) -> ApiResult<Json
             serde_json::to_string(&input).map_err(|_| bad("Invalid telemetry"))?,
             location,
             received,
-            serde_json::to_string(&input.capabilities).unwrap(),
+            serde_json::to_string(&input.capabilities.iter().filter(|kind|kind.as_str()!="dns_check").collect::<Vec<_>>()).unwrap(),
             id
         ],
     )?;
@@ -763,7 +766,6 @@ pub async fn revoke(
     tx.execute("DELETE FROM network_history WHERE device_id=?", [&id])?;
     tx.execute("DELETE FROM recovery_photos WHERE device_id=?", [&id])?;
     tx.execute("DELETE FROM erased_photos WHERE device_id=?", [&id])?;
-    tx.execute("DELETE FROM dns_summary WHERE device_id=?", [&id])?;
     tx.execute("DELETE FROM device_policies WHERE device_id=?", [&id])?;
     store::audit(
         &tx,
@@ -818,8 +820,6 @@ mod privacy_tests {
             limiter: Arc::new(Mutex::new(RateLimits::default())),
             state_dir: directory.clone(),
             wg_endpoint: None,
-            dns: None,
-            private_dns: None,
             geography: Arc::new(crate::geography::Geography::load().unwrap()),
         };
         let body = json!({"battery":42,"charging":false,"capabilities":[],"device_owner":false,"gps_epoch":epoch,

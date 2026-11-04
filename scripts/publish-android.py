@@ -6,7 +6,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import subprocess
 import tempfile
 
@@ -33,9 +32,9 @@ def source_number(release):
 
 
 def verify_checksum(directory):
-    apk = directory / 'bungee-debug.apk'
-    expected = (directory / 'bungee-debug.apk.sha256').read_text().split()
-    if apk.is_symlink() or len(expected) != 2 or expected[1] != 'bungee-debug.apk':
+    apk = directory / 'bungee.apk'
+    expected = (directory / 'bungee.apk.sha256').read_text().split()
+    if apk.is_symlink() or len(expected) != 2 or expected[1] != 'bungee.apk':
         raise ValueError('Unexpected Android artifact/checksum format')
     with apk.open('rb') as stream:
         digest = hashlib.file_digest(stream, 'sha256').hexdigest()
@@ -55,9 +54,10 @@ def main():
     for run in runs:
         if not trusted_run(run, repo): continue
         jobs = api(repo, f'actions/runs/{run["id"]}/jobs?per_page=100')['jobs']
-        if not any(job['name'] == 'android' and job['conclusion'] == 'success' for job in jobs): continue
+        required = {'android', 'apk-signing', 'server-and-web', 'container-boundaries', 'release-apk'}
+        if not required.issubset({job['name'] for job in jobs if job['conclusion'] == 'success'}): continue
         artifacts = api(repo, f'actions/runs/{run["id"]}/artifacts')['artifacts']
-        if any(a['name'] == 'bungee-android-debug' and not a['expired'] for a in artifacts):
+        if any(a['name'] == 'bungee-android-release' and not a['expired'] for a in artifacts):
             selected = run
             break
     if selected is None:
@@ -80,21 +80,26 @@ def main():
     version = app_release['version']
     with tempfile.TemporaryDirectory(prefix='bungee-publish-') as temporary:
         directory = Path(temporary)
-        gh('run', 'download', str(run['id']), '--repo', repo, '--name', 'bungee-android-debug', '--dir', str(directory))
+        gh('run', 'download', str(run['id']), '--repo', repo, '--name', 'bungee-android-release', '--dir', str(directory))
         digest = verify_checksum(directory)
-        shutil.copyfile(directory / 'bungee-debug.apk', directory / 'bungee.apk')
+        signed = json.loads((directory / 'signing.json').read_text())
+        if (signed.get('signing') != 'publisher-v1' or signed.get('sha256') != digest
+                or signed.get('size') != (directory / 'bungee.apk').stat().st_size
+                or signed.get('version') != version or signed.get('version_code') != app_release['android_version_code']
+                or not re.fullmatch('[a-f0-9]{64}', signed.get('signer_sha256', ''))):
+            raise ValueError('APK has no verified persistent release signature')
         (directory / 'bungee.apk.sha256').write_text(digest + '  bungee.apk\n')
-        (directory / 'build.json').write_text(json.dumps({'version': version, 'android_version_code': app_release['android_version_code'], 'commit': sha, 'run_id': run['id'], 'sha256': digest}, indent=2) + '\n')
+        (directory / 'build.json').write_text(json.dumps({'version': version, 'android_version_code': app_release['android_version_code'], 'commit': sha, 'run_id': run['id'], 'sha256': digest, 'signing': 'publisher-v1', 'signer_sha256': signed['signer_sha256']}, indent=2) + '\n')
         notes = directory / 'notes.md'
         notes.write_text(f'''Download **bungee.apk** below and open it on your Android phone. No ZIP extraction or Actions login is needed for this public release.
 
 Android app version: **{version}** · source: [{sha[:12]}](https://github.com/{repo}/commit/{sha})
 
-For a paired phone with in-app updates, install **manager Settings → Phone app updates → Download this server’s APK**. That APK uses your server’s persistent signing key. The GitHub asset below is also the verified input used by the host’s signer.
+This APK is signed with Bungee’s persistent official release key. **GitHub and manager Settings → Phone app updates distribute the same APK**, with the same checksum and certificate. The server verifies and serves it unchanged.
 
 This standalone development APK includes the current main-branch phone features. Its Android build, unit tests and lint passed in [the source build]({run['html_url']}). This release does not claim that unrelated server jobs passed or that physical-device testing is complete.
 
-The standalone APK has a disposable CI signing key, with Android debugging disabled. It cannot update to a differently signed server APK in place. Switching once removes unsent local data on uninstall: upload it first, keep the saved manager device, then use **Reconnect · keep history** on that same device after installing the server APK. Do not purge or erase it. Subsequent server-signed upgrades keep pairing and app data; do not uninstall for routine updates.
+Routine official updates preserve pairing, settings and queued data; Android asks for installation confirmation. Android debugging is disabled. Historical GitHub builds used disposable keys, so those installations cannot switch identities in place without the original private key. Existing household-signed phones retain compatible server updates. Do not uninstall for routine upgrades.
 
 `bungee.apk.sha256` verifies the download; `build.json` records the exact source and build.
 

@@ -4,21 +4,21 @@ This record covers automated checks and their limits. Physical GrapheneOS testin
 
 ## Phone C2 and internal management isolation (unreleased)
 
-Server `wg0` permits phone C2 and optional legacy DNS only. Administration uses the explicitly configured internal management address/prefixes and a Rust TLS socket bound to namespace `eth0`. The policy is documented in [the topology reference](NETWORK-TOPOLOGY.md#management-isolation).
+Server `wg0` permits phone C2 only. Administration uses the explicitly configured internal management address/prefixes and a Rust TLS socket bound to namespace `eth0`. The policy is documented in [the topology reference](NETWORK-TOPOLOGY.md#management-isolation).
 
 | Check | Result |
 | --- | --- |
 | Rust and API | Format check, all-target clippy with warnings denied, locked build, 14 unit tests and 97 API tests pass. Regression cases reject phone-subnet binds and overlapping administrator prefixes, and deny phone sources even with a permissive in-memory ACL. |
-| Firewall isolation | An isolated two-interface Docker fixture establishes a management connection on synthetic `wg0` before applying policy, verifies it is cut off, and rejects new admin connections including those addressed to the namespace's `eth0` IP. Internal management, phone C2 and configured DNS remain reachable. Disabling optional DNS blocks that service while C2 stays available. |
+| Firewall isolation | An isolated two-interface Docker fixture establishes a management connection on synthetic `wg0` before applying policy, verifies it is cut off, and rejects new admin connections including those addressed to the namespace's `eth0` IP. Internal management and phone C2 remain reachable; removed DNS services stay blocked. |
 | Independent listener isolation | With fixture INPUT deliberately relaxed, the actual Rust image still rejects admin connections arriving on `wg0`, including an `eth0` destination. Internal HTTPS and phone C2 remain reachable. UID 10001, zero capabilities and a read-only root are retained. |
-| DNS and TLS | Real scoped outbound UDP/TCP resolver checks, Docker-DNS blocking, forwarding denial, direct trusted hybrid TLS, source ACL and forged-header checks pass. Both runtime images build and the non-root server-image HTTPS check passes. |
+| DNS and TLS | Outbound UDP/TCP denial checks, Docker-DNS blocking, forwarding denial, direct trusted hybrid TLS, source ACL and forged-header checks pass. Both runtime images build and the non-root server-image HTTPS check passes. |
 | Host setup | 33 tests run: 31 pass; two unchanged age archive checks skip because age binaries are absent in the resumed executor. Prior real archive validation is recorded below. New cases reject wildcard/phone-overlay management publication and overlapping management CIDRs. |
 
 The isolation fixture uses a second veth renamed `wg0` to exercise real ingress/conntrack and socket interface binding. It does not validate WireGuard cryptography or a real kernel WireGuard tunnel. Target-host tunnel, provider firewall, internal routing and reboot acceptance remain required. This update does not configure host SSH or provider rules, and does not merge/deploy the runtime PR.
 
 ## Server deployment changes after 1.1.4 (unreleased)
 
-The host/storage contract is now 2. Android and the phone protocol are unchanged. These checks cover direct Rust TLS, explicit DNS upstreams, LUKS2 provisioning/boot configuration and age-encrypted cold archives.
+The host/storage contract is now 2. Android and the phone protocol are unchanged. These checks cover direct Rust TLS, runtime egress denial, LUKS2 provisioning/boot configuration and age-encrypted cold archives.
 
 | Check | Result |
 | --- | --- |
@@ -27,7 +27,7 @@ The host/storage contract is now 2. Android and the phone protocol are unchanged
 | Host/storage | 32 tests pass, including real tar/age encryption/restore, corruption/wrong-key refusal before mutation, certificate renewal retaining its CA, key/mount rejection and helper termination when an updater dies |
 | TLS | Trusted direct Rust TLS 1.3 X25519MLKEM768 succeeds; classical-only, TLS 1.2, untrusted CA and unlisted/forged source tests pass |
 | Web | TypeScript/Vite production build and all 18 browser tests pass |
-| Containers | Both images build; built Rust image serves direct trusted hybrid HTTPS with UID 10001, zero capabilities, no-new-privileges and a read-only root. Gateway checks retain outbound deny, Docker-DNS blocking and scoped UDP/TCP resolver rules |
+| Containers | Both images build; built Rust image serves direct trusted hybrid HTTPS with UID 10001, zero capabilities, no-new-privileges and a read-only root. Gateway checks retain outbound deny, Docker-DNS blocking and outbound UDP/TCP denial |
 | Documentation | Nine embedded image assets exist, including HTML and the three drawn PNG security pictures. Security image links point to the exact commit containing the PNGs; pinned contents are checked locally and remote assets verified. The transport and backend drawings are checked against the namespace, listener, transport and peer-publication implementation; all security pictures are visually checked at document width. All 18 tracked PNG files decode. Workflow actionlint and whitespace checks pass |
 
 This cloud host cannot perform a real LUKS mount, systemd reboot/power-loss test or kernel WireGuard deployment. Storage mount/type rejection is tested with injected observations; archive encryption/restoration uses real processes. The updater check now reports this distinction explicitly rather than claiming a full container/boot acceptance test. Complete the console reboot and migration/recovery procedure on the target host. Android/native checks were not repeated for server-only changes. No release tag or production deployment is created by these source changes.
@@ -77,7 +77,7 @@ Except for the native race tests rerun above, the following evidence is from ear
 | Area | Earlier evidence |
 | --- | --- |
 | Native WireGuard | Two real loopback peer/protocol tests plus three cancellation/deadline cases pass under Go race detection: wrong PSK, fixed target/header/size bounds, cancel before/during send, short deadline, single-use reservation and peer stop. ARM64/x86_64 ELF PT_LOAD alignment checked at 16 KiB |
-| Runtime egress | Isolated Docker network verifies new outbound connections and Docker DNS are blocked; only an explicitly selected legacy private DNS IP/port is allowed |
+| Runtime egress | Isolated Docker network verifies new outbound connections and Docker DNS are blocked including retired resolver settings |
 | Caddy TLS | Trusted local-CA TLS 1.3 X25519MLKEM768 succeeds; classical-only exchange and TLS 1.2 are rejected |
 | Administrator prefixes | Real IPv4 Docker clients: allowed source reaches the upstream route; denied source gets 403 on dashboard/API/health despite forged headers. Empty/malformed configuration prevents startup. IPv6 normalization/rules are checked; real IPv6/NAT behavior is untested |
 | Proxy identity | Real Caddy overwrites the dedicated source header; Rust tests cover trusted/untrusted loopback identity and login budgets |
@@ -214,7 +214,9 @@ The server previously read only the first Cookie header field. HTTP/2 permits a 
 
 A regression uses real Rust HTTPS with negotiated HTTP/2 and separate Cookie fields. It reproduced the 200-login/401-session failure before the fix and passes after it. It also checks protected device access through the common guard, invalid/missing sessions, and revocation of the actual token after logout. Fresh browser HTTPS tests now include an unrelated cookie on the same host, preserving Secure/HttpOnly/SameSite=Strict assertions. No password, signing key or phone records are reset by this change.
 
-## 1.1.16: dedicated DNS workspace and reversible Private DNS
+## 1.1.16: historical DNS feature and current lifecycle/reboot changes
+
+The DNS functionality described in this historical release record was removed in 1.1.17.
 
 The DNS workspace separates received traffic from signed path tests, aggregates all phones, and provides per-phone scopes, time ranges, literal domain search, pagination and isolated history erasure. Chromium desktop and 390-pixel mobile regressions exercise navigation, totals, filtering, diagnostics, fallback preferences, Off/removal requests, and history controls; other device-care features remain covered.
 
@@ -222,6 +224,25 @@ An optional public DoT listener uses separate conventional TLS and random per-ph
 
 Android controller tests cover exact restoration of prior settings, write-ahead undo persistence, failure fallback to Automatic, explicit retry, manual Android changes, no-grant/no-approval/no-endpoint behavior, failed storage/removal, interrupted mutation and process restart. The native transport regression exercises the signed-control route through the actual app-contained stack. Android debug build, lint and unit tests and Go race tests are required. No Android VPN service or device-owner DNS policy was added.
 
-The deployed Debian host, public DNS/TCP-853 reachability, public certificate issuance, physical Android Private DNS validation/ADB writes, and battery/process restrictions have not been tested in this workspace. A public hostname/certificate is still required for activation. The watchdog works only while running; blind uninstall/force-stop cannot execute restoration. See [DNS setup and removal](DNS.md).
+The deployed Debian host, public DNS/TCP-853 reachability, public certificate issuance, physical Android Private DNS validation/ADB writes, and battery/process restrictions have not been tested in this workspace. A public hostname/certificate is still required for activation. The watchdog works only while running; blind uninstall/force-stop cannot execute restoration. See [DNS removal migration](DNS-REMOVAL.md).
 
 The same release moves phone lifecycle actions into **Pairing & history**, exposes disconnect/erase as separate actions, fixes the revoke label to include all deleted records, and keeps confirmation targets stable. Browser fixtures exercise cancellation, a second-phone revoke, history retention on disconnect, and mobile layout. Optional resume/camera-attention boot alerts were removed; required foreground notifications remain silent. Android build/lint and existing boot-gate tests cover compilation and restart-state logic; physical notification behavior remains unverified.
+
+## 1.1.17: DNS removal
+
+DNS relay listeners, upstream exchanges, probes, rollups, APIs, commands, manager navigation and phone controls/services are removed. The native allowlist rejects both retired routes. Old host DNS answers are accepted only for migration and discarded; no DNS ports, certificate mounts or outbound exceptions are generated. The Docker checks now require DNS ingress, redirects and outbound resolver traffic to remain blocked while C2 and internal administration work.
+
+A live upgrade regression seeds old DNS tables, a diagnostic, a management report and ordinary phone records. Restart removes only the retired tables/diagnostic/report fields and preserves pairing keys, GPS/photo generations, locations, photos and other commands. Old phones can still send their former report fields/capability during an upgrade, but the server discards them and refuses new DNS commands/policies.
+
+Android retains only offline, restore-only migration of 1.1.16's undo record. Six unit tests cover strict/fallback/interrupted settings, exact nullable baselines, preserving manual changes, missing grants, failed/unconfirmed writes, retries and partial restoration. Unconfigured phones never change Android settings. The protected permission declaration remains solely to preserve an existing restoration grant; no activation or grant setup remains. Physical Android settings writes remain unverified.
+
+Local checks passed: Rust formatting/Clippy and 15 unit tests; 107 API/integration tests plus 10 TypeScript helper tests; 112 host tests (four environment-dependent skips); Go race tests; Android assembly/lint and 116 unit tests; Chromium dashboard, login, pairing/history and map regressions. Firefox and Docker namespace checks run in hosted CI. Pairing/history actions and the removal of optional reboot reminder alerts remain covered.
+
+
+## 1.1.17: shared official APK identity
+
+Official releases are signed once with a persistent publisher key after all checks. The release job receives protected repository secrets only on main/tag push or explicit dispatch, never pull requests; publication fails if signing credentials or the public certificate pin are missing. CI exposes an unsigned build input and an official signed artifact, eliminating installable disposable-key workflow downloads. Both main and tagged APK publications use the persistent signing output.
+
+The real keytool/apksigner/zipalign regression signs the optimized unsigned APK with disposable fixture identities, exercises the production signing CLI, refuses wrong certificate pins and corrupted build-input checksums, proves GitHub and the normal server download are byte-identical, proves a fresh server creates no private APK key, and retains a distinct existing household identity for compatible older clients. Live API tests select the correct variant by installed certificate, preserve the old-client default, reject malformed certificate reports, and keep the manager download on the official APK.
+
+Local validation passed: optimized unsigned release and debug assembly, Android lint and 116 unit tests; real signing/host distribution checks; Rust format/Clippy and 15 unit tests; 108 API tests plus 10 TypeScript helper tests; 120 Python host/publisher/setup tests (four environment-dependent skips); and Chromium browser regressions. The production key has not been configured or activated from this workspace. Physical Android installation remains unverified, and discarded historical GitHub signing keys cannot be recreated.

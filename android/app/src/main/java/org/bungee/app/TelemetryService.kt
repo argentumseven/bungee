@@ -184,10 +184,6 @@ class TelemetryService : Service() {
                     if (elapsed() < deadline) { withContext(Dispatchers.IO) {
                         val desired = api.request("/v1/sync", JSONObject().put("report", ManagementAgent.report(this@TelemetryService, identity)))
                         runCatching { AppUpdates.observe(this@TelemetryService,desired.optJSONObject("app_update"),desired.optString("server_version").takeIf { it.isNotBlank() },desired.optJSONObject("app_update_preparation")) }
-                        runCatching {
-                            val dns=api.request("/v1/private-dns",PrivateDns.report(this@TelemetryService)).getJSONObject("dns")
-                            if(!dns.getBoolean("enabled")||dns.getBoolean("removed"))PrivateDns.apply(this@TelemetryService,dns)
-                        }
                         identity.reconcileGpsEpoch(desired.getString("gps_epoch"))
                         synchronized(actionsLock) { if (generation == actionGeneration)
                             ManagementAgent.apply(this@TelemetryService, identity, desired.getLong("revision"), desired.getJSONObject("policy")) }
@@ -426,11 +422,6 @@ class TelemetryService : Service() {
                         "Alarm started for up to 30 seconds; previous alarm volume restored afterward"
                     }
                     "stop_ringing" -> { identity.ifCommandsAllowed { stopRinging() }; "Sound stopped" }
-                    "dns_check" -> {
-                        val reply=withContext(Dispatchers.IO) { api.request("/v1/dns-check") }
-                        check(reply.getBoolean("reachable")) { "No reply from home DNS upstream ${reply.getString("upstream")}" }
-                        "DNS path verified: phone → Bungee → ${reply.getString("upstream")}; example.com: ${reply.getString("response_code")}. Other apps' DNS is not routed."
-                    }
                     "stop_all" -> {
                         remoteAction?.cancel()
                         stopRinging()
@@ -457,7 +448,7 @@ class TelemetryService : Service() {
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            receipt.put("status", "failed").put("result", if(kind=="dns_check") "DNS test failed: ${(e.message ?: e.javaClass.simpleName).take(210)}" else "Device could not complete this command")
+            receipt.put("status", "failed").put("result", "Device could not complete this command")
         }
         withContext(Dispatchers.IO) { identity.saveResult(id, receipt, expires) }
         sendReceipt(api, receipt)
@@ -505,7 +496,7 @@ class TelemetryService : Service() {
             if (LocalSafety.isStopped(context) || ManagementAgent.blocksPersonalOperation(context)) return@buildList
             if (identity.allowCommands) {
                 if (identity.allowLocate && hasLocation(context) && status.value.gpsAccess in listOf("foreground", "background")) addAll(listOf("locate", "best_guess"))
-                addAll(listOf("ring", "stop_ringing", "stop_all", "dns_check"))
+                addAll(listOf("ring", "stop_ringing", "stop_all"))
                 if (RecoveryAlarm.flashCamera(context) != null) addAll(listOf("flash", "ring_flash"))
                 if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) addAll(listOf("message", "clear_message"))
                 if (context.getSystemService(DevicePolicyManager::class.java).isAdminActive(ComponentName(context, BungeeAdminReceiver::class.java))) add("lock")

@@ -115,7 +115,6 @@ pub enum RateClass {
     UpdateIdentity,
     DeviceIdentity,
     Enrollment,
-    Dns,
 }
 
 #[derive(Default)]

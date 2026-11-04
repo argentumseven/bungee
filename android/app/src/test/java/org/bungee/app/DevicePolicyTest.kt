@@ -13,7 +13,7 @@ class DevicePolicyTest {
     }
     @Test fun personalModeDoesNotEnableAnyManagedControlByDefault() {
         val policy = DevicePolicy.parse(JSONObject())
-        assertFalse(policy.managedDns); assertFalse(policy.alwaysOn); assertFalse(policy.protectSettings)
+        assertFalse(policy.alwaysOn); assertFalse(policy.protectSettings)
         assertFalse(policy.preventUninstall); assertFalse(policy.lostMode); assertTrue(policy.blockedApps.isEmpty())
     }
     @Test fun persistentControlsAreRejectedEvenIfAServerRequestsThem() {

@@ -60,11 +60,6 @@ time.sleep(60)
         self.helper_dies_with_parent('h.child_guard(os.getpid())')
     def test_map_extractor_dies_with_its_downloader(self):
         self.helper_dies_with_parent('regional_maps._child_limits(1024)')
-    def test_resolver_configuration_accepts_selected_public_or_lan_and_rejects_loops(self):
-        for ip in ['1.1.1.1','8.8.8.8','192.168.1.53','fd00::53','2606:4700:4700::1111']:
-            self.assertEqual(host.network.dns_upstream(ip),ip)
-        for ip in ['10.77.0.1','127.0.0.11','169.254.169.254','0.0.0.0','::','ff02::1','::ffff:1.1.1.1','1.1.1.1;id']:
-            with self.assertRaises(ValueError): host.network.dns_upstream(ip)
     def test_ca_persists_and_changed_hostname_renews_leaf(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'tls'
