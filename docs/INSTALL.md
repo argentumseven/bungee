@@ -207,3 +207,5 @@ python3 /opt/bungee/bungee-host.py datasets --maps /path/map.pmtiles --geoip /pa
 Local raster PNG/JPEG MBTiles, vector MVT PMTiles v3 and City MMDB files are accepted. Data is validated offline before downtime and mounted read-only. Rollback keeps the previous dataset generation. See [GEOGRAPHY.md](GEOGRAPHY.md) for provenance, bounds and licensing.
 
 DNS functionality was removed in 1.1.17. Existing installations discard its old answers; see [upgrade cleanup](DNS-REMOVAL.md) if a phone used the retired relay.
+
+Official APK downloads in GitHub Releases and manager Settings → Phone app updates are identical. Household hosts verify and cache the APK without re-signing it. Existing household-signed phones keep compatible in-app updates; new installations use the shared official identity. Release maintainers configure the persistent key once using [the signing setup helper](MANAGEMENT.md#maintainer-setup-for-the-shared-release-key).

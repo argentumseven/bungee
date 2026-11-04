@@ -133,7 +133,7 @@ Requests remain signed, timestamped and nonce-protected within a two-minute repl
 
 ## Review records
 
-The [first review](REVIEW-2026-10.md), [second review](REVIEW-2026-10-SECOND.md) and [adversarial review](REVIEW-2026-10-ADVERSARIAL.md) record historical findings, fixes and regression checks. Current enrollment, erasure, cancellation and resource limits are described above and in the linked guides. Publisher-signature enforcement, physical GrapheneOS acceptance remains open.
+The [first review](REVIEW-2026-10.md), [second review](REVIEW-2026-10-SECOND.md) and [adversarial review](REVIEW-2026-10-ADVERSARIAL.md) record historical findings, fixes and regression checks. Current enrollment, erasure, cancellation and resource limits are described above and in the linked guides. Independent release provenance and physical GrapheneOS acceptance remain open.
 
 ## Removal and ownership failures
 
@@ -148,3 +148,9 @@ Stop-all cancels earlier outstanding commands and lost mode in one server transa
 ## Restore-only upgrade cleanup
 
 DNS routing, logs, diagnostics and relay services were removed in 1.1.17. An upgrade-only Android migration restores the previous resolver setting if the retired controller still owns it, without contacting the server or enabling DNS control. It retains the undo record on failure. The old protected permission declaration remains only to preserve existing grants through restoration. [Recovery instructions](DNS-REMOVAL.md) cover manual restoration and revoking that grant.
+
+## One official APK identity
+
+GitHub and manager downloads serve the same persistent publisher-signed APK. CI’s unsigned build artifact is not installable. The main/tag release signing job runs only after all checks, has no pull-request trigger, consumes repository signing secrets, verifies the pinned public certificate and publishes no fallback key. Private signing material is temporary, absent from subprocess arguments/logs, and removed after signing. The administrator configures and backs up that identity using [the signing setup helper](MANAGEMENT.md#maintainer-setup-for-the-shared-release-key).
+
+Household hosts verify the actual APK certificate and pin it before publishing the unchanged file. They do not hold the publisher private key. Existing household identities remain only for old installed apps, with read-only key access in the isolated signing helper and certificate-based update selection; fresh servers create no private app signer. Android’s independent installed-certificate checks still apply. Trust in GitHub/repository administration, release signing credentials and the initial certificate bootstrap remains required; this is not independent hardware attestation or a transparency log.

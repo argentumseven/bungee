@@ -46,43 +46,83 @@ jobs:
       - run: go test -race ./... -count=1
         working-directory: native/transport
       - run: bash scripts/build-transport.sh
-      - run: ./gradlew --no-daemon :app:assembleDebug :app:lintDebug :app:testDebugUnitTest
+      - run: ./gradlew --no-daemon :app:assembleDebug :app:assembleRelease :app:lintDebug :app:testDebugUnitTest
         working-directory: android
-      - name: Prepare installable development APK
+      - name: Prepare unsigned release input
         run: |
           mkdir -p artifacts
-          cp android/app/build/outputs/apk/debug/app-debug.apk artifacts/bungee-debug.apk
+          cp android/app/build/outputs/apk/release/app-release-unsigned.apk artifacts/bungee-unsigned.apk
           cd artifacts
-          sha256sum bungee-debug.apk > bungee-debug.apk.sha256
+          sha256sum bungee-unsigned.apk > bungee-unsigned.apk.sha256
       - uses: actions/upload-artifact@v5
         id: android_apk
         with:
-          name: bungee-android-debug
+          name: bungee-android-build
           path: artifacts/
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
-      - name: Show Android download link
-        run: |
-          cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
-          ## Android APK download
-
-          [Download APK and SHA-256 checksum (ZIP)](${{ steps.android_apk.outputs.artifact-url }})
-
-          Extract and install `bungee-debug.apk`. GitHub sign-in is required; this build is retained for 14 days.
-          In-place updates require the same signing key as the installed app.
-          SUMMARY
   apk-signing:
     needs: android
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with: { distribution: temurin, java-version: "21" }
+      - uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: "13114758"
+          packages: "build-tools;35.0.0 platform-tools"
+          log-accepted-android-sdk-licenses: false
       - uses: actions/download-artifact@v5
-        with: {name: bungee-android-debug, path: artifacts}
-      - run: python3 scripts/check-app-signer.py artifacts/bungee-debug.apk
+        with: {name: bungee-android-build, path: artifacts}
+      - run: python3 scripts/check-app-signer.py artifacts/bungee-unsigned.apk
+  release-apk:
+    if: github.repository == 'argentumseven/bungee' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: [server-and-web, android, apk-signing, container-boundaries]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with: { persist-credentials: false }
+      - uses: actions/setup-java@v5
+        with: { distribution: temurin, java-version: "21" }
+      - uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: "13114758"
+          packages: "build-tools;35.0.0 platform-tools"
+          log-accepted-android-sdk-licenses: false
+      - uses: actions/download-artifact@v5
+        with: { name: bungee-android-build, path: artifacts }
+      - name: Sign once with the persistent release identity
+        env:
+          BUNGEE_RELEASE_KEYSTORE_BASE64: ${{ secrets.BUNGEE_RELEASE_KEYSTORE_BASE64 }}
+          BUNGEE_RELEASE_STORE_PASSWORD: ${{ secrets.BUNGEE_RELEASE_STORE_PASSWORD }}
+          BUNGEE_RELEASE_SIGNER_SHA256: ${{ vars.BUNGEE_RELEASE_SIGNER_SHA256 }}
+          BUNGEE_RELEASE_KEY_ALIAS: ${{ vars.BUNGEE_RELEASE_KEY_ALIAS }}
+        run: python3 scripts/release_signing.py artifacts/bungee-unsigned.apk release-apk
+      - uses: actions/upload-artifact@v5
+        id: signed_apk
+        with:
+          name: bungee-android-release
+          path: release-apk/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Show official APK download
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
+          ## Official Android APK
+
+          [Download signed APK and checksum (ZIP)](${{ steps.signed_apk.outputs.artifact-url }})
+
+          This APK uses the persistent release key. GitHub Releases and the server distribute the same APK.
+          The separate build artifact is unsigned and cannot be installed; use this official signed APK.
+          SUMMARY
   publish-main-apk:
     if: github.repository == 'argentumseven/bungee' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    needs: [android, apk-signing]
+    needs: [release-apk]
     runs-on: ubuntu-24.04
     permissions:
       actions: read
@@ -113,7 +153,7 @@ jobs:
       - run: python3 scripts/check-updater.py
   publish-containers:
     if: github.repository == 'argentumseven/bungee' && startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    needs: [server-and-web, android, apk-signing, container-boundaries]
+    needs: [server-and-web, android, apk-signing, container-boundaries, release-apk]
     runs-on: ubuntu-24.04
     concurrency:
       group: bungee-publish-${{ contains(github.ref_name, '-') && 'preview' || 'stable' }}
@@ -229,14 +269,14 @@ jobs:
           PY
   publish-apk:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [server-and-web, android, container-boundaries, publish-containers]
+    needs: [server-and-web, android, container-boundaries, release-apk, publish-containers]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v5
         with:
-          name: bungee-android-debug
+          name: bungee-android-release
           path: artifacts
       - name: Verify artifact and publish release
         env:
@@ -245,9 +285,7 @@ jobs:
           set -euo pipefail
           [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]
           cd artifacts
-          sha256sum --check bungee-debug.apk.sha256
-          cp bungee-debug.apk bungee.apk
-          sha256sum bungee.apk > bungee.apk.sha256
+          sha256sum --check bungee.apk.sha256
           cat > release-notes.md <<'NOTES'
           Install **bungee.apk** on a consenting Android 12+ device. Verify the accompanying SHA-256 checksum. The build supports ARM64 and x86_64.
 
@@ -259,7 +297,7 @@ jobs:
 
           Device-owner enrollment and persistent MDM controls are disabled. The separate Bungee recovery launcher can stop controls offline without pairing keys or a server. Ordinary Android deactivation/uninstall remains available. No wipe, credential reset, firmware/bootloader action, kiosk mode or remote reboot is implemented.
 
-          This APK uses a debug signer. CI signer changes can require uninstall/re-pair; use your own stable signing key for in-place updates. The existing helper scripts/build-owner-apk.sh configures signing only; it does not enable device ownership.
+          This APK uses the persistent official release key. GitHub and server downloads are identical, and routine upgrades preserve pairing and app data. Older disposable-key installations still require a one-time move to the official signer; the previous private key cannot be recovered from an APK.
 
           Physical GrapheneOS lifecycle checks remain unperformed. Independent publisher-signature verification remains open. The host installer uses LUKS2 storage, host-key boot unlock and age-encrypted archives. Certificate/device/APK signatures remain classical. Read README.md, docs/SECURITY.md, docs/INSTALL.md and docs/VALIDATION.md for feature scope, trust assumptions and test evidence.
           NOTES

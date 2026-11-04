@@ -32,3 +32,27 @@ test('only authenticated paired phones can fetch bounded immutable APK chunks; a
  await writeFile(join(dir,'status.json'),JSON.stringify(failure));
  assert.deepEqual((await (await p.request('/v1/app-update',{})).json()).preparation,failure);
 });
+
+test('official GitHub/server APK is the default download while older household clients retain a compatible update',async t=>{
+ const f=await fixture(t),p=await phone(f),dir=join(f.dir,'app-updates');await mkdir(dir);
+ const make=async(bytes,signer,signing,name)=>{
+  const sha=createHash('sha256').update(bytes).digest('hex');
+  const descriptor={version:release.version,version_code:release.android_version_code,sha256:sha,signer_sha256:signer,size:bytes.length,commit:'c'.repeat(40),signing};
+  await writeFile(join(dir,sha+'.apk'),bytes);await writeFile(join(dir,name),JSON.stringify(descriptor));return descriptor;
+ };
+ const official=await make(Buffer.from('exact GitHub bytes'),'a'.repeat(64),'publisher-v1','release.json');
+ const legacy=await make(Buffer.from('legacy compatibility bytes'),'b'.repeat(64),'household-legacy','legacy-release.json');
+ const check=async signer=>await (await p.request('/v1/app-update',signer?{installed_signer_sha256:signer}:{})).json();
+ assert.deepEqual((await check('a'.repeat(64))).release,official);
+ assert.deepEqual((await check('b'.repeat(64))).release,legacy);
+ assert.deepEqual((await check()).release,legacy,'pre-upgrade clients keep their old signing identity');
+ assert.deepEqual((await check('d'.repeat(64))).release,official,'a retired GitHub identity sees the official release and its real certificate');
+ assert.equal((await p.request('/v1/app-update',{installed_signer_sha256:'not a certificate'})).status,400);
+ for(const signer of [official.signer_sha256,legacy.signer_sha256]){
+  const r=await p.request('/v1/sync',{report:{app_signer_sha256:signer}});assert.equal(r.status,200);
+  assert.deepEqual((await r.json()).app_update,signer===official.signer_sha256?official:legacy);
+ }
+ assert.equal((await p.request('/v1/sync',{report:{app_signer_sha256:'invalid'}})).status,400);
+ const download=await f.admin('/api/app-updates/bungee.apk');assert.deepEqual(Buffer.from(await download.arrayBuffer()),Buffer.from('exact GitHub bytes'));
+ assert.deepEqual((await (await f.admin('/api/app-updates')).json()).release,official);
+});

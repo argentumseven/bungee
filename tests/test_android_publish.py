@@ -23,13 +23,13 @@ class PublishingTests(unittest.TestCase):
                         {'head_repository':{'full_name':'other/fork'}}, {'path':'.github/workflows/other.yml'}):
             self.assertFalse(publish.trusted_run({**RUN, **updates}, REPO))
 
-    def simulate(self, *, checksum_ok=True, android_passed=True, releases=None):
+    def simulate(self, *, checksum_ok=True, android_passed=True, release_passed=True, releases=None):
         calls = []
         def api(repo, path):
             self.assertEqual(repo, REPO)
             if path == 'actions/workflows/check.yml/runs?branch=main&per_page=30': return {'workflow_runs':[RUN]}
-            if path == 'actions/runs/123/jobs?per_page=100': return {'jobs':[{'name':'android','conclusion':'success' if android_passed else 'failure'}]}
-            if path == 'actions/runs/123/artifacts': return {'artifacts':[{'name':'bungee-android-debug','expired':False}]}
+            if path == 'actions/runs/123/jobs?per_page=100': return {'jobs':[{'name':name,'conclusion':('success' if (android_passed if name=='android' else release_passed) else 'failure')} for name in ('android','apk-signing','server-and-web','container-boundaries','release-apk')]}
+            if path == 'actions/runs/123/artifacts': return {'artifacts':[{'name':'bungee-android-release','expired':False}]}
             if path == 'releases?per_page=100': return releases or []
             if path == 'contents/release.json?ref=' + 'a' * 40:
                 return {'content':base64.b64encode(json.dumps({'version':'1.1.4','android_version_code':20}).encode()).decode()}
@@ -38,15 +38,18 @@ class PublishingTests(unittest.TestCase):
             calls.append(args)
             if args[:2] == ('run','download'):
                 directory = Path(args[args.index('--dir')+1])
-                (directory/'bungee-debug.apk').write_bytes(b'test apk bytes')
+                (directory/'bungee.apk').write_bytes(b'test apk bytes')
                 digest = hashlib.sha256(b'test apk bytes').hexdigest() if checksum_ok else '0' * 64
-                (directory/'bungee-debug.apk.sha256').write_text(digest + '  bungee-debug.apk\n')
+                (directory/'bungee.apk.sha256').write_text(digest + '  bungee.apk\n')
+                (directory/'signing.json').write_text(json.dumps({'signing':'publisher-v1','sha256':digest,'version':'1.1.4','version_code':20,'signer_sha256':'b'*64,'size':len(b'test apk bytes')}))
             if args[:2] == ('release','upload'):
                 files = [Path(name) for name in args[3:6]]
                 self.assertEqual([file.name for file in files], ['bungee.apk','bungee.apk.sha256','build.json'])
                 self.assertEqual(files[0].read_bytes(), b'test apk bytes')
                 self.assertTrue(files[1].read_text().endswith('  bungee.apk\n'))
                 self.assertEqual(json.loads(files[2].read_text())['commit'], 'a' * 40)
+                self.assertEqual(json.loads(files[2].read_text())['signing'], 'publisher-v1')
+                self.assertEqual(json.loads(files[2].read_text())['signer_sha256'], 'b'*64)
             return ''
         with patch.dict(os.environ, {'GH_REPO':REPO,'BUNGEE_BUILD_RUN_ID':''}, clear=True), patch.object(publish,'api',api), patch.object(publish,'gh',gh):
             publish.main()
@@ -62,6 +65,7 @@ class PublishingTests(unittest.TestCase):
 
     def test_failed_android_job_or_older_run_cannot_replace_latest(self):
         self.assertEqual(self.simulate(android_passed=False), [])
+        self.assertEqual(self.simulate(release_passed=False), [])
         self.assertEqual(self.simulate(releases=[{'draft':False,'body':'<!-- android-source-run: 8 -->'}]), [])
 
     def test_bad_checksum_prevents_release_creation(self):

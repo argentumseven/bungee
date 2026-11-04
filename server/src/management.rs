@@ -69,6 +69,7 @@ pub fn safe_package(p: &str) -> bool {
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Report {
+    pub app_signer_sha256: Option<String>,
     #[serde(skip_serializing)]
     pub system_dns: Option<serde::de::IgnoredAny>, // Discard reports from older phones.
     pub camera: Option<CameraReport>,
@@ -291,6 +292,12 @@ pub async fn sync(
             || c.reported_at > now() + 120
     }) || r.delivery.as_ref().is_some_and(|d| !d.valid())
         || r.connection_health.as_ref().is_some_and(|c| !c.valid())
+        || r.app_signer_sha256.as_ref().is_some_and(|value| {
+            value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        })
         || r.revision < 0
         || r.errors.len() > 20
         || r.errors.iter().any(|e| e.len() > 160)
@@ -320,7 +327,7 @@ pub async fn sync(
         |r| r.get(0),
     )?;
     Ok(Json(
-        json!({"server_version":crate::release::version(),"app_update_preparation":crate::app_updates::preparation(),"app_update":crate::app_updates::descriptor(),"revision":revision,"policy":policy.reversible(),"gps_epoch":epoch,"photo_epoch":db.query_row("SELECT photo_epoch FROM devices WHERE id=?",[&id],|r|r.get::<_,String>(0))?,"server_time":now(),"persistent_controls_enabled":false}),
+        json!({"server_version":crate::release::version(),"app_update_preparation":crate::app_updates::preparation(),"app_update":crate::app_updates::for_signer(r.app_signer_sha256.as_deref()),"revision":revision,"policy":policy.reversible(),"gps_epoch":epoch,"photo_epoch":db.query_row("SELECT photo_epoch FROM devices WHERE id=?",[&id],|r|r.get::<_,String>(0))?,"server_time":now(),"persistent_controls_enabled":false}),
     ))
 }
 #[cfg(test)]

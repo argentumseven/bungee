@@ -26,8 +26,8 @@ fn sha(value: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
-pub fn descriptor() -> Option<Value> {
-    let path = root().join("release.json");
+fn read_descriptor(name: &str) -> Option<Value> {
+    let path = root().join(name);
     if fs::metadata(&path).ok()?.len() > 8192 {
         return None;
     }
@@ -46,6 +46,33 @@ pub fn descriptor() -> Option<Value> {
     }
     Some(value)
 }
+pub fn descriptor() -> Option<Value> {
+    read_descriptor("release.json")
+}
+/// Old clients did not send their installed certificate. Keep their established
+/// household identity usable until they upgrade; official clients select theirs.
+pub fn for_signer(signer: Option<&str>) -> Option<Value> {
+    let official = descriptor();
+    let legacy = read_descriptor("legacy-release.json");
+    match signer {
+        Some(value)
+            if official
+                .as_ref()
+                .is_some_and(|r| r["signer_sha256"].as_str() == Some(value)) =>
+        {
+            official
+        }
+        Some(value)
+            if legacy
+                .as_ref()
+                .is_some_and(|r| r["signer_sha256"].as_str() == Some(value)) =>
+        {
+            legacy
+        }
+        Some(_) => official,
+        None => legacy.or(official),
+    }
+}
 pub fn preparation() -> Value {
     fs::read(root().join("status.json"))
         .ok()
@@ -59,14 +86,27 @@ pub async fn status(State(app): State<App>, headers: HeaderMap) -> ApiResult<Jso
         json!({"server_version":crate::release::version(),"release":descriptor(),"preparation":preparation()}),
     ))
 }
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct Check {
+    installed_signer_sha256: Option<String>,
+}
 pub async fn check(
     State(app): State<App>,
     headers: HeaderMap,
     body: Bytes,
 ) -> ApiResult<Json<Value>> {
     verify_device(&app, &headers, "/v1/app-update", &body)?;
+    let input: Check = serde_json::from_slice(&body).map_err(|_| bad("Invalid APK check"))?;
+    if input
+        .installed_signer_sha256
+        .as_deref()
+        .is_some_and(|value| !sha(value))
+    {
+        return Err(bad("Invalid installed signing certificate"));
+    }
     Ok(Json(
-        json!({"server_version":crate::release::version(),"release":descriptor(),"preparation":preparation(),"server_time":now()}),
+        json!({"server_version":crate::release::version(),"release":for_signer(input.installed_signer_sha256.as_deref()),"preparation":preparation(),"server_time":now()}),
     ))
 }
 #[derive(Deserialize)]

@@ -342,8 +342,8 @@ class MainActivity : FragmentActivity() {
                         if(appUpdate.signerMismatch) {
                             Button(onClick={showUpdateHelp=!showUpdateHelp}) {Text(if(showUpdateHelp) "Hide signing key details" else if(appUpdate.phase==AppUpdatePhase.BLOCKED) "Update recovery" else "Signing key details")}
                             if(showUpdateHelp) {
-                                Text("The app compares signing certificates, not just version numbers. A GitHub APK and a server-issued APK can have the same version and different certificates. This check does not prove that the server’s key changed.",fontSize=12.sp)
-                                Text("Already used this server’s APK? Restore its original APK signing key from the encrypted server backup. Do not reinstall while checking this.",fontSize=12.sp)
+                                Text("The app compares signing certificates, not just version numbers. Historical GitHub builds used disposable certificates. Official GitHub and server APKs now share the same persistent release certificate. This check does not prove that the server’s key changed.",fontSize=12.sp)
+                                Text("Already used this server’s older household-signed APK? The server keeps compatible updates for it. If its original signing key is missing, restore it from the encrypted server backup.",fontSize=12.sp)
                                 Text("Installed an older GitHub APK? Its disposable key cannot sign a replacement. A one-time switch is required:",fontSize=12.sp)
                                 Text("1. Let queued GPS and photos upload. Uninstalling removes unsent phone data. Keep the saved device in the manager.",fontSize=12.sp)
                                 Text("2. Download the server’s APK from manager Settings → Phone app updates. Turn off removable device administration in Bungee, then uninstall the old app and install the server APK.",fontSize=12.sp)

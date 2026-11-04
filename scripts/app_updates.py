@@ -1,4 +1,4 @@
-"""Prepare APKs for the exact running server; signing secrets never enter the app container."""
+"""Serve the official APK unchanged; retain existing household keys only for legacy phones."""
 import fcntl
 import hashlib
 import json
@@ -70,6 +70,10 @@ def validate_build(build, commit, version):
     code = build.get('android_version_code')
     if type(code) is not int or not 1 <= code <= 2_100_000_000:
         raise ValueError('APK release has no valid version code')
+    if build.get('signing') not in (None, 'publisher-v1'):
+        raise ValueError('Unsupported APK signing format')
+    if build.get('signing') == 'publisher-v1' and not re.fullmatch('[a-f0-9]{64}', build.get('signer_sha256', '')):
+        raise ValueError('Official APK has no release signing certificate')
     return code
 
 
@@ -91,8 +95,10 @@ def prepare(root, metadata):
     if not re.fullmatch('[a-f0-9]{40}', commit):
         raise ValueError('Running server has no official source commit; APK preparation unavailable for this custom build')
     existing = json.loads((public/'release.json').read_text()) if (public/'release.json').exists() else {}
-    if existing and (not (root/'volumes/tls-data/android-signing/bungee.p12').is_file() or not (root/'volumes/tls-data/android-signing/password').is_file()):
-        raise ValueError('APK signing identity is missing; restore its encrypted backup')
+    legacy_path = public/'legacy-release.json'
+    legacy = json.loads(legacy_path.read_text()) if legacy_path.exists() else (existing if existing.get('signing') != 'publisher-v1' else {})
+    if legacy and (not (root/'volumes/tls-data/android-signing/bungee.p12').is_file() or not (root/'volumes/tls-data/android-signing/password').is_file()):
+        raise ValueError('Legacy APK signing identity is missing; restore its encrypted backup')
     if existing.get('commit') == commit and (public / (existing['sha256']+'.apk')).is_file():
         atomic(public/'status.json', {'state':'ready','version':metadata['version']}); return
     # Reuse the map storage calculation: filesystem free space, swap growth,
@@ -110,6 +116,9 @@ def prepare(root, metadata):
     except subprocess.CalledProcessError:
         report('tools', 'Installing the APK signing tools. The first preparation can take several minutes.')
         run(['docker','build','--pull','-t',signer_image,'-f',signer_file,signer_file.parent/'signer-context'])
+    if build.get('signing') == 'publisher-v1':
+        prepare_publisher(root, metadata, commit, build, code, signer_image, legacy, report)
+        return
     # tls-data is encrypted and already part of every authenticated cold snapshot.
     # Only tls-data/issued is mounted in the runtime container, never these keys.
     keys = root/'volumes/tls-data/android-signing'
@@ -159,7 +168,63 @@ def prepare(root, metadata):
         atomic(public/'status.json',{'state':'ready','version':metadata['version']})
     # Keep the previous file for a phone already downloading. No unbounded APK growth.
     files = sorted(public.glob('*.apk'), key=lambda p:p.stat().st_mtime, reverse=True)
-    for old in files[2:]: old.unlink()
+    for old in files[4:]: old.unlink()
+
+
+def prepare_publisher(root, metadata, commit, build, code, signer_image, legacy, report):
+    public = root/'app-updates'
+    keys = root/'volumes/tls-data/android-signing'
+    keys.mkdir(exist_ok=True, mode=0o700); keys.chmod(0o700)
+    pin = keys/'publisher.sha256'
+    if pin.exists() and pin.read_text().strip() != build['signer_sha256']:
+        raise ValueError('Official APK signing certificate changed; the publisher must restore the established release key')
+    base = REPOSITORY + '/releases/download/android-' + commit[:12] + '/'
+    with tempfile.TemporaryDirectory(prefix='.prepare-', dir=public) as temporary:
+        work = Path(temporary)
+        def tool(*args, legacy_key=False):
+            # The ordinary verifier never receives household private keys.
+            mounts = ['-v', str(work)+':/work']
+            if legacy_key: mounts += ['-v', str(keys)+':/keys:ro']
+            return run(['docker','run','--rm','--user',f'{os.getuid()}:{os.getgid()}','--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true','--memory','512m','--pids-limit','64','--tmpfs','/tmp:size=64m',
+                '--label','org.bungee.helper=bungee-archive','--ulimit','core=0',*mounts,signer_image,*args])
+        def progress(done,total):
+            report('downloading','Downloading the official APK…',downloaded_bytes=done,total_bytes=total)
+        fetch(base+'bungee.apk',work/'source.apk',MAX_APK,progress=progress)
+        report('verifying','Verifying the official APK checksum, version and persistent certificate…')
+        if digest(work/'source.apk') != build['sha256']: raise ValueError('Published APK checksum mismatch')
+        badging_all = tool('aapt','dump','badging','/work/source.apk')
+        if 'application-debuggable' in badging_all: raise ValueError('Debuggable APK cannot be distributed')
+        badging = badging_all.splitlines()[0]
+        if f"name='org.bungee.app'" not in badging or f"versionCode='{code}'" not in badging or f"versionName='{metadata['version']}'" not in badging:
+            raise ValueError('APK package/version does not match release metadata')
+        tool('zipalign','-c','-p','4','/work/source.apk')
+        verification = tool('apksigner','verify','--print-certs','/work/source.apk')
+        matches = re.findall(r'^Signer #[0-9]+ certificate SHA-256 digest: ([a-f0-9]{64})$',verification,re.M)
+        if matches != [build['signer_sha256']]: raise ValueError('Published APK certificate does not match release metadata')
+        main = {'version':metadata['version'],'version_code':code,'commit':commit,'sha256':build['sha256'],
+                'signer_sha256':build['signer_sha256'],'size':(work/'source.apk').stat().st_size,'chunk_size':131072,'signing':'publisher-v1'}
+        compatibility = None
+        key = keys/'bungee.p12'; password = keys/'password'
+        if key.is_file():
+            if not password.is_file(): raise ValueError('Legacy APK signing password is missing; restore its encrypted backup')
+            report('compatibility','Preparing a compatible update for existing household-signed phones…')
+            tool('apksigner','sign','--ks','/keys/bungee.p12','--ks-key-alias','bungee','--ks-pass','file:/keys/password','--out','/work/legacy.apk','/work/source.apk',legacy_key=True)
+            verified = tool('apksigner','verify','--print-certs','/work/legacy.apk')
+            signers = re.findall(r'^Signer #[0-9]+ certificate SHA-256 digest: ([a-f0-9]{64})$',verified,re.M)
+            if len(signers)!=1 or (legacy and legacy.get('signer_sha256')!=signers[0]):
+                raise ValueError('Legacy APK signing identity changed; restore the original key')
+            compatibility = {**main,'sha256':digest(work/'legacy.apk'),'size':(work/'legacy.apk').stat().st_size,'signer_sha256':signers[0],'signing':'household-legacy'}
+        # Never alter the official APK: its bytes, checksum and certificate match GitHub exactly.
+        for source,descriptor in [(work/'source.apk',main),*([(work/'legacy.apk',compatibility)] if compatibility else [])]:
+            source.chmod(0o644)
+            with source.open('rb') as stream: os.fsync(stream.fileno())
+            os.replace(source,public/(descriptor['sha256']+'.apk'))
+        if not pin.exists(): atomic(pin,build['signer_sha256']+'\n')
+        if compatibility: atomic(public/'legacy-release.json',compatibility)
+        atomic(public/'release.json',main)
+        atomic(public/'status.json',{'state':'ready','version':metadata['version']})
+    files = sorted(public.glob('*.apk'),key=lambda path:path.stat().st_mtime,reverse=True)
+    for old in files[4:]: old.unlink()
 
 
 def tick(root, metadata):

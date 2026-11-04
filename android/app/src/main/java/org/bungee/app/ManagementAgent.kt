@@ -58,7 +58,7 @@ object ManagementAgent {
                 .put("failed_in_row", camera.failedInRow).put("queued", PendingPhotos.metadata())
                 .put("status", camera.detail.take(80)).put("reported_at", System.currentTimeMillis()/1000)
         }.getOrDefault(JSONObject.NULL) // A broken photo queue must not block ordinary reporting.
-        return JSONObject().put("owner", role == ManagementRole.DEVICE_OWNER || role == ManagementRole.PROFILE_OWNER).put("consent", false)
+        return JSONObject().put("app_signer_sha256", AppUpdates.installedSigner(context)).put("owner", role == ManagementRole.DEVICE_OWNER || role == ManagementRole.PROFILE_OWNER).put("consent", false)
             .put("camera", cameraReport).put("connection_health", ConnectionHealth.report(context))
             .put("delivery", identity.backlogReport().put("reported_at", System.currentTimeMillis()/1000).put("gps_access", TelemetryService.status.value.gpsAccess))
             .put("recovery_consent", identity.allowCommands && !LocalSafety.isStopped(context)).put("revision", state.optLong("revision", 0))

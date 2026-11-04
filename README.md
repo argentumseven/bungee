@@ -50,7 +50,7 @@ The Kotlin app connects through an app-contained WireGuard tunnel to a Rust serv
 | Containers | Non-root Rust service, zero capabilities and read-only root; isolated WireGuard gateway; host-only local CA; direct Rust HTTPS; TLS 1.3 X25519MLKEM768; new runtime application egress denied |
 | Installation | Prompted WireGuard/web ports, endpoint/bind address and mandatory administrator hosts/prefixes; bare hosts become /32 or /128; no-write plan, exact HTTPS URL and CA fingerprint; existing installations refused |
 | Server updates | Host systemd timer with Compose image replacement, immutable two-image bundles, staged downloads, admission closed during trials, coherent encrypted cold snapshots, failed-trial recovery and three retained snapshots |
-| Builds | ARM64/x86_64 APK, coordinated `release.json`, CI checks and checksums, operator-owned stable signing option, source and synthetic test fixtures |
+| Builds | ARM64/x86_64 APK, coordinated `release.json`, CI checks and checksums, persistent official signing identity, source and synthetic test fixtures |
 
 Bungee does not support device-owner/work-profile management, forced system DNS, app suspension, hidden launchers, lock-screen overlays, airplane-mode cycling, radio schedules, power-off/reboot/wipe, credential reset, arbitrary scripts or software deployment. Powered-off finding, a crowdsourced offline network, relay/NAT traversal, household roles/MFA and hardware attestation are also unavailable. Guided installs include the world overview and DB-IP Lite City data and offer a regional street-map checklist. Settings → Maps & storage offers the same regional downloads, planned sizes, installed maps and safe free capacity.
 
@@ -73,9 +73,9 @@ See [installation and updates](docs/INSTALL.md) for the wizard, network rules an
 
 ## Install and pair a phone
 
-Download **manager Settings → Phone app updates → Download this server’s APK** for a persistent signing identity and future in-app updates. The host prepares the APK for its exact server version automatically. The public **[bungee.apk](https://github.com/argentumseven/bungee/releases/latest/download/bungee.apk)** and [checksums/source](https://github.com/argentumseven/bungee/releases/latest) remain available as standalone builds. Main-branch releases publish after the APK and signing pipeline checks succeed.
+Download the APK from **GitHub Releases** or **manager Settings → Phone app updates**. Both distribute the exact same official APK, signed once with Bungee’s persistent release key. The server verifies its checksum, package, version and certificate and serves it unchanged. In-app updates preserve pairing, settings and queued history; Android asks for installation confirmation.
 
-**For in-app updates, install the manager’s APK before pairing the phone.** The standalone CI APK has a disposable signer, with Android debugging disabled. Older GitHub APKs need one reinstall to switch certificates; **Reconnect · keep history** preserves their saved server records. After that, use Bungee’s App updates screen for in-place updates. See [signing and migration](docs/MANAGEMENT.md#stable-signing-and-updates). Install Bungee as an ordinary personal app; **do not enroll it as device owner**.
+Official GitHub and server APKs share one signing identity. Historical disposable-key GitHub installations cannot switch identities in place without their lost private key. Older household-signed phones retain compatible in-app updates using their server’s existing key. See [signing and upgrade recovery](docs/MANAGEMENT.md#stable-signing-and-updates).
 
 1. Open Bungee on the phone and copy its WireGuard public key.
    After an uninstall/reinstall, clearing app data, or generating new phone keys,
@@ -156,7 +156,7 @@ bash scripts/build-transport.sh
 bash scripts/android.sh :app:assembleDebug :app:lintDebug :app:testDebugUnitTest
 ```
 
-For normal installations, download **manager Settings → Phone app updates → Download this server’s APK**. The host prepares it automatically; future updates are available inside the paired phone app with a persistent server signer. See [the one-time transition from old GitHub APKs](docs/MANAGEMENT.md#stable-signing-and-updates).
+For normal installations, download the official APK from **GitHub Releases** or **manager Settings → Phone app updates**. Both use the same signing key; future updates are available inside the paired phone app with a persistent server signer. See [the one-time transition from old GitHub APKs](docs/MANAGEMENT.md#stable-signing-and-updates).
 
 The local development APK is `android/app/build/outputs/apk/debug/app-debug.apk`. `assembleRelease` is unsigned until you configure a signer outside source control. `scripts/build-owner-apk.sh` uses an operator-owned signing key; its historical name does not enable Android ownership.
 

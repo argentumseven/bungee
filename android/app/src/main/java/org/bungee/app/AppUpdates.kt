@@ -32,7 +32,7 @@ object AppUpdates {
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
     @Suppress("DEPRECATION")
-    private fun installedSigner(context: Context): String {
+    fun installedSigner(context: Context): String {
         val info=context.packageManager.getPackageInfo(context.packageName,PackageManager.GET_SIGNING_CERTIFICATES)
         val signers=checkNotNull(info.signingInfo).apkContentsSigners
         require(signers.size==1) { "Multiple app signers are unsupported" }
@@ -58,7 +58,7 @@ object AppUpdates {
     suspend fun check(context: Context, identity: Identity) = downloads.withLock {
         mutable.value=mutable.value.copy(phase=AppUpdatePhase.CHECKING,message="Connecting to your paired server and checking its app version…")
         connected(context,identity) {
-            val result=HomeApi(identity).request("/v1/app-update")
+            val result=HomeApi(identity).request("/v1/app-update", JSONObject().put("installed_signer_sha256", installedSigner(context)))
             currentCoroutineContext().ensureActive()
             observe(context,result.optJSONObject("release"),result.optString("server_version").takeIf { it.isNotBlank() },result.optJSONObject("preparation"),explicit=true)
         }
