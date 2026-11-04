@@ -173,24 +173,17 @@ def compose(config, images, root):
     def bind(name, target, readonly=False):
         return {'type': 'bind', 'source': str(root / 'volumes' / name), 'target': target, 'read_only': readonly, 'bind': {'create_host_path': False}}
     def service(image, **values): return {**common, 'image': image, **values}
-    dns = {'BUNGEE_DNS_UPSTREAM_IP': c.get('dns_upstream_ip', ''), 'BUNGEE_DNS_UPSTREAM_PORT': str(c.get('dns_upstream_port', 53))}
     result = {'name': 'bungee', 'services': {
         'gateway': service(images['gateway'], cap_add=['NET_ADMIN', 'CHOWN', 'DAC_OVERRIDE'], tmpfs=['/run:mode=0700'],
-            environment={**PRIVATE_ENV, **dns, 'BUNGEE_WG_PORT': str(c['wg_port']), 'BUNGEE_ADMIN_ADDRESS': c['bind_ip'], 'BUNGEE_ADMIN_SUBNETS': ' '.join(c['admin_subnets']), 'BUNGEE_UPDATE_CONTROL': '/control'},
+            environment={**PRIVATE_ENV, 'BUNGEE_WG_PORT': str(c['wg_port']), 'BUNGEE_ADMIN_ADDRESS': c['bind_ip'], 'BUNGEE_ADMIN_SUBNETS': ' '.join(c['admin_subnets']), 'BUNGEE_UPDATE_CONTROL': '/control'},
             ports=[f"{network.bracket(c['bind_ip'])}:{c['web_port']}:8443/tcp", f"{c['wg_port']}:{c['wg_port']}/udp"],
             sysctls={'net.ipv4.ip_forward': '0', 'net.ipv6.conf.all.forwarding': '0'},
             volumes=[bind('gateway-private', '/private'), bind('gateway-peers', '/peers'), {'type': 'bind', 'source': str(root / 'control'), 'target': '/control', 'read_only': True, 'bind': {'create_host_path': False}}],
             healthcheck={'test': ['CMD', 'wg', 'show', 'wg0'], 'interval': '10s', 'timeout': '3s', 'retries': 5}),
         'server': service(images['server'], network_mode='service:gateway', depends_on={'gateway': {'condition': 'service_healthy'}},
-            environment={**PRIVATE_ENV, **dns, 'BUNGEE_PUBLIC_ORIGIN': network.origin(c), 'BUNGEE_ADMIN_BIND': '0.0.0.0:8443', 'BUNGEE_ADMIN_INTERFACE': 'eth0', 'BUNGEE_ADMIN_SUBNETS': ' '.join(c['admin_subnets']), 'BUNGEE_DEVICE_BIND': '10.77.0.1:8081', 'BUNGEE_WG_ENDPOINT': f"{network.bracket(c['endpoint_ip'])}:{c['wg_port']}", 'BUNGEE_TLS_CERT_FILE': '/tls/current/server.crt', 'BUNGEE_TLS_KEY_FILE': '/tls/current/server.key'},
+            environment={**PRIVATE_ENV, 'BUNGEE_PUBLIC_ORIGIN': network.origin(c), 'BUNGEE_ADMIN_BIND': '0.0.0.0:8443', 'BUNGEE_ADMIN_INTERFACE': 'eth0', 'BUNGEE_ADMIN_SUBNETS': ' '.join(c['admin_subnets']), 'BUNGEE_DEVICE_BIND': '10.77.0.1:8081', 'BUNGEE_WG_ENDPOINT': f"{network.bracket(c['endpoint_ip'])}:{c['wg_port']}", 'BUNGEE_TLS_CERT_FILE': '/tls/current/server.crt', 'BUNGEE_TLS_KEY_FILE': '/tls/current/server.key'},
             tmpfs=['/tmp:size=16m'], volumes=[bind('server-data', '/state'), bind('gateway-peers', '/state/wireguard'), bind('tls-data/issued', '/tls', True), {'type': 'bind', 'source': str(dataset), 'target': '/datasets', 'read_only': True, 'bind': {'create_host_path': False}}, *[{'type':'bind','source':str(root/source),'target':target,'read_only':readonly,'bind':{'create_host_path':False}} for source,target,readonly in [('app-updates','/app-updates',True),('maps','/maps',True),('map-control/status','/map-control/status',True),('map-control/requests','/map-control/requests',False)]]])
     }}
-    if c.get('private_dns_host'):
-        result['services']['gateway']['ports'].append(f"{network.bracket(c['bind_ip'])}:853:8853/tcp")
-        for name in ('gateway','server'):
-            result['services'][name]['environment']['BUNGEE_PRIVATE_DNS_HOST']=c['private_dns_host']
-        result['services']['server']['environment'].update({'BUNGEE_PRIVATE_DNS_CERT_FILE':'/private-dns-tls/fullchain.pem','BUNGEE_PRIVATE_DNS_KEY_FILE':'/private-dns-tls/privkey.pem'})
-        result['services']['server']['volumes'].append(bind('private-dns-tls','/private-dns-tls',True))
     return result
 
 
@@ -203,7 +196,7 @@ def require_dns_restored(root):
     for revision,enabled,text in rows:
         report=json.loads(text or '{}')
         if enabled or report.get('revision')!=revision or report.get('active',True) or report.get('state') not in ('disabled','fallback','removed'):
-            raise ValueError('Turn DNS off or remove DNS setup for every phone and wait for phone confirmation before removing the relay or changing its hostname')
+            raise ValueError('This version removes DNS. Restore normal DNS on phones using the old relay before updating or uninstalling the host; use the old phone app’s Remove DNS setup or Android Private DNS settings')
 
 
 class Engine:
@@ -420,7 +413,7 @@ class Host:
         self.recover()
         old = self.current()
         previous=read(self.root/'generations'/old/'config.json')
-        if previous.get('private_dns_host') and previous.get('private_dns_host')!=config.get('private_dns_host'):
+        if previous.get('private_dns_host'):
             require_dns_restored(self.root)
         self.engine.healthy(old)
         self.engine.storage_ready(old)
@@ -607,13 +600,11 @@ def guided(existing=None):
     host = field('Dashboard address used in your browser (no port)', c.get('web_host', bind), network.hostname)
     print('Use only your internal management IPs/prefixes. They must not overlap the phone C2 subnet.')
     nets = field('Allowed internal administrator networks', ' '.join(c['admin_subnets']) if c.get('admin_subnets') else None, network.admin_networks)
-    dns = field('Optional DNS resolver IP (type off to disable)', c.get('dns_upstream_ip', ''), lambda value: network.dns_upstream('' if value == 'off' else value))
-    dns_port = field('DNS resolver port', c.get('dns_upstream_port', 53), network.port) if dns else 53
     size = field('Encrypted storage capacity in GiB (new installations)', c.get('storage_size_gib', 32), storage_size)
     maps = choose_maps(c.get('map_regions',[]))
     channel = field('Update channel: stable or preview', c.get('channel', 'stable'), choice('stable', 'preview'))
     auto = field('Check daily for tested images in that channel? yes/no', 'yes' if c.get('auto_updates', True) else 'no', choice('yes', 'no'))
-    return network.validate({**({'geodata': c['geodata']} if c.get('geodata') else {}), **({'private_dns_host': c['private_dns_host']} if c.get('private_dns_host') else {}), 'wg_port': wg, 'web_port': web, 'endpoint_ip': endpoint, 'bind_ip': bind, 'web_host': host, 'admin_subnets': nets, 'channel': channel, 'auto_updates': auto == 'yes', 'dns_upstream_ip': dns, 'dns_upstream_port': dns_port, 'storage_size_gib': size,'map_regions':maps})
+    return network.validate({**({'geodata': c['geodata']} if c.get('geodata') else {}), 'wg_port': wg, 'web_port': web, 'endpoint_ip': endpoint, 'bind_ip': bind, 'web_host': host, 'admin_subnets': nets, 'channel': channel, 'auto_updates': auto == 'yes', 'storage_size_gib': size,'map_regions':maps})
 
 
 def preflight(root, installing=False, config=None):

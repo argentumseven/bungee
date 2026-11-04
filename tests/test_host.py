@@ -307,20 +307,14 @@ class DatasetTests(unittest.TestCase):
             config = host.read(self.root / 'generations' / self.old / 'compose.json')
             self.assertTrue(next(value for value in config['services']['server']['volumes'] if value['target']=='/datasets')['source'].endswith('/empty'))
 
-class PrivateDnsTests(unittest.TestCase):
-    def test_optional_tls_listener_is_separate_from_admin_and_does_not_add_egress(self):
-        c=host.compose({**CONFIG,'dns_upstream_ip':'10.10.20.3','private_dns_host':'dns.example.org'},metadata()['images'],Path('/opt/bungee'))
-        gateway=c['services']['gateway'];server=c['services']['server']
-        self.assertIn('192.168.1.10:853:8853/tcp',gateway['ports'])
-        self.assertEqual(server['environment']['BUNGEE_PRIVATE_DNS_HOST'],'dns.example.org')
-        self.assertEqual(server['environment']['BUNGEE_DNS_UPSTREAM_IP'],'10.10.20.3')
-        self.assertTrue(next(v for v in server['volumes'] if v['target']=='/private-dns-tls')['read_only'])
-        plain=host.compose(CONFIG,metadata()['images'],Path('/opt/bungee'))
-        self.assertFalse(any(':853:' in p for p in plain['services']['gateway']['ports']))
-    def test_private_dns_needs_hostname_and_upstream(self):
-        for value in ['10.10.20.3','https://dns.example.org','dns.example.org:853','*.example.org','localhost','DNS.example.org']:
-            with self.subTest(value=value),self.assertRaises(ValueError):host.network.validate({**CONFIG,'dns_upstream_ip':'10.10.20.3','private_dns_host':value})
-        with self.assertRaises(ValueError):host.network.validate({**CONFIG,'private_dns_host':'dns.example.org'})
+class RetiredDnsTests(unittest.TestCase):
+    def test_old_dns_answers_are_discarded_without_provisioning_ports_mounts_or_egress(self):
+        old={**CONFIG,'dns_upstream_ip':'10.10.20.3','dns_upstream_port':53,'private_dns_host':'dns.example.org'}
+        self.assertEqual(host.network.validate(old),host.network.validate(CONFIG))
+        c=host.compose(old,metadata()['images'],Path('/opt/bungee'))
+        self.assertEqual(c,host.compose(CONFIG,metadata()['images'],Path('/opt/bungee')))
+        self.assertFalse(any(':853:' in p for p in c['services']['gateway']['ports']))
+        self.assertFalse(any('DNS' in key for service in c['services'].values() for key in service['environment']))
     def test_host_removal_waits_for_confirmed_restoration_and_keeps_data(self):
         import sqlite3
         with tempfile.TemporaryDirectory() as d:
@@ -328,7 +322,7 @@ class PrivateDnsTests(unittest.TestCase):
             with sqlite3.connect(path) as db:
                 db.execute('CREATE TABLE dns_profiles(revision INTEGER,enabled INTEGER,hostname TEXT,report TEXT)')
                 db.execute('INSERT INTO dns_profiles VALUES(2,0,?,?)',('abc.dns.example.org',json.dumps({'revision':1,'active':True,'state':'active'})))
-            with self.assertRaisesRegex(ValueError,'wait for phone confirmation'):host.require_dns_restored(root)
+            with self.assertRaisesRegex(ValueError,'Restore normal DNS'):host.require_dns_restored(root)
             for report in [{'revision':2,'active':False,'state':'error'},{'revision':1,'active':False,'state':'disabled'}]:
                 with sqlite3.connect(path) as db:db.execute('UPDATE dns_profiles SET report=?',[json.dumps(report)])
                 with self.assertRaises(ValueError):host.require_dns_restored(root)

@@ -113,46 +113,11 @@ test("gateway validates the chosen port and installs outbound-deny rules for the
     await readFile(join(dir, "wg0.conf"), "utf8"),
     /ListenPort = 47937/,
   );
-  for (const upstream of [
-
-    "127.0.0.11",
-    "10.77.0.2",
-    "resolver.example",
-  ]) {
-    const rejected = spawnSync("sh", [script], {
-      env: {
-        ...env,
-        BUNGEE_WG_PORT: "47937",
-        BUNGEE_DNS_UPSTREAM_IP: upstream,
-      },
-      encoding: "utf8",
-    });
-    assert.notEqual(rejected.status, 73, upstream);
-    assert.notEqual(rejected.status, 0, upstream);
-  }
-  assert.equal(
-    spawnSync("sh", [script], {
-      env: {
-        ...env,
-        BUNGEE_WG_PORT: "47937",
-        BUNGEE_DNS_UPSTREAM_IP: "192.168.1.53",
-        BUNGEE_DNS_UPSTREAM_PORT: "5353",
-      },
-    }).status,
-    73,
-  );
-  for (const upstream of ['1.1.1.1','8.8.8.8','2606:4700:4700::1111']) {
-    assert.equal(spawnSync('sh',[script],{env:{...env,BUNGEE_WG_PORT:'47937',BUNGEE_DNS_UPSTREAM_IP:upstream}}).status,73);
-  }
-  const dnsCalls = await readFile(log, "utf8");
-  assert.match(
-    dnsCalls,
-    /OUTPUT -d 192\.168\.1\.53 -p udp --dport 5353 -j ACCEPT/,
-  );
-  assert.match(
-    dnsCalls,
-    /PREROUTING -i wg0 -p udp --dport 53 -j REDIRECT --to-ports 5353/,
-  );
+  // Old environment variables cannot reopen DNS ingress or outbound exceptions.
+  assert.equal(spawnSync('sh',[script],{env:{...env,BUNGEE_WG_PORT:'47937',BUNGEE_DNS_UPSTREAM_IP:'192.168.1.53',BUNGEE_DNS_UPSTREAM_PORT:'5353',BUNGEE_PRIVATE_DNS_HOST:'dns.example.org'}}).status,73);
+  const retiredCalls = await readFile(log, "utf8");
+  assert.doesNotMatch(retiredCalls,/OUTPUT -d 192\.168\.1\.53.*-j ACCEPT/);
+  assert.doesNotMatch(retiredCalls,/REDIRECT|--dport (?:53|5353|8853) -j ACCEPT/);
   const peers = join(dir, "peers/peers.conf");
   await writeFile(
     peers,

@@ -22,7 +22,7 @@ There is no remote wipe, reset-on-failed-unlocks, PIN/password reset, lock-task/
 
 ## Network and offline behavior
 
-Only app-contained WireGuard carries Bungee's fixed home API. By default no Android VPN routes, system DNS setting, always-on package, VPN lockdown or default internet route is installed. The separately approved [Private DNS controller](DNS.md) is an optional exception for the DNS setting only. A missing server or broken tunnel leaves other applications on their existing connection. Another VPN may carry/filter the outer UDP socket; Bungee does not override that VPN's policy.
+Only app-contained WireGuard carries Bungee's fixed home API. No Android VPN routes, system DNS setting, always-on package, VPN lockdown or default internet route is installed. A missing server or broken tunnel leaves other applications on their existing connection. Another VPN may carry/filter the outer UDP socket; Bungee does not override that VPN's policy.
 
 A server outage does not execute a fallback device policy. It preserves timestamped history and the bounded encrypted local GPS queue. Timed-out commands expire instead of becoming permanent restrictions. Lost mode is a contact notification plus at most one attempted screen lock per revision when ordinary administration is approved; it cannot replace or cover credential entry. The local user can stop Bungee or deactivate administration. Android notification/audio/permission rules continue to apply.
 
@@ -133,8 +133,6 @@ Stop sharing persists the independent local stop. The stopped screen says **Open
 [REMOVAL_AUDIT.md](REMOVAL_AUDIT.md) records ownership, asynchronous deactivation, pairing cancellation, service/permission failures and OS removal paths. A foreground-service task-manager Stop ends current execution; use Bungee local stop for a saved opt-out across boot/update. Android can require ordinary administration deactivation before offering force-stop or uninstall.
 
 
-## Explicit optional Private DNS
+## Upgrade cleanup for retired DNS
 
-The optional ADB-approved controller is distinct from the rejected device-owner `managed_dns` policy. It needs a reachable public DoT hostname/certificate, the revocable development permission, and local phone approval. The separate DNS monitor cannot take Android's VPN slot or depend on GPS/camera permissions. Saved undo state is independent of pairing keys; failed restoration blocks pairing erasure. Off restores prior DNS, while the selected failure fallback restores Automatic and remains latched until retry. Manual Android DNS changes pause automatic control. Planned removal restores and verifies DNS before clearing approval/recovery data. The host requires restoration confirmation before removing a relay; offline restoration can be explicitly confirmed and audited by its administrator.
-
-Private DNS is an OS-persisted setting. A dead/force-stopped/uninstalled app cannot run its watchdog or cleanup; revoking its grant before restoration can also prevent automatic recovery. This optional mode therefore does not guarantee normal connectivity under those conditions. Restore through Bungee before removal, or select Automatic in Android Private DNS settings/ADB directly. Android Settings remains available. Public service prerequisites and physical validation still pending are documented in [DNS.md](DNS.md) and [VALIDATION.md](VALIDATION.md).
+DNS routing, logs and relay services were removed in 1.1.17. The updated app retains only offline restoration of settings changed by 1.1.16. Cleanup is independent of pairing keys, verifies restoration before clearing its undo record, and preserves manual Android changes. Failed restoration blocks pairing erasure. No DNS activation, controller, monitor or test remains. Restore old settings before uninstalling or clearing data; [upgrade recovery](DNS-REMOVAL.md) explains the Android settings path and the temporary restore-only permission declaration.

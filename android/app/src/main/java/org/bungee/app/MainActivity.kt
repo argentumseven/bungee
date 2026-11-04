@@ -46,9 +46,7 @@ class MainActivity : FragmentActivity() {
     private var locked by mutableStateOf(false)
     private var error by mutableStateOf<String?>(null)
     private var busy by mutableStateOf(false)
-    private var dnsResult by mutableStateOf("")
-    private var dnsControl by mutableStateOf(PrivateDnsState())
-    private var dnsGranted by mutableStateOf(false)
+    private var legacyDnsError by mutableStateOf<String?>(null)
     private var updateJob: Job? = null
     private var updateBusy by mutableStateOf(false)
     private var enrolled by mutableStateOf(false)
@@ -98,7 +96,7 @@ class MainActivity : FragmentActivity() {
         } }
     }
     override fun onStop() { super.onStop(); if (::identity.isInitialized && identity.appLock) locked = true }
-    override fun onResume() { super.onResume(); dnsGranted=PrivateDns.granted(this); runCatching { dnsControl=PrivateDns.state(this) }; backgroundLocation = TelemetryService.hasBackgroundLocation(this); locallyStopped = LocalSafety.isStopped(this); cameraGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED; cameraBootAllowed = LocalSafety.isCameraRestartAllowed(this); startupAccess = CameraBootRecovery.hasStartupAccess(this); refreshDeviceAdmin() }
+    override fun onResume() { super.onResume(); legacyDnsError = runCatching { LegacyDnsRecovery.restore(this) }.exceptionOrNull()?.let { "The previous version’s DNS setting needs recovery. Open pairing & recovery before uninstalling. ${it.message ?: ""}" }; backgroundLocation = TelemetryService.hasBackgroundLocation(this); locallyStopped = LocalSafety.isStopped(this); cameraGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED; cameraBootAllowed = LocalSafety.isCameraRestartAllowed(this); startupAccess = CameraBootRecovery.hasStartupAccess(this); refreshDeviceAdmin() }
     override fun onPostResume() {
         super.onPostResume()
         cameraEnabled = LocalSafety.isCameraEnabled(this)
@@ -224,7 +222,6 @@ class MainActivity : FragmentActivity() {
         val status by TelemetryService.status.collectAsState()
         val camera by ArmedCameraService.status.collectAsState()
         val pendingPhotos by PendingPhotos.counts.collectAsState()
-        LaunchedEffect(Unit) { while (isActive) { runCatching { dnsControl=PrivateDns.state(this@MainActivity);dnsGranted=PrivateDns.granted(this@MainActivity) };delay(3000) } }
         LaunchedEffect(camera) { cameraEnabled = LocalSafety.isCameraEnabled(this@MainActivity); cameraBootAllowed = LocalSafety.isCameraRestartAllowed(this@MainActivity) }
         var lockEnabled by remember { mutableStateOf(identity.appLock) }
         var locate by remember { mutableStateOf(identity.allowLocate) }
@@ -405,54 +402,12 @@ class MainActivity : FragmentActivity() {
                         SettingRow("Removable device administration", "Optional screen locking and failed-unlock detection; Android confirms enabling it", deviceAdminEnabled, enabled = deviceAdminKnown && !deviceAdminChanging) { enabled -> changeDeviceAdmin(enabled) }
                     }
                 }
-                if (enrolled) Card(Modifier.fillMaxWidth().padding(top = 18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                legacyDnsError?.let { message -> Card(Modifier.fillMaxWidth().padding(top = 18.dp)) {
                     Column(Modifier.padding(18.dp)) {
-                        Text("Home DNS", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                        Text(DnsPathStatus.describe(DnsPathStatus.report(this@MainActivity)),fontSize=11.sp,lineHeight=19.sp,modifier=Modifier.padding(top=8.dp))
-                        Text("Android Private DNS leaves the VPN slot free. The household must configure a public Bungee DNS-over-TLS hostname and trusted certificate for use at home and away. Apps using their own encrypted DNS can bypass this setting.", fontSize = 11.sp, lineHeight = 19.sp)
-                        Text(dnsControl.detail,fontSize=11.sp,lineHeight=19.sp,modifier=Modifier.padding(top=8.dp))
-                        if (!dnsGranted) {
-                            Text("One-time computer setup, with USB debugging enabled:",fontSize=11.sp,modifier=Modifier.padding(top=10.dp))
-                            Text("adb shell pm grant org.bungee.app android.permission.WRITE_SECURE_SETTINGS",fontSize=11.sp,lineHeight=18.sp)
-                            Text("Return to Bungee after granting. No device-owner setup is needed.",fontSize=11.sp)
-                        }
-                        SettingRow("Allow household DNS control", "This phone’s approval is required; Off restores the previous DNS setting", dnsControl.consent, enabled = dnsGranted && !locallyStopped && !busy) { enabled -> unlock {
-                            runCatching {
-                                if (enabled) { PrivateDns.approve(this@MainActivity); PrivateDnsService.start(this@MainActivity) }
-                                else PrivateDns.disable(this@MainActivity)
-                                dnsControl=PrivateDns.state(this@MainActivity)
-                            }.onFailure { dnsResult=it.message ?: "DNS could not be changed; use Android Private DNS settings" }
-                        } }
-                        Text("Failure fallback: ${if(dnsControl.fallback) "Automatic DNS" else "disabled"}. Change this per phone in the manager’s DNS area. The monitor must remain running. Force-stop or uninstall cannot run restoration.",fontSize=11.sp,lineHeight=19.sp)
-                        if (dnsControl.consent) OutlinedButton(onClick = { unlock {
-                            runCatching { PrivateDns.retry(this@MainActivity);PrivateDnsService.start(this@MainActivity);dnsControl=PrivateDns.state(this@MainActivity) }.onFailure { dnsResult=it.message ?: "DNS retry failed" }
-                        } },modifier=Modifier.fillMaxWidth()) { Text("Retry household DNS") }
-                        OutlinedButton(onClick = { unlock {
-                            android.app.AlertDialog.Builder(this@MainActivity).setTitle("Remove DNS setup?")
-                                .setMessage("Restore the previous Android DNS setting before removing Bungee’s local DNS approval and recovery record. Pairing and other Bungee features stay available.")
-                                .setNegativeButton("Cancel",null).setPositiveButton("Restore & remove") { _,_ ->
-                                    runCatching { PrivateDns.disable(this@MainActivity,remove=true);dnsControl=PrivateDns.state(this@MainActivity);dnsResult="DNS setup removed. You can revoke the ADB grant or uninstall Bungee now." }
-                                        .onFailure { dnsResult=it.message ?: "Restore DNS in Android settings before uninstalling" }
-                                }.show()
-                        } },modifier=Modifier.fillMaxWidth()) { Text("Remove DNS setup") }
-                        OutlinedButton(enabled = status.connected && !busy, onClick = {
-                            scope.launch {
-                                busy=true;dnsResult="Testing Bungee → home DNS…"
-                                try {
-                                    val reply=withContext(Dispatchers.IO) { HomeApi(identity).request("/v1/dns-check") }
-                                    dnsResult=if(reply.getBoolean("reachable")) "Home DNS replied through ${reply.getString("upstream")}: ${reply.getString("response_code")}. Other apps’ DNS is unchanged."
-                                              else "Bungee reached home, but DNS upstream ${reply.getString("upstream")} did not reply."
-                                } catch(e:Exception) { dnsResult=if(e is HomeApiException) "Home DNS check failed (HTTP ${e.status}). Check the configured upstream on the server." else "Bungee could not complete the DNS path test: ${e.javaClass.simpleName}" }
-                                finally { busy=false }
-                            }
-                        }, modifier=Modifier.fillMaxWidth().padding(top=12.dp)) { Text("Test home DNS path") }
-                        if(dnsResult.isNotEmpty())Text(dnsResult,fontSize=11.sp,lineHeight=18.sp,modifier=Modifier.padding(top=8.dp))
-                        OutlinedButton(onClick = {
-                            runCatching { startActivity(Intent("android.settings.PRIVATE_DNS_SETTINGS")) }
-                                .onFailure { startActivity(Intent(android.provider.Settings.ACTION_WIRELESS_SETTINGS)) }
-                        }, modifier=Modifier.fillMaxWidth()) { Text("Android Private DNS settings") }
+                        Text(message, fontSize = 12.sp)
+                        TextButton(onClick = { unlock { startActivity(Intent(this@MainActivity, LocalRecoveryActivity::class.java)) } }) { Text("Open pairing & recovery") }
                     }
-                }
+                } }
                 Card(Modifier.fillMaxWidth().padding(top = 18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                     Column(Modifier.padding(18.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Outlined.PhotoCamera, null, Modifier.size(19.dp), tint = MaterialTheme.colorScheme.primary); Text("  Automatic theft photos", fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }

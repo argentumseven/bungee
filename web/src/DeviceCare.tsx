@@ -3,14 +3,12 @@ import {
   ShieldCheck,
   Radio,
   LockKeyhole,
-  Globe,
 } from "lucide-react";
 import { api } from "./api";
 import { RecoveryMessagePreview } from "./RecoveryMessagePreview";
 import { RecoveryPhotos } from "./RecoveryPhotos";
 
 type Policy = {
-  managed_dns: boolean;
   auto_resume: boolean;
   always_on: boolean;
   protect_settings: boolean;
@@ -22,12 +20,10 @@ type Policy = {
   recovery_message: string;
 };
 type Report = {
-  system_dns?:{available:boolean;servers:string[];private_dns_active:boolean;private_dns_name:string|null;captured_by_bungee:false}|null;
   owner: boolean;
   consent: boolean;
   recovery_consent: boolean;
   revision: number;
-  dns_active: boolean;
   always_on: boolean;
   uninstall_blocked: boolean;
   protection_active: boolean;
@@ -56,17 +52,14 @@ type Saved = {
   revision: number;
   policy: Policy;
   report: Report | null;
-  dns_configured: boolean;
-  dns_upstream: string | null;
   persistent_controls_enabled: false;
   legacy_policy_present: boolean;
 };
 const time = (n: number) => new Date(n * 1000).toLocaleString();
 export function DeviceCare({
-  device, onOpenDns,
+  device,
 }: {
   device: { id: string; name: string };
-  onOpenDns: () => void;
 }) {
   const [saved, setSaved] = useState<Saved | null>(null),
     [draft, setDraft] = useState<Policy | null>(null);
@@ -107,7 +100,6 @@ export function DeviceCare({
     try {
       const policy = {
         ...draft,
-        managed_dns: false,
         always_on: false,
         auto_resume: false,
         protect_settings: false,
@@ -191,7 +183,7 @@ export function DeviceCare({
               </details>
               <div className="notice">
                 Bungee uses removable device administration for screen locking
-                and failed-unlock reports. Device ownership, forced DNS, app
+                and failed-unlock reports. Device ownership, app
                 suspension and uninstall restrictions are unavailable. To stop
                 Bungee offline, open “Bungee recovery” on the phone.
               </div>
@@ -353,7 +345,6 @@ export function DeviceCare({
             </section>
           </div>
           <RecoveryPhotos key={device.id} deviceId={device.id} />
-          <section className="panel care-card"><h2><Globe size={18}/> DNS activity</h2><p>DNS traffic, home-resolver tests and reported DNS settings now have their own area.</p><button type="button" className="secondary" onClick={onOpenDns}>Open DNS for {device.name}</button></section>
         </>
       )}
     </div>

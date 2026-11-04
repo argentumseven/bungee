@@ -1,8 +1,6 @@
 mod api;
 mod app_updates;
 mod credentials;
-mod dns;
-mod dns_history;
 mod enrollment;
 mod export;
 mod geography;
@@ -11,7 +9,6 @@ mod history_import;
 mod management;
 mod maps;
 mod photos;
-mod private_dns;
 mod recurrence;
 mod release;
 mod security;
@@ -39,8 +36,6 @@ pub struct App {
     limiter: Arc<Mutex<security::RateLimits>>,
     state_dir: PathBuf,
     wg_endpoint: Option<String>,
-    dns: Option<dns::Config>,
-    private_dns: Option<private_dns::Config>,
     geography: Arc<geography::Geography>,
 }
 
@@ -113,7 +108,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
     }
-    let dns = dns::Config::from_env()?;
     let app = App {
         db: Arc::new(Mutex::new(db)),
         origin,
@@ -122,8 +116,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         limiter: Arc::new(Mutex::new(security::RateLimits::default())),
         state_dir: dir,
         wg_endpoint,
-        dns,
-        private_dns: private_dns::Config::from_env()?,
         geography: Arc::new(geography::Geography::load()?),
     };
     // Expire sessions across restarts, including snapshots of the development machine.
@@ -176,10 +168,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/devices/{id}/history",
             get(history::history).delete(api::clear_history),
         )
-        .route(
-            "/api/devices/{id}/private-dns",
-            get(private_dns::get).post(private_dns::save),
-        )
         .route("/api/devices/{id}/commands", post(api::command))
         .route(
             "/api/devices/{id}/commands/{command}",
@@ -206,11 +194,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/devices/{id}/policy",
             get(management::get_policy).post(management::save_policy),
         )
-        .route(
-            "/api/devices/{id}/dns",
-            get(dns::summary).delete(dns::erase),
-        )
-        .route("/api/dns", get(dns_history::summary))
         .route("/api/audit", get(api::audit))
         .fallback_service(
             ServeDir::new(&dist).not_found_service(ServeFile::new(format!("{dist}/index.html"))),
@@ -233,8 +216,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/v1/commands", post(api::poll))
         .route("/v1/command-check", post(api::check_command))
-        .route("/v1/dns-check", post(dns::check_path))
-        .route("/v1/private-dns", post(private_dns::sync))
         .route("/v1/ack", post(api::ack))
         .route("/v1/app-update", post(app_updates::check))
         .route("/v1/app-update/chunk", post(app_updates::chunk))
@@ -245,8 +226,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ))
         .layer(axum::extract::DefaultBodyLimit::max(32 * 1024))
         .with_state(app.clone());
-    private_dns::start(app.clone()).await?;
-    dns::start(app).await?;
 
     let device_listener = tokio::net::TcpListener::bind(device_bind).await?;
     tracing::info!(%admin_bind, %device_bind, "Bungee listening; admin and device APIs are separate");

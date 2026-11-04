@@ -16,13 +16,11 @@ Managed system DNS/always-on, selected-app suspension, uninstall prevention, for
 
 Scheduled airplane-mode cycling requires protected system networking authority that official app/MDM grants do not provide. A foreground service has the same limit. Bungee uses no shell bridge or root. See [the API analysis](AIRPLANE_MODE.md).
 
-## Connection and DNS
+## Connection
 
-The app-contained official WireGuard/gVisor transport carries only Bungee's home API and leaves Android's VPN slot free. By default Bungee changes no system routes/DNS. The optional [Private DNS controller](DNS.md) requires an ADB grant and separate local approval; it uses no VPN slot or device-owner policy. Other VPNs can route or filter its outer socket. Ordinary networking remains under the user's Android/VPN configuration.
+The app-contained WireGuard/gVisor transport carries only Bungee's home API and leaves Android's VPN slot free. Bungee changes no system routes or DNS. Other VPNs can route or filter its outer socket. Ordinary networking remains under Android and the user's network/VPN configuration.
 
-The server retains legacy DNS rollup/read/erase and forwarding code for prior-version compatibility/tests. New phones cannot enroll in managed DNS or enable it through the API. The same explicit home resolver can also serve the optional [public DoT relay](DNS.md); configuring an upstream alone does not enable phone-wide DNS. Existing summaries are five-minute registrable-site groups with folded 10-second activity windows, not app-attributed browsing history. No raw subdomain/answer/payload log is added. Any separately configured legacy private resolver controls its own logging/upstreams.
-
-<a id="existing-owner-from-an-older-preview"></a>
+DNS routing, logs and relay services were removed in 1.1.17. [Upgrade cleanup](DNS-REMOVAL.md) restores settings changed by the previous version without retaining any DNS control or relay functionality.
 
 ## Legacy device-owner enrollment
 

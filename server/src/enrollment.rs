@@ -241,7 +241,6 @@ pub async fn delete_archive(
         "network_history",
         "recovery_photos",
         "erased_photos",
-        "dns_summary",
         "device_policies",
     ] {
         tx.execute(&format!("DELETE FROM {table} WHERE device_id=?"), [&id])?;
@@ -482,8 +481,6 @@ mod tests {
             limiter: Arc::new(Mutex::new(RateLimits::default())),
             state_dir: directory.clone(),
             wg_endpoint: Some("203.0.113.10:47937".into()),
-            dns: None,
-            private_dns: None,
             geography: Arc::new(crate::geography::Geography::load().unwrap()),
         };
         for prepare in [

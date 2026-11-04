@@ -26,11 +26,9 @@ const denied = (name, ip, port, message) => assert.throws(
   () => connect(name, ip, port), e => e.status === 3 || e.status === 4, message,
 );
 const firewall = readFileSync('deploy/wireguard/entrypoint.sh', 'utf8').split('mkdir -p /private /peers')[0];
-let subnet, resolver;
-const install = (dns = true, privateDns = false) => docker(['exec', '-i',
-  '-e', 'BUNGEE_WG_PORT=47937', '-e', `BUNGEE_ADMIN_SUBNETS=${subnet}`,
-  '-e', `BUNGEE_DNS_UPSTREAM_IP=${dns ? resolver : ''}`,
-  '-e', 'BUNGEE_DNS_UPSTREAM_PORT=8053', '-e', `BUNGEE_PRIVATE_DNS_HOST=${privateDns?'dns.example.test':''}`, gateway, 'sh'], firewall);
+let subnet;
+const install = () => docker(['exec', '-i', '-e', 'BUNGEE_WG_PORT=47937',
+  '-e', `BUNGEE_ADMIN_SUBNETS=${subnet}`, gateway, 'sh'], firewall);
 async function until(check, message) {
   for (let n = 0; n < 80; n++) {
     try { if (check()) return; } catch {}
@@ -58,7 +56,6 @@ try {
     '--read-only', '--cap-drop', 'ALL', '--tmpfs', '/run', 'node:24-bookworm-slim', 'tail', '-f', '/dev/null']);
   docker(['run', '-d', '--rm', '--name', administrator, '--network', management,
     '--read-only', '--cap-drop', 'ALL', 'node:24-bookworm-slim', 'tail', '-f', '/dev/null']);
-  resolver = address(administrator, management);
   const managementIp = address(gateway, management);
 
   // Establish a connection before policy installation. A blanket conntrack
@@ -111,11 +108,10 @@ setInterval(()=>{if(!sent&&fs.existsSync('/run/send-after')){sent=true;s.write('
     '-e', 'BUNGEE_PUBLIC_ORIGIN=https://management.internal',
     '-e', 'BUNGEE_ADMIN_BIND=0.0.0.0:8443', '-e', 'BUNGEE_ADMIN_INTERFACE=eth0',
     '-e', `BUNGEE_ADMIN_SUBNETS=${subnet}`, '-e', 'BUNGEE_DEVICE_BIND=10.77.0.1:8081',
-    '-e', `BUNGEE_DNS_UPSTREAM_IP=${resolver}`, '-e', 'BUNGEE_DNS_UPSTREAM_PORT=8053',
     '-e', 'BUNGEE_TLS_CERT_FILE=/tls/current/server.crt', '-e', 'BUNGEE_TLS_KEY_FILE=/tls/current/server.key',
     '--entrypoint', 'sh', 'bungee-server:dev', '-ec', 'printf "%s\\n" "$1" > /state/admin-password.hash; exec /usr/local/bin/bungee-server', 'bootstrap', verifier]);
   await until(() => connect(phone, '10.77.0.1', 8081) === 'connected', 'Rust device API did not start');
-  assert.equal(connect(phone, '10.77.0.1', 5353), 'connected', 'Optional DNS stays available');
+  denied(phone, '10.77.0.1', 5353, 'Removed DNS listener is unavailable');
   assert.equal(connect(administrator, managementIp, 8443), 'connected', 'Internal administration remains reachable');
   denied(administrator, managementIp, 8081, 'Device API is not exposed on management eth0');
   denied(phone, '10.77.0.1', 8443, 'Rust administration is unreachable from wg0');
@@ -124,13 +120,7 @@ setInterval(()=>{if(!sent&&fs.existsSync('/run/send-after')){sent=true;s.write('
   docker(['exec','-d',gateway,'python3','-c',"import socketserver;socketserver.ThreadingTCPServer.allow_reuse_address=True;socketserver.ThreadingTCPServer(('0.0.0.0',8853),socketserver.BaseRequestHandler).serve_forever()"]);
   await until(()=>docker(['exec',gateway,'sh','-c',"ss -ltn | grep ':8853 '"]).includes('8853'),'DoT admission fixture did not start');
   denied(administrator,managementIp,8853,'Public DoT is closed by default');
-  install(true,true);
-  assert.equal(connect(administrator,managementIp,8853),'connected','Optional public TLS listener is admitted separately');
-  denied(phone,'10.77.0.1',8853,'Public TLS admission does not open general wg0 ingress');
-  denied(phone,managementIp,8443,'Public TLS does not expose the manager');
-  install(false);
-  denied(administrator,managementIp,8853,'Disabling public TLS closes fresh connections');
-  denied(phone, '10.77.0.1', 5353, 'DNS is blocked when the optional service is disabled');
+  denied(phone,'10.77.0.1',8853,'Removed TLS relay is blocked on phone ingress');
   assert.equal(connect(phone, '10.77.0.1', 8081), 'connected');
 
   // Deliberately relax INPUT in this isolated fixture: the real Rust TLS listener
@@ -142,7 +132,7 @@ setInterval(()=>{if(!sent&&fs.existsSync('/run/send-after')){sent=true;s.write('
   denied(phone, '10.77.0.1', 8443, 'Interface binding independently excludes wg0');
   denied(phone, managementIp, 8443, 'Interface binding survives a destination-address bypass attempt');
   assert.equal(docker(['exec', gateway, 'iptables', '-S', 'FORWARD']), '-P FORWARD DROP');
-  console.log('PASS: established and new wg0 administration blocked; C2 and optional DNS retained; internal HTTPS reachable; real non-root Rust interface binding survives relaxed INPUT. Synthetic veth ingress, not a WireGuard cryptographic test.');
+  console.log('PASS: established and new wg0 administration blocked; C2 retained; removed DNS services blocked; internal HTTPS reachable; real non-root Rust interface binding survives relaxed INPUT. Synthetic veth ingress, not a WireGuard cryptographic test.');
 } catch (error) {
   try { console.error(docker(['logs', server])); } catch {}
   throw error;

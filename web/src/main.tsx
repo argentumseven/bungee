@@ -11,7 +11,6 @@ import {
   Clipboard,
   Compass,
   Fingerprint,
-  Globe,
   Heart,
   House,
   KeyRound,
@@ -45,7 +44,6 @@ import {
 } from "./PrivateMap";
 import { DeviceRecords } from "./DeviceRecords";
 import { DeviceCare } from "./DeviceCare";
-import { DnsView } from "./DnsView";
 import { AppearanceControl, useAppearance } from "./Appearance";
 import { RecoveryMessagePreview } from "./RecoveryMessagePreview";
 import { PasswordSettings } from "./PasswordSettings";
@@ -138,7 +136,6 @@ function App() {
     [selected, setSelected] = useState(""),
     [page, setPage] = useState("Overview");
   const [devicesExpanded,setDevicesExpanded]=useState(true);
-  const [dnsDevice,setDnsDevice]=useState("");
   const [recordsDevice,setRecordsDevice]=useState("");
   const [pairingTarget,setPairingTarget]=useState<Device|null>(null);
   const [trackingTab,setTrackingTab]=useState("Current estimate");
@@ -191,7 +188,6 @@ function App() {
       setSelected("");
       setPage("Overview");
       setTrackingTab("Current estimate");
-      setDnsDevice("");
       setModal(null);
       setClearTarget(null);
       setBindingTarget(null);
@@ -308,7 +304,7 @@ function App() {
       await api(`/devices/${pairingTarget.id}`, { method: "DELETE" });
       setModal(null);
       setToast(
-        "Device revoked. Saved locations, photos, check-ins and DNS logs were erased; server access was removed.",
+        "Device revoked. Saved locations, photos and check-ins were erased; server access was removed.",
       );
       await load();
     } catch (e) {
@@ -443,7 +439,6 @@ function App() {
             { name: "Device care", icon: ShieldCheck },
             { name: "Pairing & history", icon: KeyRound },
             { name: "Tracking", icon: Compass },
-            { name: "DNS", icon: Globe },
             { name: "Tunnels", icon: Radio },
             { name: "Activity", icon: Activity },
             { name: "Settings", icon: Settings },
@@ -525,8 +520,6 @@ function App() {
                         ? "Manage phone connections, saved history and erasure in one place."
                       : page === "Tracking"
                         ? "Current estimates, movement history, network locations and recovery photos."
-                        : page === "DNS"
-                          ? "DNS activity, per-phone totals and the path to your home resolver."
                         : page === "Activity"
                           ? "Enrollment, administrator access and command events."
                           : "Connection, permissions and data retention."}
@@ -744,7 +737,6 @@ function App() {
               </div>
             </>
           )}
-          {page === "DNS" && <DnsView phones={devices} scope={dnsDevice} onScopeChange={setDnsDevice} commands={commands} onCommandQueued={load}/>}
           {page === "Tunnels" && <TunnelView devices={active}/>}
           {page === "Tracking" && (
             <>
@@ -786,7 +778,7 @@ function App() {
                 ))}
               </select>
               {device ? (
-                <DeviceCare key={device.id} device={device} onOpenDns={()=>{setDnsDevice(device.id);setPage("DNS");}} />
+                <DeviceCare key={device.id} device={device} />
               ) : (
                 <section className="panel history-panel">
                   Pair a phone to configure recovery and review its reported
@@ -832,7 +824,7 @@ function App() {
               onRemoveKeys={d=>{setBindingTarget(d);setModal("purge_binding");setError("");}}
               onReissue={d=>{setName(d.name);setWgKey(d.wg_public_key||"");setPreviousWgKey("");setBundle("");setModal("enroll");}}
               onViewHistory={d=>{setSelected(d.id);setTrackingTab("Current estimate");setPage("Tracking");}}
-              onDns={d=>{setDnsDevice(d.id);setPage("DNS");}}/>
+              />
             {purgedBinding&&<section className="panel records-next"><Check size={19}/><span>Inactive pairing removed for {purgedBinding.name}. Saved history was kept.</span><button className="secondary" onClick={()=>{setName(purgedBinding.name);setWgKey("");setPreviousWgKey(purgedBinding.wg_public_key||"");setBundle("");setModal("enroll");}}>Create another invitation</button></section>}
           </>}
           {page === "Settings" && (
@@ -862,7 +854,6 @@ function App() {
                   <li>Remote commands expire in 5 minutes</li>
                   <li>
                     No cloud push, external map/GeoIP lookups or network location.
-                    Optional Private DNS uses an operator-provided public certificate
                   </li>
                   <li>
                     Unique 256-bit WireGuard preshared key for each new phone
@@ -1038,7 +1029,7 @@ function App() {
                 </p>
               </>
             )}
-            {modal==="erase_archive"&&registrationTarget&&<><p>Permanently delete this phone record and all saved GPS, IP history, photos, check-ins and DNS logs for <strong>{registrationTarget.name}</strong>? This does not change the phone and cannot be undone from the manager.</p><button className="primary danger full" disabled={busy} onClick={async()=>{setBusy(true);setError("");try{await api(`/devices/${registrationTarget.id}/archive`,{method:"DELETE"});setModal(null);setRegistrationTarget(null);setRecordsDevice("");await load();setToast("Saved archive erased.")}catch(e){setError((e as Error).message)}finally{setBusy(false)}}}>Delete phone record & history</button></>}
+            {modal==="erase_archive"&&registrationTarget&&<><p>Permanently delete this phone record and all saved GPS, IP history, photos and check-ins for <strong>{registrationTarget.name}</strong>? This does not change the phone and cannot be undone from the manager.</p><button className="primary danger full" disabled={busy} onClick={async()=>{setBusy(true);setError("");try{await api(`/devices/${registrationTarget.id}/archive`,{method:"DELETE"});setModal(null);setRegistrationTarget(null);setRecordsDevice("");await load();setToast("Saved archive erased.")}catch(e){setError((e as Error).message)}finally{setBusy(false)}}}>Delete phone record & history</button></>}
             {modal==="reconnect"&&registrationTarget&&<form onSubmit={async e=>{
               e.preventDefault();setBusy(true);setError("");
               try{const result=await api(`/devices/${registrationTarget.id}/reconnect`,{method:"POST",body:JSON.stringify({wg_public_key:wgKey})});setBundle(JSON.stringify(result));setName(registrationTarget.name);setModal("enroll");await load();setToast("New invitation ready. The same device’s GPS and saved history were kept.");}catch(e){setError((e as Error).message);}finally{setBusy(false);}
@@ -1087,7 +1078,7 @@ function App() {
                 </p>
                 <p>
                   To stop future location updates, turn off location sharing on
-                  the phone. DNS history is erased separately in the DNS area.
+                  the phone.
                 </p>
                 <button
                   className="primary danger full"
@@ -1099,16 +1090,16 @@ function App() {
               </>
             )}
             {modal === "disconnect" && pairingTarget && <>
-              <p>Disconnect <strong>{pairingTarget.name}</strong>? This removes its current server access and pending commands. Saved GPS, photos, check-ins and DNS history stay available. Reconnecting needs a fresh invitation.</p>
-              <p>Restore household DNS on the phone first if it is enabled. This action does not uninstall the phone app.</p>
+              <p>Disconnect <strong>{pairingTarget.name}</strong>? This removes its current server access and pending commands. Saved GPS, photos and check-ins stay available. Reconnecting needs a fresh invitation.</p>
+              <p>This action does not uninstall the phone app.</p>
               <div className="record-confirm-actions"><button className="secondary" disabled={busy} onClick={()=>setModal(null)}>Cancel</button><button className="primary" disabled={busy} onClick={async()=>{
                 setBusy(true);setError("");try{await api(`/devices/${pairingTarget.id}/disconnect`,{method:"POST",body:"{}"});setModal(null);setToast("Phone disconnected. Saved GPS and history were kept.");await load();}catch(e){setError((e as Error).message);}finally{setBusy(false)}
               }}>Disconnect · keep history</button></div>
             </>}
             {modal === "revoke" && pairingTarget && <>
               <p>Permanently erase saved data for <strong>{pairingTarget.name}</strong> and revoke its server access?</p>
-              <ul className="record-delete-list"><li>GPS history and last-known location</li><li>IP observations and check-ins</li><li>Recovery photos and DNS logs</li><li>Pending commands and current connection access</li></ul>
-              <p>This cannot be undone from the manager. The phone app and Android permissions are unchanged. Restore household DNS on the phone before removing its setup.</p>
+              <ul className="record-delete-list"><li>GPS history and last-known location</li><li>IP observations and check-ins</li><li>Recovery photos</li><li>Pending commands and current connection access</li></ul>
+              <p>This cannot be undone from the manager. The phone app and Android permissions are unchanged.</p>
               <div className="record-confirm-actions"><button className="secondary" disabled={busy} onClick={()=>setModal(null)}>Cancel</button><button className="primary danger" disabled={busy} onClick={revoke}>Revoke &amp; erase data</button></div>
             </>}
             {modal === "purge_binding" && bindingTarget && <>

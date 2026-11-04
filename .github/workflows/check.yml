@@ -251,7 +251,7 @@ jobs:
           cat > release-notes.md <<'NOTES'
           Install **bungee.apk** on a consenting Android 12+ device. Verify the accompanying SHA-256 checksum. The build supports ARM64 and x86_64.
 
-          Bungee provides retained GPS/check-in/IP history, recurring time lookups and CSV; an encrypted offline GPS queue; household-approved recovery commands; local OpenStreetMap/GeoIP datasets; and an app-contained WireGuard connection that leaves Android's VPN slot free. Runtime map, analytics, DNS and push-provider fallbacks are absent; an optional explicit DNS upstream can be selected.
+          Bungee provides retained GPS/check-in/IP history, recurring time lookups and CSV; an encrypted offline GPS queue; household-approved recovery commands; local OpenStreetMap/GeoIP datasets; and an app-contained WireGuard connection that leaves Android's VPN slot free. Runtime map, analytics, DNS and push-provider fallbacks are absent. DNS routing, relay services and logs were removed in 1.1.17.
 
           Update the server before the APK. GPS erasure rotates a server generation so earlier queued/in-flight fixes cannot restore erased points. Consent withdrawal invalidates prepared work and cancels active captures/requests; bytes already delivered home cannot be recalled. Locate requires current consent, a server expiry check and an exact stored-fix acknowledgment.
 

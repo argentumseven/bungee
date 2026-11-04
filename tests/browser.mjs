@@ -43,8 +43,6 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       BUNGEE_PUBLIC_ORIGIN: origin,
       BUNGEE_WG_ENDPOINT: "203.0.113.10:47937",
       BUNGEE_WEB_DIR: resolve("web/dist"),
-      BUNGEE_DNS_UPSTREAM_IP: "127.0.0.1",
-      BUNGEE_DNS_BIND: `127.0.0.1:${await freePort()}`,
     },
     stdio: "ignore",
   });
@@ -329,70 +327,6 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
         last_failed_at: Number(time) - 90,
       },
     });
-    // Only this isolated screenshot fixture contains synthetic DNS rollups.
-    execFileSync(
-      "python3",
-      [
-        "-c",
-        "import sqlite3,sys,json; c=sqlite3.connect(sys.argv[1]); c.executemany('INSERT INTO dns_summary(device_id,bucket,domain,queries,activities,last_window,first_at,last_at,answers,nxdomain,errors,a,aaaa,https,other) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',json.load(sys.stdin)); c.commit()",
-        join(dir, "bungee.sqlite3"),
-      ],
-      {
-        input: JSON.stringify([
-          [
-            bundle.device_id,
-            Math.floor(Number(time) / 300) * 300,
-            "example.org",
-            46,
-            5,
-            Number(time),
-            Number(time) - 240,
-            Number(time),
-            46,
-            0,
-            0,
-            18,
-            18,
-            10,
-            0,
-          ],
-          [
-            bundle.device_id,
-            Math.floor(Number(time) / 300) * 300,
-            "[system DNS checks]",
-            128,
-            4,
-            Number(time),
-            Number(time) - 240,
-            Number(time) - 15,
-            128,
-            0,
-            0,
-            64,
-            64,
-            0,
-            0,
-          ],
-          [
-            bundle.device_id,
-            Math.floor(Number(time) / 300) * 300,
-            "wikipedia.org",
-            14,
-            2,
-            Number(time),
-            Number(time) - 180,
-            Number(time) - 45,
-            14,
-            0,
-            0,
-            6,
-            6,
-            2,
-            0,
-          ],
-        ]),
-      },
-    );
     await page.getByRole("button", { name: "Close dialog" }).click();
     await page.locator(".nav-phones").getByRole("button", { name: "Browser test phone", exact:true }).waitFor();
   });
@@ -450,9 +384,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
         .getByRole("heading", { name: "Recovery & management", exact: true })
         .waitFor();
       assert.equal(await page.locator(".dns-panel").count(),0);
-      await page.getByRole("button",{name:"DNS",exact:true}).click();
-      await page.getByRole("cell",{name:"example.org",exact:false}).waitFor();
-      await page.getByRole("button",{name:"Device care",exact:true}).click();
+      assert.equal(await page.getByRole("button",{name:"DNS",exact:true}).count(),0);
       await page
         .getByRole("heading", { name: "Delivery & offline queue" })
         .waitFor();
@@ -489,7 +421,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
           revision: 0,
         },
       });
-      assert.equal(desired.policy.managed_dns, false);
+      assert.equal("managed_dns" in desired.policy, false);
       assert.deepEqual(desired.policy.blocked_apps, []);
       await phoneRequest("/v1/sync", {
         report: {

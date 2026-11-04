@@ -12,7 +12,7 @@ class BungeeApplication : Application() {
         super.onCreate()
         // No device-owner or always-on activation. Local recovery initializes no pairing keys.
         RecoveryStartup.clearStartupReminders(this)
-        runCatching { PrivateDns.interrupted(this) }
+        runCatching { LegacyDnsRecovery.restore(this) }
         ArmedCameraService.refreshReadiness(this)
     }
 }
@@ -27,7 +27,6 @@ object RecoveryStartup {
     fun startIfApproved(context: Context) {
         runCatching {
             if (LocalSafety.isStopped(context) || ManagementAgent.blocksPersonalOperation(context)) return
-            if (PrivateDns.state(context).consent) PrivateDnsService.start(context)
             if (!LocalSafety.isConnectionRestartAllowed(context)) return
             val identity = Identity(context)
             if (identity.enrolled) {

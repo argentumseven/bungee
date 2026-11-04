@@ -10,7 +10,7 @@ Bungee is a self-hosted device finder for Android 12+ and GrapheneOS. Pair house
 
 The Kotlin app connects through an app-contained WireGuard tunnel to a Rust server and web dashboard. Only Bungee traffic uses that tunnel; Android's VPN slot remains available. Phone records stay on your server until you erase them or revoke the device.
 
-**Version 1.1.16.** Physical GrapheneOS testing and an independent security audit are pending. See the [validation record](docs/VALIDATION.md) for completed checks and [security design](docs/SECURITY.md) for the trust model.
+**Version 1.1.17.** Physical GrapheneOS testing and an independent security audit are pending. See the [validation record](docs/VALIDATION.md) for completed checks and [security design](docs/SECURITY.md) for the trust model.
 
 ![Bungee dashboard in dark mode](docs/screenshots/dashboard.png)
 
@@ -42,13 +42,12 @@ The Kotlin app connects through an app-contained WireGuard tunnel to a Rust serv
 | Appearance | System/Light/Dark themes on web and Android, saved local choices, slate/charcoal/teal palettes and pink home/location icon |
 | VPN coexistence | Userspace WireGuard/TCP carries the fixed home API without OS routes, root or VpnService. Other VPNs can route or filter the outer UDP socket |
 | Device status | Desired/applied policy revision and errors, Android/security-patch version, screen-lock state, eligible failed-credential counts, lost mode and dated queue/camera reports |
-| Household DNS | Dedicated all-phone/per-phone workspace; separate traffic and path tests; optional ADB-approved Private DNS relay with per-phone off, restoration, removal and failure fallback. Requires a public DoT hostname/certificate; Android’s VPN slot stays unused |
 | Recovery safeguards | Server/client reject persistent policy fields and remote reboot; device/profile ownership blocks operation; owner provisioning disabled; no app suspension, uninstall blocks, forced credentials, kiosk or recovery-settings restrictions |
 | Pairing | Phone-generated identity, one-use ten-minute invitation bound to its public key, safe unpaired-invitation reissue, P-256 proof/signatures, replay protection and unique random 256-bit WireGuard PSK |
 | Network setup | Operator-chosen numeric endpoint and UDP port; 51820 rejected; only `10.77.0.1/32` routed inside Bungee; no default internet route |
 | Administrator access | Argon2id password verification, bounded login work, HttpOnly/SameSite sessions, exact-origin mutation checks, separate admin/device listeners and rate budgets, source-prefix restrictions, security audit events and same-origin CSP |
-| Retention and erasure | GPS/IP/check-in/photo/DNS records retained until erased/revoked; separate location/history/photo/DNS erasure; transactional GPS/photo generations reject erased backlog; revocation deletes device data and tunnel access |
-| Containers | Non-root Rust service, zero capabilities and read-only root; isolated WireGuard gateway; host-only local CA; direct Rust HTTPS; TLS 1.3 X25519MLKEM768; runtime egress denied except an explicitly selected LAN/home or public DNS resolver |
+| Retention and erasure | GPS/IP/check-in/photo records retained until erased/revoked; separate location/history/photo erasure; transactional GPS/photo generations reject erased backlog; revocation deletes device data and tunnel access |
+| Containers | Non-root Rust service, zero capabilities and read-only root; isolated WireGuard gateway; host-only local CA; direct Rust HTTPS; TLS 1.3 X25519MLKEM768; new runtime application egress denied |
 | Installation | Prompted WireGuard/web ports, endpoint/bind address and mandatory administrator hosts/prefixes; bare hosts become /32 or /128; no-write plan, exact HTTPS URL and CA fingerprint; existing installations refused |
 | Server updates | Host systemd timer with Compose image replacement, immutable two-image bundles, staged downloads, admission closed during trials, coherent encrypted cold snapshots, failed-trial recovery and three retained snapshots |
 | Builds | ARM64/x86_64 APK, coordinated `release.json`, CI checks and checksums, operator-owned stable signing option, source and synthetic test fixtures |
@@ -64,7 +63,7 @@ bash scripts/install.sh --plan   # validate answers without writes or network ca
 sudo bash scripts/install.sh    # configure and start the stack
 ```
 
-Server administration uses only your internal management network. Publish HTTPS on that host address and allow only its source prefixes. Phone `wg0` carries C2 and optional legacy DNS; it cannot reach the dashboard, administrator API or host management. A VPS needs a separate private management route.
+Server administration uses only your internal management network. Publish HTTPS on that host address and allow only its source prefixes. Phone `wg0` carries C2 only; it cannot reach the dashboard, administrator API or host management. A VPS needs a separate private management route.
 
 The wizard asks for ports and mandatory administrator source hosts/prefixes. It configures source restrictions in both the gateway firewall and Rust HTTPS. Verify the printed local-CA fingerprint and trust the public root certificate on administrator devices before signing in. Keep persistent data and backups on encrypted storage.
 
@@ -110,7 +109,7 @@ For restoration after reboot or an app update, separately enable **Automatic rec
 
 **Stop all Bungee actions** stops an already playing siren and blinking flashlight, restores alarm volume, cancels remote work and older queued commands, clears the recovery notification, and turns off lost mode/haste. The phone must be reachable; a separate stop check runs while actions are active. Ordinary sharing and pairing stay intact. **Lock device** uses Android's standard screen lock: it does not change the credential or wipe anything. A stop can cancel a lock before it executes but cannot unlock Android afterward; unlock normally on the phone.
 
-Browser DNS does **not** enter Bungee's app-only tunnel. The optional [household Private DNS relay](docs/DNS.md) connects Android's resolver to Bungee and then the home resolver, without using the VPN slot. It requires a reachable public DoT hostname, trusted wildcard certificate, and one-time ADB grant plus local approval. **DNS** provides household/per-phone breakdowns, on/off, fallback and removal; path tests remain separate. It stays off without setup, and apps using their own DoH can bypass it.
+Bungee does not configure, relay or log phone DNS. DNS functionality was removed in 1.1.17. See [upgrade cleanup](docs/DNS-REMOVAL.md) if you enabled it in an earlier version.
 
 **Pairing & recovery** is a visible button inside the normal phone app, including its lock screen. There is one launcher icon; the recovery panel works offline even when pairing keys cannot be opened. Stop preserves pairing and server history; reset pairing separately clears Bungee's local connection and queued records. Phone keys are kept unless you explicitly select fresh keys for a damaged identity. Android management repair is a separate confirmed action and never wipes a phone or removes a profile. Resume sharing in the main app; clearing a stop restores no camera/restart consent.
 
@@ -128,7 +127,7 @@ See the [removal audit](docs/REMOVAL_AUDIT.md) for ownership, partial-pairing, u
 
 The latest check-in, last authenticated contact and last GPS observation have separate timestamps. A fresh battery report does not make an old location current. Server history has no automatic expiry or size-based eviction; monitor disk capacity and back up coherently.
 
-**Settings → Erase saved history** removes GPS, IP/GeoIP, photos, check-ins and the last-known location while preserving pairing. Separate photo/DNS and GPS-only erasure are also available. Erasure rotates generations so old queued or in-flight data cannot restore erased GPS/photos. On reconciliation, the phone discards the entire old-generation queue, including observations made before it learned of the erase. New observations can arrive while sharing remains enabled. Deletion does not scrub filesystem blocks or existing backups.
+**Settings → Erase saved history** removes GPS, IP/GeoIP, photos, check-ins and the last-known location while preserving pairing. Separate photo and GPS-only erasure are also available. Erasure rotates generations so old queued or in-flight data cannot restore erased GPS/photos. On reconciliation, the phone discards the entire old-generation queue, including observations made before it learned of the erase. New observations can arrive while sharing remains enabled. Deletion does not scrub filesystem blocks or existing backups.
 
 Turning off GPS cancels pending work and clears unsent GPS. Stopping sharing preserves the encrypted GPS backlog, disarms the camera and attempts unsent-photo cleanup. Neither removes records already saved on the server. Bytes already sent cannot be recalled.
 
@@ -174,7 +173,7 @@ See the [platform matrix](docs/PLATFORM.md), [management guide](docs/MANAGEMENT.
 
 AGPL-3.0-only. See [LICENSE](LICENSE).
 
-Server deployment now uses direct Rust HTTPS, LUKS2 persistent storage with host-key unattended unlock, and age-encrypted cold backups. Optional DNS forwards only to an explicit numeric LAN/home or public resolver over UDP/TCP; general phone forwarding stays disabled. See [installation](docs/INSTALL.md), [VPS routing](docs/DEPLOYMENT.md), and [1.1.4 migration](docs/MIGRATION-1.1.4.md).
+Server deployment now uses direct Rust HTTPS, LUKS2 persistent storage with host-key unattended unlock, and age-encrypted cold backups. General phone forwarding and new runtime application egress stay disabled. See [installation](docs/INSTALL.md), [VPS routing](docs/DEPLOYMENT.md), and [1.1.4 migration](docs/MIGRATION-1.1.4.md).
 
 ## Regional maps
 

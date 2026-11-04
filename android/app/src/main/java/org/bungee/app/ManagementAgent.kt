@@ -62,7 +62,7 @@ object ManagementAgent {
             .put("camera", cameraReport).put("connection_health", ConnectionHealth.report(context))
             .put("delivery", identity.backlogReport().put("reported_at", System.currentTimeMillis()/1000).put("gps_access", TelemetryService.status.value.gpsAccess))
             .put("recovery_consent", identity.allowCommands && !LocalSafety.isStopped(context)).put("revision", state.optLong("revision", 0))
-            .put("dns_active", false).put("system_dns",DnsPathStatus.report(context)).put("always_on", role == ManagementRole.DEVICE_OWNER && runCatching { dpm.getAlwaysOnVpnPackage(admin(context)) == context.packageName }.getOrDefault(false))
+            .put("always_on", role == ManagementRole.DEVICE_OWNER && runCatching { dpm.getAlwaysOnVpnPackage(admin(context)) == context.packageName }.getOrDefault(false))
             .put("uninstall_blocked", role == ManagementRole.DEVICE_OWNER && runCatching { dpm.isUninstallBlocked(admin(context), context.packageName) }.getOrDefault(false))
             .put("protection_active", false).put("strong_lock_required", false).put("blocked_apps", JSONArray())
             .put("lost_mode_active", state.optBoolean("lost_mode_active") && identity.allowCommands)

@@ -40,21 +40,17 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
         device_owner INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS state_history_device_time ON state_history(device_id,received_at,id);")?;
     tx.execute_batch("CREATE TABLE IF NOT EXISTS device_policies(
-        device_id TEXT PRIMARY KEY REFERENCES devices(id), revision INTEGER NOT NULL, policy TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS dns_summary(
-        device_id TEXT NOT NULL REFERENCES devices(id), bucket INTEGER NOT NULL, domain TEXT NOT NULL,
-        queries INTEGER NOT NULL, activities INTEGER NOT NULL, last_window INTEGER NOT NULL,
-        first_at INTEGER NOT NULL,last_at INTEGER NOT NULL, answers INTEGER NOT NULL,nxdomain INTEGER NOT NULL,
-        errors INTEGER NOT NULL,a INTEGER NOT NULL,aaaa INTEGER NOT NULL,https INTEGER NOT NULL,other INTEGER NOT NULL,
-        PRIMARY KEY(device_id,bucket,domain));
-      CREATE INDEX IF NOT EXISTS dns_summary_bucket_device ON dns_summary(bucket,device_id);
-      CREATE TABLE IF NOT EXISTS dns_profiles(device_id TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE, revision INTEGER NOT NULL, enabled INTEGER NOT NULL, fallback INTEGER NOT NULL, removed INTEGER NOT NULL, hostname TEXT NOT NULL, report TEXT);
-      CREATE UNIQUE INDEX IF NOT EXISTS dns_profiles_hostname ON dns_profiles(hostname) WHERE hostname<>'';")?;
+        device_id TEXT PRIMARY KEY REFERENCES devices(id), revision INTEGER NOT NULL, policy TEXT NOT NULL);")?;
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS network_history(
         device_id TEXT NOT NULL REFERENCES devices(id), observed_at INTEGER NOT NULL,
         received_at INTEGER NOT NULL, ip TEXT NOT NULL, geoip TEXT,
         PRIMARY KEY(device_id,observed_at));",
+    )?;
+    // Retire only the removed feature's tables and queued diagnostics on upgrade.
+    tx.execute_batch(
+        "DROP TABLE IF EXISTS dns_summary; DROP TABLE IF EXISTS dns_profiles;
+        DELETE FROM commands WHERE kind='dns_check';",
     )?;
     let command_columns = tx
         .prepare("PRAGMA table_info(commands)")?
@@ -192,6 +188,8 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
     // Repair only a missing cache from retained history. Explicit GPS erasure
     // deletes those rows, so this cannot resurrect an erased fix.
     tx.execute("UPDATE devices SET last_location=(SELECT json_object('latitude',latitude,'longitude',longitude,'accuracy',accuracy,'observed_at',observed_at,'source',source,'samples',samples,'system_vpn',json(CASE WHEN system_vpn IS NULL THEN 'null' WHEN system_vpn=1 THEN 'true' ELSE 'false' END),'imported_at',imported_at) FROM location_history WHERE device_id=devices.id ORDER BY observed_at DESC LIMIT 1) WHERE last_location IS NULL",[])?;
+    tx.execute_batch("UPDATE devices SET management_report=json_remove(management_report,'$.system_dns','$.dns_active')
+        WHERE json_valid(management_report);")?;
     tx.commit()
 }
 

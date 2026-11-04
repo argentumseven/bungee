@@ -12,7 +12,8 @@ use serde_json::{Value, json};
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Policy {
-    pub managed_dns: bool,
+    #[serde(skip_serializing)]
+    pub managed_dns: bool, // Legacy policy rejection only; never applied.
     pub auto_resume: bool,
     pub always_on: bool,
     pub protect_settings: bool,
@@ -68,14 +69,16 @@ pub fn safe_package(p: &str) -> bool {
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Report {
-    pub system_dns: Option<SystemDns>,
+    #[serde(skip_serializing)]
+    pub system_dns: Option<serde::de::IgnoredAny>, // Discard reports from older phones.
     pub camera: Option<CameraReport>,
     pub connection_health: Option<ConnectionHealth>,
     pub owner: bool,
     pub consent: bool,
     pub recovery_consent: bool,
     pub revision: i64,
-    pub dns_active: bool,
+    #[serde(skip_serializing)]
+    pub dns_active: Option<serde::de::IgnoredAny>,
     pub always_on: bool,
     pub uninstall_blocked: bool,
     pub protection_active: bool,
@@ -91,29 +94,6 @@ pub struct Report {
     pub failed_unlocks: u32,
     pub last_failed_at: Option<i64>,
     pub delivery: Option<DeliveryReport>,
-}
-#[derive(Default, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct SystemDns {
-    pub available: bool,
-    pub servers: Vec<String>,
-    pub private_dns_active: bool,
-    pub private_dns_name: Option<String>,
-    pub captured_by_bungee: bool,
-}
-impl SystemDns {
-    fn valid(&self) -> bool {
-        !self.captured_by_bungee
-            && self.servers.len() <= 4
-            && self
-                .servers
-                .iter()
-                .all(|value| value.len() <= 80 && !value.chars().any(char::is_control))
-            && self
-                .private_dns_name
-                .as_ref()
-                .is_none_or(|value| value.len() <= 253 && !value.chars().any(char::is_control))
-    }
 }
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -227,7 +207,7 @@ pub async fn get_policy(
     let report = report.ok_or(Error(StatusCode::NOT_FOUND, "Device not found"))?;
     let (revision, policy) = read(&db, &id)?;
     Ok(Json(
-        json!({"server_version":crate::release::version(),"app_update_preparation":crate::app_updates::preparation(),"app_update":crate::app_updates::descriptor(),"revision":revision,"policy":policy.reversible(),"persistent_controls_enabled":false,"legacy_policy_present":policy.has_persistent_controls(),"report":report.and_then(|s|serde_json::from_str::<Value>(&s).ok()),"dns_configured":app.dns.is_some(),"dns_upstream":app.dns.as_ref().map(|d|d.upstream.to_string())}),
+        json!({"server_version":crate::release::version(),"app_update_preparation":crate::app_updates::preparation(),"app_update":crate::app_updates::descriptor(),"revision":revision,"policy":policy.reversible(),"persistent_controls_enabled":false,"legacy_policy_present":policy.has_persistent_controls(),"report":report.and_then(|s|serde_json::from_str::<Report>(&s).ok())}),
     ))
 }
 #[derive(Deserialize)]
@@ -311,7 +291,6 @@ pub async fn sync(
             || c.reported_at > now() + 120
     }) || r.delivery.as_ref().is_some_and(|d| !d.valid())
         || r.connection_health.as_ref().is_some_and(|c| !c.valid())
-        || r.system_dns.as_ref().is_some_and(|value| !value.valid())
         || r.revision < 0
         || r.errors.len() > 20
         || r.errors.iter().any(|e| e.len() > 160)
@@ -341,26 +320,9 @@ pub async fn sync(
         |r| r.get(0),
     )?;
     Ok(Json(
-        json!({"server_version":crate::release::version(),"app_update_preparation":crate::app_updates::preparation(),"app_update":crate::app_updates::descriptor(),"revision":revision,"policy":policy.reversible(),"gps_epoch":epoch,"photo_epoch":db.query_row("SELECT photo_epoch FROM devices WHERE id=?",[&id],|r|r.get::<_,String>(0))?,"server_time":now(),"dns_available":false,"persistent_controls_enabled":false}),
+        json!({"server_version":crate::release::version(),"app_update_preparation":crate::app_updates::preparation(),"app_update":crate::app_updates::descriptor(),"revision":revision,"policy":policy.reversible(),"gps_epoch":epoch,"photo_epoch":db.query_row("SELECT photo_epoch FROM devices WHERE id=?",[&id],|r|r.get::<_,String>(0))?,"server_time":now(),"persistent_controls_enabled":false}),
     ))
 }
-pub fn dns_peer(db: &rusqlite::Connection, address: &str) -> ApiResult<Option<String>> {
-    let row:Option<(String,Option<String>)>=db.query_row("SELECT id,management_report FROM devices WHERE address=? AND revoked=0 AND public_key IS NOT NULL AND wg_psk IS NOT NULL",[address],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
-    let Some((id, Some(report))) = row else {
-        return Ok(None);
-    };
-    let report: Report =
-        serde_json::from_str(&report).map_err(|_| bad("Invalid management state"))?;
-    let (revision, policy) = read(db, &id)?;
-    Ok((policy.managed_dns
-        && report.owner
-        && report.consent
-        && report.dns_active
-        && report.always_on
-        && report.revision == revision)
-        .then_some(id))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

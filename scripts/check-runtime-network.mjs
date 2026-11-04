@@ -95,7 +95,7 @@ try {
     "Docker provider DNS is dropped",
   );
   assert.throws(()=>udpProbe(upstreamIp), 'new outbound UDP is dropped');
-  // Enable exactly one operator-selected resolver destination/port. No fallback.
+  // Retired configuration must not reopen any outbound resolver path.
   docker(
     [
       "exec",
@@ -113,8 +113,8 @@ try {
     ],
     firewall,
   );
-  assert.match(probe(upstreamIp), /200 OK/);
-  assert.equal(udpProbe(upstreamIp),'udp-ok');
+  assert.throws(()=>probe(upstreamIp), e=>e.status===124, 'retired resolver TCP remains blocked');
+  assert.throws(()=>udpProbe(upstreamIp), 'retired resolver UDP remains blocked');
   assert.throws(()=>udpProbe(upstreamIp,8089), 'another UDP resolver port stays blocked');
   assert.throws(
     () =>
@@ -155,12 +155,10 @@ try {
     "-S",
     "PREROUTING",
   ]);
-  assert.match(nat, /-i wg0 -p udp .*--dport 53 -j REDIRECT --to-ports 5353/);
-  assert.match(nat, /-i wg0 -p tcp .*--dport 53 -j REDIRECT --to-ports 5353/);
+  assert.doesNotMatch(nat, /REDIRECT/);
   const rules = docker(['exec', gateway, 'iptables', '-S', 'OUTPUT']);
-  assert.ok(rules.includes(`-d ${upstreamIp}/32 -p udp`) && rules.includes('--dport 8088 -j ACCEPT'));
-  assert.ok(rules.includes(`-d ${upstreamIp}/32 -p tcp`));
-  console.log('PASS: default outbound deny; only configured UDP/TCP resolver destination and port; forwarding disabled; Docker DNS remains blocked.');
+  assert.ok(!rules.includes(upstreamIp));
+  console.log('PASS: new outbound TCP/UDP and Docker DNS blocked, including retired resolver settings; no DNS redirects; forwarding disabled.');
 } catch (e) {
   try { process.stderr.write(docker(['logs',gateway])+'\n'); } catch {}
   throw e;
