@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import subprocess
 
@@ -13,8 +14,43 @@ REPOSITORY = 'argentumseven/bungee'
 SECRET_NAMES = {'BUNGEE_RELEASE_KEYSTORE_BASE64', 'BUNGEE_RELEASE_STORE_PASSWORD'}
 
 
-def command(args, *, data=None):
-    return subprocess.check_output([str(v) for v in args], input=data, stderr=subprocess.PIPE)
+class SetupError(RuntimeError):
+    """An actionable failure that is safe to display without subprocess output."""
+
+
+def command(args, *, step, data=None):
+    try:
+        return subprocess.check_output([str(v) for v in args], input=data, stderr=subprocess.PIPE)
+    except FileNotFoundError:
+        package = 'gh' if args[0] == 'gh' else 'default-jre-headless'
+        raise SetupError(f'{step}: {args[0]} was not found. On Debian run apt-get install -y {package}.') from None
+    except subprocess.CalledProcessError as error:
+        # Classify errors internally. Never echo stderr, stdout, stdin or argv:
+        # any of them could contain credentials, key material or a local path.
+        detail = (error.stderr or b'').decode('utf-8', errors='replace').lower()
+        if args[0] == 'gh':
+            permission = 'Secrets' if args[1] == 'secret' else 'Variables'
+            match = re.search(r'\bhttp\s+(\d{3})\b', detail)
+            status = int(match[1]) if match else None
+            if status == 401 or any(value in detail for value in ('bad credentials', 'gh auth login', 'not logged', 'requires authentication')):
+                reason = 'GitHub authentication failed. Authenticate gh with a token for argentumseven/bungee.'
+            elif 'rate limit' in detail:
+                reason = 'GitHub rate limit reached. Retry after the limit resets.'
+            elif status in (403, 404):
+                reason = (f'GitHub denied this operation (HTTP {status}). Select argentumseven/bungee in the token and grant '
+                          f'the repository {permission} permission: Read and write.')
+            elif any(value in detail for value in ('unknown command', 'unknown flag', 'unknown json field')):
+                reason = 'This GitHub CLI version does not support the command. Update gh and retry.'
+            elif any(value in detail for value in ('dial tcp', 'timeout', 'x509', 'tls', 'could not resolve', 'no such host')):
+                reason = 'Could not reach GitHub. Check this host\'s DNS, HTTPS connectivity and certificate trust.'
+            else:
+                reason = f'GitHub CLI failed with exit code {error.returncode}.'
+            overridden = next((name for name in ('GH_TOKEN', 'GITHUB_TOKEN') if os.environ.get(name)), None)
+            if overridden:
+                reason += f' gh is using {overridden} from the environment instead of its saved login.'
+        else:
+            reason = f'Java keytool failed with exit code {error.returncode}. Check Java, the keystore alias and its saved password.'
+        raise SetupError(f'{step}: {reason} Subprocess output was withheld; existing signing files were preserved.') from None
 
 
 def configure(directory, alias='bungee'):
@@ -23,10 +59,13 @@ def configure(directory, alias='bungee'):
     checkout = Path(__file__).resolve().parents[1]
     if (checkout / ".git").exists() and (directory == checkout or checkout in directory.parents):
         raise ValueError('Keep the release signing directory outside the repository')
-    current = json.loads(command(['gh', 'secret', 'list', '--repo', REPOSITORY, '--json', 'name']))
+    command(['keytool', '-help'], step='Check Java keytool')
+    current = json.loads(command(['gh', 'secret', 'list', '--repo', REPOSITORY, '--json', 'name'], step='Read repository signing secrets'))
     names = {item['name'] for item in current}
-    pin_result = subprocess.run(['gh', 'variable', 'get', 'BUNGEE_RELEASE_SIGNER_SHA256', '--repo', REPOSITORY], capture_output=True, check=False)
-    pin = pin_result.stdout.decode().strip() if pin_result.returncode == 0 else None
+    variables = json.loads(command(['gh', 'variable', 'list', '--repo', REPOSITORY, '--json', 'name,value'], step='Read repository certificate pin'))
+    pin = next((item['value'] for item in variables if item['name'] == 'BUNGEE_RELEASE_SIGNER_SHA256'), None)
+    if pin is not None and not re.fullmatch('[a-f0-9]{64}', pin):
+        raise ValueError('The repository certificate pin is empty or invalid. Restore its established value before retrying')
     key = directory / 'bungee.p12'; password = directory / 'password'
     if names & SECRET_NAMES and (not pin or not key.is_file() or not password.is_file()):
         raise ValueError('Release signing is already configured. Restore its original local keystore, password and certificate pin; refusing to replace it')
@@ -43,10 +82,10 @@ def configure(directory, alias='bungee'):
         command(['keytool', '-genkeypair', '-keystore', pending, '-storetype', 'PKCS12',
                  '-storepass:file', password, '-keypass:file', password, '-alias', alias,
                  '-keyalg', 'RSA', '-keysize', '3072', '-validity', '10000',
-                 '-dname', 'CN=Bungee official Android releases', '-noprompt'])
+                 '-dname', 'CN=Bungee official Android releases', '-noprompt'], step='Generate local release keystore')
         os.replace(pending, key)
     key.chmod(0o600); password.chmod(0o600)
-    certificate = command(['keytool', '-exportcert', '-keystore', key, '-storepass:file', password, '-alias', alias])
+    certificate = command(['keytool', '-exportcert', '-keystore', key, '-storepass:file', password, '-alias', alias], step='Read local signing certificate')
     signer = hashlib.sha256(certificate).hexdigest()
     saved_pin = directory / 'signer.sha256'
     if (pin and pin != signer) or (saved_pin.exists() and saved_pin.read_text().strip() != signer):
@@ -59,10 +98,10 @@ def configure(directory, alias='bungee'):
     try: os.fsync(fd)
     finally: os.close(fd)
     # Establish the public pin first; an interrupted upload can safely retry with this same key.
-    command(['gh', 'variable', 'set', 'BUNGEE_RELEASE_SIGNER_SHA256', '--repo', REPOSITORY, '--body', signer])
-    command(['gh', 'variable', 'set', 'BUNGEE_RELEASE_KEY_ALIAS', '--repo', REPOSITORY, '--body', alias])
-    command(['gh', 'secret', 'set', 'BUNGEE_RELEASE_KEYSTORE_BASE64', '--repo', REPOSITORY], data=base64.b64encode(key.read_bytes()))
-    command(['gh', 'secret', 'set', 'BUNGEE_RELEASE_STORE_PASSWORD', '--repo', REPOSITORY], data=password.read_bytes().rstrip(b'\r\n'))
+    command(['gh', 'variable', 'set', 'BUNGEE_RELEASE_SIGNER_SHA256', '--repo', REPOSITORY, '--body', signer], step='Save repository certificate pin')
+    command(['gh', 'variable', 'set', 'BUNGEE_RELEASE_KEY_ALIAS', '--repo', REPOSITORY, '--body', alias], step='Save repository signing alias')
+    command(['gh', 'secret', 'set', 'BUNGEE_RELEASE_KEYSTORE_BASE64', '--repo', REPOSITORY], data=base64.b64encode(key.read_bytes()), step='Upload release keystore')
+    command(['gh', 'secret', 'set', 'BUNGEE_RELEASE_STORE_PASSWORD', '--repo', REPOSITORY], data=password.read_bytes().rstrip(b'\r\n'), step='Upload release password')
     return signer
 
 
@@ -80,7 +119,7 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except ValueError as error:
+    except (ValueError, SetupError) as error:
         raise SystemExit(str(error))
-    except (OSError, subprocess.SubprocessError):
-        raise SystemExit('Signing setup could not finish. Check keytool and gh authentication/repository administration access; existing local keys were preserved')
+    except OSError as error:
+        raise SystemExit(f'Local signing files could not be accessed: {os.strerror(error.errno) if error.errno else "filesystem error"}. Existing signing files were preserved')

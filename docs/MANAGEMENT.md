@@ -48,6 +48,10 @@ The helper creates a persistent PKCS12 identity outside the checkout, saves a lo
 
 The connected GitHub app cannot manage repository secrets. This one-time setup must run with the repository administrator’s GitHub CLI credentials. Once configured, future releases sign automatically. Never paste the private key or password into chat, issues or source. Keep GitHub administration and the release branch/tag permissions restricted to trusted maintainers.
 
+A fine-grained personal access token needs access to `argentumseven/bungee` and the repository **Secrets: Read and write** and **Variables: Read and write** permissions. A classic token needs the `repo` scope. When `GH_TOKEN` or `GITHUB_TOKEN` is set, GitHub CLI uses that environment token ahead of its saved login (`GH_TOKEN` takes precedence).
+
+Setup errors identify the failed step and classify GitHub authentication, repository permission, connectivity and missing Java failures without printing subprocess output or credentials. Repository secret and variable reads must both succeed before setup creates signing files. A failed certificate-pin lookup stops setup; it is never treated as an unconfigured signer.
+
 For your own stable release signer, create/back up a private keystore on a trusted development machine outside the checkout. Example with interactive passwords:
 
 ```sh
