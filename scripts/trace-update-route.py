@@ -56,10 +56,12 @@ def capture(seconds):
     if not hasattr(socket, 'AF_PACKET'):
         raise SystemExit('This diagnostic requires Linux.')
     started = time.monotonic()
-    count = 0
+    requests = responses = 0
     print('Tap Check for updates on the phone now. Listening for', seconds, 'seconds.', flush=True)
     print('Only private flow addresses, request paths and HTTP statuses are printed.', flush=True)
-    with socket.socket(socket.AF_PACKET, socket.SOCK_DGRAM, socket.htons(0x0800)) as listener:
+    # Linux delivers outgoing packets to ETH_P_ALL taps, not ETH_P_IP handlers.
+    # describe() still filters IPv4/TCP and the private C2 port before printing.
+    with socket.socket(socket.AF_PACKET, socket.SOCK_DGRAM, socket.htons(0x0003)) as listener:
         listener.bind(('wg0', 0))
         listener.settimeout(1)
         try:
@@ -70,11 +72,14 @@ def capture(seconds):
                     continue
                 message = describe(packet)
                 if message is not None:
-                    count += 1
+                    if '  HTTP/' in message:
+                        responses += 1
+                    else:
+                        requests += 1
                     print(f'+{time.monotonic()-started:.2f}s  {message}', flush=True)
         except KeyboardInterrupt:
             pass
-    print('Trace complete:', count, 'HTTP first lines observed.', flush=True)
+    print('Trace complete:', requests, 'request lines and', responses, 'response status lines.', flush=True)
 
 
 def main():
