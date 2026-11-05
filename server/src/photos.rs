@@ -269,8 +269,8 @@ pub async fn list(
     }
     let db = app.db.lock().unwrap();
     enrolled(&db, &id)?;
-    let mut q = db.prepare("SELECT sequence,photo_id,captured_at,received_at,failed_attempts,reason FROM recovery_photos WHERE device_id=? AND sequence<? ORDER BY sequence DESC LIMIT 20")?;
-    let rows = q.query_map(params![id,page.before.unwrap_or(i64::MAX)], |r| Ok(json!({"sequence":r.get::<_,i64>(0)?,"id":r.get::<_,String>(1)?,"captured_at":r.get::<_,i64>(2)?,"received_at":r.get::<_,i64>(3)?,"failed_attempts":r.get::<_,u32>(4)?,"reason":r.get::<_,String>(5)?})))?.collect::<Result<Vec<_>,_>>()?;
+    let mut q = db.prepare("SELECT p.sequence,p.photo_id,p.captured_at,p.received_at,p.failed_attempts,p.reason,p.device_id,CASE WHEN d.primary_device_id IS NULL THEN 'Main profile' ELSE d.name END FROM recovery_photos p JOIN devices d ON d.id=p.device_id WHERE (d.id=? OR d.primary_device_id=?) AND p.sequence<? ORDER BY p.sequence DESC LIMIT 20")?;
+    let rows = q.query_map(params![id,id,page.before.unwrap_or(i64::MAX)], |r| Ok(json!({"sequence":r.get::<_,i64>(0)?,"id":r.get::<_,String>(1)?,"captured_at":r.get::<_,i64>(2)?,"received_at":r.get::<_,i64>(3)?,"failed_attempts":r.get::<_,u32>(4)?,"reason":r.get::<_,String>(5)?,"source_device_id":r.get::<_,String>(6)?,"profile_name":r.get::<_,String>(7)?})))?.collect::<Result<Vec<_>,_>>()?;
     let next = if rows.len() == 20 {
         rows.last().map(|r| r["sequence"].clone())
     } else {
@@ -307,12 +307,14 @@ pub async fn image(
         .into_response())
 }
 pub fn erase_in(db: &Connection, id: &str) -> ApiResult<()> {
-    db.execute(
-        "UPDATE devices SET photo_epoch=? WHERE id=?",
-        params![token(), id],
-    )?;
-    db.execute("DELETE FROM recovery_photos WHERE device_id=?", [id])?;
-    db.execute("DELETE FROM erased_photos WHERE device_id=?", [id])?;
+    for member in crate::profiles::members(db, id)? {
+        db.execute(
+            "UPDATE devices SET photo_epoch=? WHERE id=?",
+            params![token(), member],
+        )?;
+        db.execute("DELETE FROM recovery_photos WHERE device_id=?", [&member])?;
+        db.execute("DELETE FROM erased_photos WHERE device_id=?", [&member])?;
+    }
     Ok(())
 }
 
@@ -351,8 +353,8 @@ pub async fn list_all(
         return Err(bad("Invalid photo cursor"));
     }
     let db = app.db.lock().unwrap();
-    let mut q = db.prepare("SELECT p.sequence,p.photo_id,p.captured_at,p.received_at,p.failed_attempts,p.reason,d.id,d.name FROM recovery_photos p JOIN devices d ON d.id=p.device_id WHERE p.sequence<? ORDER BY p.sequence DESC LIMIT 20")?;
-    let rows = q.query_map([page.before.unwrap_or(i64::MAX)], |r| Ok(json!({"sequence":r.get::<_,i64>(0)?,"id":r.get::<_,String>(1)?,"captured_at":r.get::<_,i64>(2)?,"received_at":r.get::<_,i64>(3)?,"failed_attempts":r.get::<_,u32>(4)?,"reason":r.get::<_,String>(5)?,"device_id":r.get::<_,String>(6)?,"device_name":r.get::<_,String>(7)?})))?.collect::<Result<Vec<_>,_>>()?;
+    let mut q = db.prepare("SELECT p.sequence,p.photo_id,p.captured_at,p.received_at,p.failed_attempts,p.reason,COALESCE(d.primary_device_id,d.id),COALESCE(main.name,d.name),p.device_id,CASE WHEN d.primary_device_id IS NULL THEN 'Main profile' ELSE d.name END FROM recovery_photos p JOIN devices d ON d.id=p.device_id LEFT JOIN devices main ON main.id=d.primary_device_id WHERE p.sequence<? ORDER BY p.sequence DESC LIMIT 20")?;
+    let rows = q.query_map([page.before.unwrap_or(i64::MAX)], |r| Ok(json!({"sequence":r.get::<_,i64>(0)?,"id":r.get::<_,String>(1)?,"captured_at":r.get::<_,i64>(2)?,"received_at":r.get::<_,i64>(3)?,"failed_attempts":r.get::<_,u32>(4)?,"reason":r.get::<_,String>(5)?,"device_id":r.get::<_,String>(6)?,"device_name":r.get::<_,String>(7)?,"source_device_id":r.get::<_,String>(8)?,"profile_name":r.get::<_,String>(9)?})))?.collect::<Result<Vec<_>,_>>()?;
     let next = if rows.len() == 20 {
         rows.last().map(|row| row["sequence"].clone())
     } else {

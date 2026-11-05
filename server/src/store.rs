@@ -95,6 +95,16 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
         .prepare("PRAGMA table_info(devices)")?
         .query_map([], |r| r.get::<_, String>(1))?
         .collect::<Result<Vec<_>, _>>()?;
+    if !columns.iter().any(|c| c == "primary_device_id") {
+        tx.execute(
+            "ALTER TABLE devices ADD COLUMN primary_device_id TEXT REFERENCES devices(id)",
+            [],
+        )?;
+    }
+    tx.execute(
+        "CREATE INDEX IF NOT EXISTS devices_primary ON devices(primary_device_id)",
+        [],
+    )?;
     if !columns.iter().any(|c| c == "binding_released") {
         tx.execute(
             "ALTER TABLE devices ADD COLUMN binding_released INTEGER NOT NULL DEFAULT 0",

@@ -15,6 +15,8 @@ use std::{fs, path::PathBuf};
 pub struct Enrollment {
     name: String,
     wg_public_key: String,
+    #[serde(default)]
+    primary_device_id: Option<String>,
 }
 
 fn wg_key(key: &str) -> bool {
@@ -58,7 +60,7 @@ fn prepare_peers(app: &App, db: &rusqlite::Connection) -> ApiResult<PeerUpdate> 
         }
     }
     // Legacy peers stay recorded for recovery/history but may not bypass mandatory PSK protection.
-    let mut q=db.prepare("SELECT wg_key,address,wg_psk FROM devices WHERE revoked=0 AND wg_psk IS NOT NULL AND (public_key IS NOT NULL OR id IN (SELECT device_id FROM enrollments WHERE expires>?))")?;
+    let mut q=db.prepare("SELECT wg_key,address,wg_psk FROM devices WHERE revoked=0 AND wg_psk IS NOT NULL AND (primary_device_id IS NULL OR EXISTS(SELECT 1 FROM devices p WHERE p.id=devices.primary_device_id AND p.revoked=0 AND p.public_key IS NOT NULL)) AND (public_key IS NOT NULL OR id IN (SELECT device_id FROM enrollments WHERE expires>?))")?;
     let rows = q.query_map([now()], |r| {
         Ok((
             r.get::<_, String>(0)?,
@@ -146,6 +148,12 @@ pub async fn purge_binding(
 }
 /// Releasing an authentication binding never removes recovery evidence.
 fn retire_binding(db: &rusqlite::Connection, id: &str) -> ApiResult<()> {
+    for member in crate::profiles::members(db, id)? {
+        retire_one_binding(db, &member)?;
+    }
+    Ok(())
+}
+fn retire_one_binding(db: &rusqlite::Connection, id: &str) -> ApiResult<()> {
     for table in ["enrollments", "nonces", "commands", "device_policies"] {
         db.execute(&format!("DELETE FROM {table} WHERE device_id=?"), [id])?;
     }
@@ -206,6 +214,7 @@ pub async fn reconnect(
         Enrollment {
             name,
             wg_public_key: input.wg_public_key,
+            primary_device_id: None, // Reconnect preserves the stored relationship.
         },
         Some(&id),
         prepare_peers,
@@ -232,20 +241,22 @@ pub async fn delete_archive(
             "Disconnect the phone before deleting its saved archive",
         ));
     }
-    for table in [
-        "enrollments",
-        "nonces",
-        "commands",
-        "location_history",
-        "state_history",
-        "network_history",
-        "recovery_photos",
-        "erased_photos",
-        "device_policies",
-    ] {
-        tx.execute(&format!("DELETE FROM {table} WHERE device_id=?"), [&id])?;
+    for member in crate::profiles::members(&tx, &id)? {
+        for table in [
+            "enrollments",
+            "nonces",
+            "commands",
+            "location_history",
+            "state_history",
+            "network_history",
+            "recovery_photos",
+            "erased_photos",
+            "device_policies",
+        ] {
+            tx.execute(&format!("DELETE FROM {table} WHERE device_id=?"), [&member])?;
+        }
+        tx.execute("DELETE FROM devices WHERE id=?", [&member])?;
     }
-    tx.execute("DELETE FROM devices WHERE id=?", [&id])?;
     store::audit(
         &tx,
         "device.archive_erased",
@@ -299,6 +310,34 @@ fn issue_for(
     let psk = STANDARD.encode(psk);
     let mut db = app.db.lock().unwrap();
     let tx = db.transaction()?;
+    let primary_device_id: Option<String> = if let Some(target) = replace {
+        tx.query_row(
+            "SELECT primary_device_id FROM devices WHERE id=?",
+            [target],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten()
+    } else {
+        input.primary_device_id.clone()
+    };
+    let primary_name: Option<String> = if let Some(parent) = primary_device_id.as_deref() {
+        let name: Option<String> = tx.query_row("SELECT name FROM devices WHERE id=? AND primary_device_id IS NULL AND revoked=0 AND public_key IS NOT NULL", [parent], |r| r.get(0)).optional()?;
+        if name.is_none() {
+            return Err(bad("Choose an enrolled primary phone for this profile"));
+        }
+        let count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM devices WHERE primary_device_id=? AND revoked=0 AND wg_key<>?",
+            params![parent, input.wg_public_key],
+            |r| r.get(0),
+        )?;
+        if replace.is_none() && count >= 8 {
+            return Err(bad("A phone can have up to eight profile companions"));
+        }
+        name
+    } else {
+        None
+    };
     if let Some(target) = replace {
         let old: Option<String> = tx
             .query_row("SELECT name FROM devices WHERE id=?", [target], |r| {
@@ -344,24 +383,33 @@ fn issue_for(
         peers.publish()?;
         return Ok(Json(
             json!({"version":2,"device_id":target,"name":input.name.trim(),"token":code,"expires":now()+600,"history_retained":true,
+          "profile":primary_device_id.as_ref().map(|parent|json!({"primary_device_id":parent,"primary_name":primary_name,"role":"companion"})),
           "wireguard":{"endpoint":endpoint,"server_public_key":key.trim(),"client_public_key":input.wg_public_key,"preshared_key":psk,"address":format!("{address}/32"),"allowed_ip":"10.77.0.1/32"},"api_url":"http://10.77.0.1:8081"}),
         ));
     }
-    let existing: Option<(String, String, bool)> = tx
+    let existing: Option<(String, String, bool, Option<String>)> = tx
         .query_row(
-            "SELECT id,address,public_key IS NOT NULL FROM devices WHERE wg_key=?",
+            "SELECT id,address,public_key IS NOT NULL,primary_device_id FROM devices WHERE wg_key=?",
             [&input.wg_public_key],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .optional()?;
     let reissued = existing.is_some();
+    if existing
+        .as_ref()
+        .is_some_and(|row| row.3 != primary_device_id)
+    {
+        return Err(bad(
+            "This key belongs to another phone or profile; reconnect its existing record",
+        ));
+    }
     let (id, address) = match existing {
-        Some((_, _, true)) => {
+        Some((_, _, true, _)) => {
             return Err(bad(
                 "This phone key is already bound. Use Reconnect on its saved device record to replace its connection and keep history",
             ));
         }
-        Some((id, address, false)) => {
+        Some((id, address, false, _)) => {
             // Never-enrolled pending/expired/revoked invitations can be explicitly
             // reissued. Rotate both secrets; a paired identity is never rebound.
             tx.execute("DELETE FROM enrollments WHERE device_id=?", [&id])?;
@@ -393,14 +441,15 @@ fn issue_for(
             };
             let id = uuid::Uuid::new_v4().to_string();
             tx.execute(
-                "INSERT INTO devices(id,name,wg_key,address,created,wg_psk) VALUES(?,?,?,?,?,?)",
+                "INSERT INTO devices(id,name,wg_key,address,created,wg_psk,primary_device_id) VALUES(?,?,?,?,?,?,?)",
                 params![
                     id,
                     input.name.trim(),
                     input.wg_public_key,
                     address,
                     now(),
-                    psk
+                    psk,
+                    primary_device_id
                 ],
             )?;
             (id, address)
@@ -432,6 +481,7 @@ fn issue_for(
     })?;
     Ok(Json(
         json!({"version":2,"device_id":id,"name":input.name.trim(),"token":code,"expires":expires,
+      "profile":primary_device_id.as_ref().map(|parent|json!({"primary_device_id":parent,"primary_name":primary_name,"role":"companion"})),
       "wireguard":{"endpoint":endpoint,"server_public_key":key.trim(),"client_public_key":input.wg_public_key,"preshared_key":psk,"address":format!("{address}/32"),"allowed_ip":"10.77.0.1/32"},
       "api_url":"http://10.77.0.1:8081"}),
     ))
@@ -491,6 +541,7 @@ mod tests {
             let input = Enrollment {
                 name: "Storage failure test".into(),
                 wg_public_key: STANDARD.encode([8u8; 32]),
+                primary_device_id: None,
             };
             assert!(issue(&app, input, prepare).is_err());
             let db = app.db.lock().unwrap();

@@ -7,6 +7,7 @@ import {
 import { api } from "./api";
 import { RecoveryMessagePreview } from "./RecoveryMessagePreview";
 import { RecoveryPhotos } from "./RecoveryPhotos";
+import { ProfileCompanions, type ProfileAgent } from "./ProfileCompanions";
 
 type Policy = {
   auto_resume: boolean;
@@ -59,7 +60,7 @@ const time = (n: number) => new Date(n * 1000).toLocaleString();
 export function DeviceCare({
   device,
 }: {
-  device: { id: string; name: string };
+  device: { id: string; name: string; profiles?: ProfileAgent[] };
 }) {
   const [saved, setSaved] = useState<Saved | null>(null),
     [draft, setDraft] = useState<Policy | null>(null);
@@ -344,6 +345,7 @@ export function DeviceCare({
               </p>
             </section>
           </div>
+          <ProfileCompanions key={`profiles-${device.id}`} deviceId={device.id} deviceName={device.name} profiles={device.profiles||[]}/>
           <RecoveryPhotos key={device.id} deviceId={device.id} />
         </>
       )}

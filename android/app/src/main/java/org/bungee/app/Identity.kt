@@ -61,9 +61,11 @@ class Identity(context: Context) {
     val wgPublic: String get() = prefs.getString("wg_public", "")!!
     val wgPrivate: String get() = secret("wg_private")!!
     val publicKey: String get() = encode(keys.getCertificate("bungee-signing").publicKey.encoded)
+    val profileCompanion: Boolean get() = bundle?.let { ProfileCompanionPolicy.isCompanion(JSONObject(it)) } ?: false
+    val primaryName: String? get() = bundle?.let { JSONObject(it).optJSONObject("profile")?.optString("primary_name") }
     var bundle: String?
         get() = secret("bundle")
-        set(value) = synchronized(identityInitialization) { check(currentIdentity()) { "Pairing was reset; reopen Bungee" }; if (value == null) check(prefs.edit().remove("bundle").commit()) { "Could not clear pairing invitation" } else putSecret("bundle", value) }
+        set(value) = synchronized(identityInitialization) { check(currentIdentity()) { "Pairing was reset; reopen Bungee" }; if (value == null) check(prefs.edit().remove("bundle").commit()) { "Could not clear pairing invitation" } else { ProfileCompanionPolicy.isCompanion(JSONObject(value)); putSecret("bundle", value) } }
     var enrolled: Boolean
         get() = prefs.getBoolean("enrolled", false)
         set(value) = synchronized(identityInitialization) { check(currentIdentity()) { "Pairing was reset; reopen Bungee" }; check(prefs.edit().putBoolean("enrolled", value).commit()) { "Could not persist enrollment state" } }
@@ -71,8 +73,9 @@ class Identity(context: Context) {
         get() = appLockPreference.read { prefs.getBoolean("app_lock", false) }
         set(value) { appLockPreference.write { prefs.edit().putBoolean("app_lock", value).commit() } }
     var allowLocate: Boolean
-        get() = locationPreference.read { prefs.getBoolean("allow_locate", true) }
+        get() = !profileCompanion && locationPreference.read { prefs.getBoolean("allow_locate", true) }
         set(value) = PrivacySends.fence.change {
+            check(!value || !profileCompanion) { "GPS stays with the primary phone" }
             synchronized(GpsStorage.lock) {
                 if (value && !allowLocate) newJournal().clear()
                 locationPreference.write {

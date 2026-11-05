@@ -59,6 +59,7 @@ class TelemetryService : Service() {
     }
     private fun elapsed() = SystemClock.elapsedRealtime()
     private suspend fun updateQueueStatus() {
+        if (identity.profileCompanion) return
         val report = withContext(Dispatchers.IO) { identity.backlogReport() }
         status.value = status.value.copy(queuedFixes = report.getInt("queued_fixes"), droppedFixes = report.getLong("dropped_fixes"))
     }
@@ -127,7 +128,7 @@ class TelemetryService : Service() {
             }
         }
         // Sampling is independent: a long network timeout/backoff cannot suspend the GPS trail.
-        sampler = scope.launch {
+        sampler = if (identity.profileCompanion) null else scope.launch {
             while (isActive && !LocalSafety.isStopped(this@TelemetryService) && !ManagementAgent.blocksPersonalOperation(this@TelemetryService)) {
                 val haste = identity.allowCommands && identity.state("management").let { it.optBoolean("lost_mode_active") && it.optBoolean("haste") }
                 val nextSample = elapsed() + if (haste) 10_000 else 60_000
@@ -174,7 +175,7 @@ class TelemetryService : Service() {
                     withContext(Dispatchers.IO) { HomeTunnel.connect(this@TelemetryService, identity, JSONObject(identity.bundle!!), tunnelOwner) }
                     // Commands and saved receipts take precedence over bulk GPS catch-up on a short link.
                     val probeStarted = elapsed()
-                    val polled = try { withContext(Dispatchers.IO) { api.request("/v1/commands") }.also { ConnectionHealth.success(elapsed()-probeStarted) } } catch (e: Exception) { ConnectionHealth.failed(); throw e }
+                    val polled = try { withContext(Dispatchers.IO) { api.request("/v1/commands") }.also { if (!identity.profileCompanion) ConnectionHealth.success(elapsed()-probeStarted) } } catch (e: Exception) { if (!identity.profileCompanion) ConnectionHealth.failed(); throw e }
                     status.value = status.value.copy(connected = true)
                     withContext(Dispatchers.IO) { identity.reconcileGpsEpoch(polled.getString("gps_epoch")) }
                     polled.optString("photo_epoch").takeIf { it.isNotEmpty() }?.let { epoch -> withContext(Dispatchers.IO) { identity.reconcilePhotoEpoch(epoch) } }
@@ -211,13 +212,13 @@ class TelemetryService : Service() {
                         val command=batch.getJSONObject(n)
                         if(command.getString("kind") in listOf("locate","best_guess")) executeTracked(api,command,deadline)
                     }
-                    if (elapsed() < deadline && (elapsed() >= nextTelemetry || status.value.queuedFixes > 0)) {
+                    if (!identity.profileCompanion && elapsed() < deadline && (elapsed() >= nextTelemetry || status.value.queuedFixes > 0)) {
                         upload(api, limit = retry.batchSize)
                         nextTelemetry = elapsed() + if (identity.state("management").optBoolean("lost_mode_active")) 30_000 else 60_000
                     }
                     retry.succeeded(elapsed(), elapsed() - started)
                     updateQueueStatus()
-                    status.value = status.value.copy(running = true, connected = true, text = if (status.value.queuedFixes > 0) "Connected · sending saved GPS in bounded batches" else "Connected to your household", nextRetryAt = null)
+                    status.value = status.value.copy(running = true, connected = true, text = if (identity.profileCompanion) "Profile connected · photos and messages" else if (status.value.queuedFixes > 0) "Connected · sending saved GPS in bounded batches" else "Connected to your household", nextRetryAt = null)
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) {
                     retry.failed(elapsed(), e is HomeApiException && e.status == 401)
@@ -236,7 +237,7 @@ class TelemetryService : Service() {
         val pause = PendingIntent.getService(this, 1, Intent(this, TelemetryService::class.java).setAction("STOP"), PendingIntent.FLAG_IMMUTABLE)
         val hush = PendingIntent.getService(this, 2, Intent(this, TelemetryService::class.java).setAction("STOP_RING"), PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, "sharing").setSilent(true).setOnlyAlertOnce(true).setSmallIcon(R.drawable.ic_bungee).setContentTitle("Bungee sharing is active")
-            .setContentText(if (locationForeground) "GPS fixes queue locally until home is reachable" else "Connection active · open Bungee to resume GPS")
+            .setContentText(if (identity.profileCompanion) "Profile photos and recovery messages" else if (locationForeground) "GPS fixes queue locally until home is reachable" else "Connection active · open Bungee to resume GPS")
             .setContentIntent(open).setOngoing(true).setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .addAction(NotificationCompat.Action.Builder(0, "Stop sharing", pause).setAuthenticationRequired(true).build())
             .addAction(NotificationCompat.Action.Builder(0, "Stop alarm", hush).setAuthenticationRequired(true).build()).build()
@@ -383,6 +384,7 @@ class TelemetryService : Service() {
         val expires = command.getLong("expires")
         if (expires <= attempted) return
         val kind = command.getString("kind")
+        check(ProfileCompanionPolicy.permits(identity.profileCompanion, kind)) { "This action belongs to the primary phone" }
         val check = withContext(Dispatchers.IO) { api.request("/v1/command-check", JSONObject().put("id", id)) }
         if (!check.getBoolean("allowed")) return
         // Persist before acting: a crash cannot cause a lock or alarm to execute twice.
@@ -495,6 +497,11 @@ class TelemetryService : Service() {
         fun capabilities(context: Context, identity: Identity): List<String> = buildList {
             if (LocalSafety.isStopped(context) || ManagementAgent.blocksPersonalOperation(context)) return@buildList
             if (identity.allowCommands) {
+                if (identity.profileCompanion) {
+                    add("stop_all")
+                    if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) addAll(listOf("message", "clear_message"))
+                    return@buildList
+                }
                 if (identity.allowLocate && hasLocation(context) && status.value.gpsAccess in listOf("foreground", "background")) addAll(listOf("locate", "best_guess"))
                 addAll(listOf("ring", "stop_ringing", "stop_all"))
                 if (RecoveryAlarm.flashCamera(context) != null) addAll(listOf("flash", "ring_flash"))

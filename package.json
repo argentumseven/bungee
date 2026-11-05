@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --experimental-strip-types --test tests/gps-trail.mjs tests/map-street.mjs tests/gps-csv.mjs && node --test tests/credentials.mjs tests/integration.mjs tests/privacy.mjs tests/geography.mjs tests/admin-proxy.mjs tests/enrollment.mjs tests/exports.mjs tests/adversarial.mjs tests/photos.mjs tests/recovery.mjs tests/dns-removal.mjs tests/maps.mjs tests/history-retention.mjs tests/app-updates.mjs tests/http2-session.mjs",
-    "test:browser": "node --test tests/browser.mjs tests/vector-browser.mjs tests/map-library-browser.mjs tests/login-browser.mjs tests/device-records-browser.mjs",
+    "test": "node --experimental-strip-types --test tests/gps-trail.mjs tests/map-street.mjs tests/gps-csv.mjs && node --test tests/credentials.mjs tests/integration.mjs tests/privacy.mjs tests/geography.mjs tests/admin-proxy.mjs tests/enrollment.mjs tests/exports.mjs tests/adversarial.mjs tests/photos.mjs tests/recovery.mjs tests/dns-removal.mjs tests/maps.mjs tests/history-retention.mjs tests/app-updates.mjs tests/http2-session.mjs tests/profile-companions.mjs",
+    "test:browser": "node --test tests/browser.mjs tests/vector-browser.mjs tests/map-library-browser.mjs tests/login-browser.mjs tests/device-records-browser.mjs tests/profile-companions-browser.mjs",
     "test:tls": "node scripts/check-dashboard-tls.mjs",
     "test:network": "node scripts/check-runtime-network.mjs && node scripts/check-management-isolation.mjs"
   },

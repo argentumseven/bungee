@@ -69,6 +69,8 @@ pub fn safe_package(p: &str) -> bool {
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Report {
+    pub foreground_user: Option<bool>,
+    pub profile_capabilities: Option<Vec<String>>,
     pub app_signer_sha256: Option<String>,
     #[serde(skip_serializing)]
     pub system_dns: Option<serde::de::IgnoredAny>, // Discard reports from older phones.
@@ -224,6 +226,7 @@ pub async fn save_policy(
     Json(input): Json<Save>,
 ) -> ApiResult<Json<Value>> {
     require_admin(&app, &headers)?;
+    crate::profiles::require_primary(&app.db.lock().unwrap(), &id)?;
     if !input.policy.valid() || input.expected_revision < 0 {
         return Err(bad("Invalid policy, package list or recovery message"));
     }
@@ -276,6 +279,34 @@ pub async fn sync(
     let input: Sync =
         serde_json::from_slice(&body).map_err(|_| bad("Invalid management report"))?;
     let r = &input.report;
+    let companion = crate::profiles::companion(&app.db.lock().unwrap(), &id)?;
+    if r.profile_capabilities.as_ref().is_some_and(|caps| {
+        !companion
+            || caps.len() > crate::profiles::COMMANDS.len()
+            || caps
+                .iter()
+                .any(|kind| !crate::profiles::COMMANDS.contains(&kind.as_str()))
+            || (!r.recovery_consent && !caps.is_empty())
+    }) {
+        return Err(bad("Invalid profile message permissions"));
+    }
+    if companion
+        && (r.connection_health.is_some()
+            || r.delivery.is_some()
+            || r.owner
+            || r.consent
+            || r.always_on
+            || r.uninstall_blocked
+            || r.protection_active
+            || r.strong_lock_required
+            || !r.blocked_apps.is_empty()
+            || !r.android_version.is_empty()
+            || !r.security_patch.is_empty())
+    {
+        return Err(bad(
+            "Profile companions send only camera, unlock and message status",
+        ));
+    }
     if r.camera.as_ref().is_some_and(|c| {
         c.pending > crate::photos::MAX_PENDING
             || c.queued.len() > crate::photos::MAX_PENDING as usize
@@ -321,13 +352,19 @@ pub async fn sync(
     if changed != 1 {
         return Err(denied());
     }
+    if let Some(caps) = &r.profile_capabilities {
+        db.execute(
+            "UPDATE devices SET capabilities=? WHERE id=?",
+            params![serde_json::to_string(caps).unwrap(), id],
+        )?;
+    }
     let epoch: String = db.query_row(
         "SELECT gps_epoch FROM devices WHERE id=? AND revoked=0",
         [&id],
         |r| r.get(0),
     )?;
     Ok(Json(
-        json!({"server_version":crate::release::version(),"app_update_preparation":crate::app_updates::preparation(),"app_update":crate::app_updates::for_signer(r.app_signer_sha256.as_deref()),"revision":revision,"policy":policy.reversible(),"gps_epoch":epoch,"photo_epoch":db.query_row("SELECT photo_epoch FROM devices WHERE id=?",[&id],|r|r.get::<_,String>(0))?,"server_time":now(),"persistent_controls_enabled":false}),
+        json!({"server_version":crate::release::version(),"app_update_preparation":crate::app_updates::preparation(),"app_update":crate::app_updates::for_signer(r.app_signer_sha256.as_deref()),"revision":revision,"policy":if companion {Policy::default()} else {policy.reversible()},"profile_companion":companion,"gps_epoch":epoch,"photo_epoch":db.query_row("SELECT photo_epoch FROM devices WHERE id=?",[&id],|r|r.get::<_,String>(0))?,"server_time":now(),"persistent_controls_enabled":false}),
     ))
 }
 #[cfg(test)]

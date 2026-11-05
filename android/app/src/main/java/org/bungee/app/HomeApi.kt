@@ -15,6 +15,7 @@ class HomeApi(private val identity: Identity, val clock: HomeClock = HomeClock()
         val token = bundle.optString("token", "")
         val proof = "BUNGEE-ENROLL-V1\n$token\n${identity.wgPublic}\n${identity.publicKey}"
         val body = JSONObject().put("token", token).put("public_key", identity.publicKey)
+            .put("profile_companion", identity.profileCompanion)
             .put("wg_public_key", identity.wgPublic).put("proof", identity.sign(proof)).put("capabilities", JSONArray(capabilities))
         val result = try { request("/v1/enroll", body, signed = false, authorization = authorization) }
         catch (e: Exception) {
@@ -24,9 +25,11 @@ class HomeApi(private val identity: Identity, val clock: HomeClock = HomeClock()
             val existing = request("/v1/sync", JSONObject().put("report", JSONObject()), authorization = authorization)
             require(existing.has("revision") && existing.has("policy")) { "Registration could not be confirmed" }
             JSONObject().put("device_id", bundle.getString("device_id")).put("gps_epoch", existing.getString("gps_epoch"))
+                .put("profile_companion", existing.optBoolean("profile_companion", false))
                 .apply { existing.optString("photo_epoch").takeIf { it.isNotEmpty() }?.let { put("photo_epoch", it) } }
         }
         require(result.getString("device_id") == bundle.getString("device_id"))
+        require(result.optBoolean("profile_companion", false) == identity.profileCompanion) { "The server profile role differs from this invitation" }
         PrivacySends.fence.checked(authorization, { identity.requestsAllowed() }) {
             identity.reconcileGpsEpoch(result.getString("gps_epoch"))
             result.optString("photo_epoch").takeIf { it.isNotEmpty() }?.let { identity.reconcilePhotoEpoch(it) }
@@ -35,6 +38,7 @@ class HomeApi(private val identity: Identity, val clock: HomeClock = HomeClock()
         }
     }
     fun request(path: String, body: JSONObject = JSONObject(), signed: Boolean = true, reservation: Long? = null, timeoutMillis: Long = 10000, deadlineElapsed: Long = Long.MAX_VALUE, authorization: DisclosureFence.Stamp = PrivacySends.fence.stamp()): JSONObject {
+        check(path != "/v1/telemetry" || !identity.profileCompanion) { "Profile companions do not send device telemetry" }
         check(identity.requestsAllowed()) { "Bungee is stopped or its pairing changed; reopen the app" }
         check(HomeTunnel.state == com.wireguard.android.backend.Tunnel.State.UP) { "The private tunnel is disconnected" }
         require(path in listOf("/v1/enroll", "/v1/telemetry", "/v1/photos", "/v1/commands", "/v1/command-check", "/v1/ack", "/v1/sync", "/v1/app-update", "/v1/app-update/chunk"))

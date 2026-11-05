@@ -44,6 +44,7 @@ import {
 } from "./PrivateMap";
 import { DeviceRecords } from "./DeviceRecords";
 import { DeviceCare } from "./DeviceCare";
+import type { ProfileAgent } from "./ProfileCompanions";
 import { AppearanceControl, useAppearance } from "./Appearance";
 import { RecoveryMessagePreview } from "./RecoveryMessagePreview";
 import { PasswordSettings } from "./PasswordSettings";
@@ -62,6 +63,7 @@ type Location = {
   observed_at: number;
 };
 type Device = {
+  profiles?: ProfileAgent[];
   id: string;
   name: string;
   address: string;
@@ -690,7 +692,7 @@ function App() {
                     <Activity size={17} />
                   </div>
                   {commands
-                    .filter((c) => !device || c.device_id === device.id)
+                    .filter((c) => !device || c.device_id === device.id || device.profiles?.some(p=>p.id===c.device_id))
                     .slice(0, 20)
                     .map((c) => (
                       <div className="command-row" key={c.id}>
@@ -704,7 +706,7 @@ function App() {
                           )}
                         </span>
                         <div>
-                          <strong>{c.kind.replaceAll("_", " ")}</strong>
+                          <strong>{device?.profiles?.find(p=>p.id===c.device_id)?.name ? `${device.profiles.find(p=>p.id===c.device_id)!.name} · ` : ""}{c.kind.replaceAll("_", " ")}</strong>
                           <small>
                             {ago(c.created)}
                             {c.result && ` · ${c.result}`}

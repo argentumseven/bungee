@@ -2,14 +2,14 @@ import { useEffect, useState } from "react";
 import { Camera, RefreshCw, Trash2 } from "lucide-react";
 import { api } from "./api";
 
-type Photo = { id: string; device_id?: string; device_name?: string; captured_at: number; received_at: number; failed_attempts: number; reason: "failed_unlock" | "local_test" };
+type Photo = { id: string; device_id?: string; source_device_id?: string; profile_name?: string; device_name?: string; captured_at: number; received_at: number; failed_attempts: number; reason: "failed_unlock" | "local_test" };
 type Album = { photos: Photo[]; next_before: number | null };
 export function RecoveryPhotos({ deviceId }: { deviceId?: string }) {
   const [open, setOpen] = useState(true), [before, setBefore] = useState<number | null>(null);
   const [album, setAlbum] = useState<Album | null>(null), [reload, setReload] = useState(0);
   const [error, setError] = useState(""), [confirm, setConfirm] = useState(false), [busy, setBusy] = useState(false);
   const path = deviceId ? `/devices/${encodeURIComponent(deviceId)}/photos` : "/photos";
-  const imagePath = (photo: Photo) => `/devices/${encodeURIComponent(deviceId || photo.device_id || "")}/photos/${encodeURIComponent(photo.id)}`;
+  const imagePath = (photo: Photo) => `/devices/${encodeURIComponent(photo.source_device_id || deviceId || photo.device_id || "")}/photos/${encodeURIComponent(photo.id)}`;
   useEffect(()=>{setAlbum(null);},[path,open,before]);
   useEffect(()=>{setBefore(null);},[path]);
   useEffect(() => {
@@ -43,11 +43,11 @@ export function RecoveryPhotos({ deviceId }: { deviceId?: string }) {
       {error && <p className="error" role="alert">{error}</p>}
       {!album && !error && <p className="fine">Loading saved photos…</p>}
       {album && !album.photos.length && <p className="fine">No saved photos in this view.</p>}
-      <div className="photo-grid">{album?.photos.map(photo => <figure key={`${deviceId||photo.device_id}-${photo.id}`}>
+      <div className="photo-grid">{album?.photos.map(photo => <figure key={`${photo.source_device_id||deviceId||photo.device_id}-${photo.id}`}>
         <a href={`/api${imagePath(photo)}`} target="_blank" rel="noopener noreferrer">
           <img src={`/api${imagePath(photo)}`} loading="lazy" alt={photo.reason === "local_test" ? "Labelled local camera test" : `Recovery capture after ${photo.failed_attempts} failed credential entries`} />
         </a>
-        <figcaption>{photo.device_name && <strong>{photo.device_name}</strong>}<strong>{photo.reason === "local_test" ? "Local camera test" : `${photo.failed_attempts} failed credential entries`}</strong>
+        <figcaption>{photo.device_name && <strong>{photo.device_name}</strong>}{photo.profile_name && <span>{photo.profile_name}</span>}<strong>{photo.reason === "local_test" ? "Local camera test" : `${photo.failed_attempts} failed credential entries`}</strong>
           <span>Captured {new Date(photo.captured_at * 1000).toLocaleString()}</span><span>Received {new Date(photo.received_at * 1000).toLocaleString()}</span><button type="button" className="danger-button" disabled={busy} onClick={async () => {
             if (!window.confirm("Erase this recovery photo? It cannot be restored by a retry from the phone.")) return;
             setBusy(true);

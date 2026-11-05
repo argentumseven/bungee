@@ -9,6 +9,7 @@ mod history_import;
 mod management;
 mod maps;
 mod photos;
+mod profiles;
 mod recurrence;
 mod release;
 mod security;

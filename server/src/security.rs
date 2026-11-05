@@ -332,7 +332,7 @@ pub fn verify_device(app: &App, headers: &HeaderMap, path: &str, body: &[u8]) ->
     let db = app.db.lock().unwrap();
     let key: Option<String> = db
         .query_row(
-            "SELECT public_key FROM devices WHERE id=? AND revoked=0 AND public_key IS NOT NULL",
+            "SELECT public_key FROM devices WHERE id=? AND revoked=0 AND public_key IS NOT NULL AND (primary_device_id IS NULL OR EXISTS(SELECT 1 FROM devices p WHERE p.id=devices.primary_device_id AND p.revoked=0 AND p.public_key IS NOT NULL))",
             [id],
             |r| r.get(0),
         )
