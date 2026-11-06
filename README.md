@@ -54,6 +54,8 @@ The Kotlin app connects through an app-contained WireGuard tunnel to a Rust serv
 
 Bungee does not support device-owner/work-profile management, forced system DNS, app suspension, hidden launchers, lock-screen overlays, airplane-mode cycling, radio schedules, power-off/reboot/wipe, credential reset, arbitrary scripts or software deployment. Powered-off finding, a crowdsourced offline network, relay/NAT traversal, household roles/MFA and hardware attestation are also unavailable. Guided installs include the world overview and DB-IP Lite City data and offer a regional street-map checklist. Settings → Maps & storage offers the same regional downloads, planned sizes, installed maps and safe free capacity.
 
+For phones with multiple Android users, see the [illustrated sandbox profile workflow](docs/PROFILE-COMPANIONS.md): one phone overview, an explicitly selected main installation, and optional paired companions for profile-local photos and messages.
+
 ## Install the server
 
 Use a Linux host with Python 3, Docker Engine, Compose 2.24+, systemd and kernel WireGuard support. Start with the guided installer:
