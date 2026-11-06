@@ -170,7 +170,8 @@ pub async fn devices(State(app): State<App>, headers: HeaderMap) -> ApiResult<Js
     }
     let db = app.db.lock().unwrap();
     // Recovery data survives long outages. Freshness is described by timestamps, not deletion.
-    let mut q=db.prepare("SELECT id,name,address,created,last_seen,revoked,telemetry,capabilities,public_key IS NOT NULL,last_location,wg_psk IS NOT NULL,management_report,last_contact,(SELECT MAX(expires) FROM enrollments WHERE device_id=devices.id),wg_key,binding_released,primary_device_id FROM devices ORDER BY created")?;
+    let mut q=db.prepare("SELECT id,name,address,created,last_seen,revoked,telemetry,capabilities,public_key IS NOT NULL,last_location,wg_psk IS NOT NULL,management_report,last_contact,(SELECT MAX(expires) FROM enrollments WHERE device_id=devices.id),wg_key,binding_released,primary_device_id,profiles_enabled,main_profile_name,management_report_at,profile_fingerprint IS NOT NULL,
+        (SELECT conflict_at FROM device_runtimes WHERE device_id=devices.id),runtime_required FROM devices ORDER BY created")?;
     let rows=q.query_map([],|r| {
         let location = r.get::<_,Option<String>>(9)?.and_then(|s|serde_json::from_str::<Value>(&s).ok());
         let mut telemetry = r.get::<_,Option<String>>(6)?.and_then(|s|serde_json::from_str::<Value>(&s).ok());
@@ -182,6 +183,9 @@ pub async fn devices(State(app): State<App>, headers: HeaderMap) -> ApiResult<Js
         "id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"address":r.get::<_,String>(2)?,
         "created":r.get::<_,i64>(3)?,"last_seen":r.get::<_,Option<i64>>(4)?,"revoked":r.get::<_,bool>(5)?,
         "primary_device_id":r.get::<_,Option<String>>(16)?,
+        "profiles_enabled":r.get::<_,bool>(17)?,"main_profile_name":r.get::<_,Option<String>>(18)?,
+        "management_report_at":r.get::<_,Option<i64>>(19)?,"profile_identity_confirmed":r.get::<_,bool>(20)?,
+        "duplicate_blocked_at":r.get::<_,Option<i64>>(21)?,"runtime_protected":r.get::<_,bool>(22)?,
         "telemetry":telemetry,"last_location":location,"last_contact":r.get::<_,Option<i64>>(12)?,
         "network":crate::geography::latest(&db,&r.get::<_,String>(0)?)?,
         "capabilities":serde_json::from_str::<Vec<String>>(&r.get::<_,String>(7)?).unwrap_or_default().into_iter().filter(|kind|kind!="reboot" && kind!="dns_check").collect::<Vec<_>>(),
@@ -205,6 +209,8 @@ pub async fn devices(State(app): State<App>, headers: HeaderMap) -> ApiResult<Js
 pub struct Pair {
     #[serde(default)]
     profile_companion: bool,
+    runtime_protocol: Option<u8>,
+    profile_fingerprint: Option<String>,
     token: String,
     public_key: String,
     wg_public_key: String,
@@ -274,6 +280,33 @@ pub async fn enroll(
             "This invitation needs an updated app configured as a profile companion",
         ));
     }
+    let multi: bool = tx.query_row(
+        "SELECT profiles_enabled OR primary_device_id IS NOT NULL FROM devices WHERE id=?",
+        [&id],
+        |r| r.get(0),
+    )?;
+    if multi
+        && (input.runtime_protocol != Some(1)
+            || !input
+                .profile_fingerprint
+                .as_deref()
+                .is_some_and(crate::runtime::fingerprint))
+    {
+        return Err(bad(
+            "Sandbox profiles require the current app and a profile identity",
+        ));
+    }
+    if let Some(f) = input.profile_fingerprint.as_deref().filter(|_| multi) {
+        crate::profiles::check_fingerprint(&tx, &id, f)?;
+    }
+    tx.execute(
+        "UPDATE devices SET runtime_required=?,profile_fingerprint=? WHERE id=?",
+        params![
+            input.runtime_protocol == Some(1),
+            input.profile_fingerprint.filter(|_| multi),
+            id
+        ],
+    )?;
     tx.execute(
         "UPDATE devices SET public_key=?,capabilities=?,last_seen=?,gps_epoch=?,photo_epoch=? WHERE id=?",
         params![
@@ -343,11 +376,16 @@ pub async fn telemetry(
     let id = verify_device(&app, &headers, "/v1/telemetry", &body)?;
     crate::profiles::require_primary(&app.db.lock().unwrap(), &id)?;
     let input: Telemetry = serde_json::from_slice(&body).map_err(|_| bad("Invalid telemetry"))?;
-    commit_telemetry(&app, &id, input)
+    commit_telemetry(&app, &id, input, &headers)
 }
 // Authentication is deliberately outside this operation. Privacy generation and
 // command expiry are read again at the actual transaction, never cached by auth.
-fn commit_telemetry(app: &App, id: &str, mut input: Telemetry) -> ApiResult<Json<Value>> {
+fn commit_telemetry(
+    app: &App,
+    id: &str,
+    mut input: Telemetry,
+    headers: &HeaderMap,
+) -> ApiResult<Json<Value>> {
     let photo_bytes = input
         .recovery_photo
         .as_ref()
@@ -373,6 +411,7 @@ fn commit_telemetry(app: &App, id: &str, mut input: Telemetry) -> ApiResult<Json
     }
     let mut db = app.db.lock().unwrap();
     let tx = db.transaction()?;
+    crate::runtime::fence(&tx, id, headers)?;
     let (mut location, epoch): (Option<String>, String) = tx
         .query_row(
             "SELECT last_location,gps_epoch FROM devices WHERE id=? AND revoked=0",
@@ -649,7 +688,13 @@ pub async fn check_command(
     let input: CommandCheck =
         serde_json::from_slice(&body).map_err(|_| bad("Invalid command check"))?;
     let db = app.db.lock().unwrap();
+    crate::runtime::fence(&db, &id, &headers)?;
     let allowed: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM commands WHERE id=? AND device_id=? AND status='delivered' AND expires>?)",params![input.id,id,now()],|r|r.get(0))?;
+    let allowed = if headers.contains_key("x-bungee-instance") {
+        allowed && db.execute("UPDATE commands SET execution_started_at=? WHERE id=? AND device_id=? AND execution_started_at IS NULL AND status='delivered' AND expires>?",params![now(),input.id,id,now()])?==1
+    } else {
+        allowed
+    };
     Ok(Json(json!({"allowed":allowed,"server_time":now()})))
 }
 pub async fn poll(
@@ -666,6 +711,7 @@ pub async fn poll(
     }
     let input: Poll = serde_json::from_slice(&body).map_err(|_| bad("Invalid command poll"))?;
     let db = app.db.lock().unwrap();
+    crate::runtime::fence(&db, &id, &headers)?;
     if crate::profiles::companion(&db, &id)? {
         db.execute("UPDATE commands SET status='rejected',result='Not available to a profile companion' WHERE device_id=? AND kind NOT IN ('message','clear_message','stop_all') AND status IN ('pending','delivered')", [&id])?;
     }
@@ -709,6 +755,7 @@ pub async fn ack(
         return Err(bad("Invalid receipt values"));
     }
     let db = app.db.lock().unwrap();
+    crate::runtime::fence(&db, &id, &headers)?;
     // A delayed receipt reports an earlier attempt; it never extends execution authority.
     // A restored server may not know an offered command yet. Preserve the phone's
     // journal in every non-matching case so later polls/restoration can reconcile it.
@@ -785,6 +832,7 @@ pub async fn revoke(
     for member in members {
         tx.execute("UPDATE devices SET revoked=1,telemetry=NULL,last_location=NULL,wg_psk=NULL,management_report=NULL,capabilities='[]' WHERE id=?",[&member])?;
         for table in [
+            "device_runtimes",
             "enrollments",
             "commands",
             "location_history",
@@ -887,7 +935,7 @@ mod privacy_tests {
                 .as_bool()
                 .unwrap()
         );
-        let result = commit_telemetry(&app, &id, input).unwrap().0;
+        let result = commit_telemetry(&app, &id, input, &headers).unwrap().0;
         assert_eq!(result["gps_accepted"], false);
         let db = app.db.lock().unwrap();
         assert_eq!(
@@ -906,6 +954,33 @@ mod privacy_tests {
             .is_none()
         );
         drop(db);
+        // Authentication happened above. A runtime takeover between authentication
+        // and this transaction must still prevent the old request from committing.
+        let old_runtime = token();
+        let instance = uuid::Uuid::new_v4().to_string();
+        app.db
+            .lock()
+            .unwrap()
+            .execute("UPDATE devices SET runtime_required=1 WHERE id='phone'", [])
+            .unwrap();
+        app.db.lock().unwrap().execute("INSERT INTO device_runtimes(device_id,instance,secret_hash,generation,expires) VALUES('phone',?,?,1,?)",params![instance,hash(&old_runtime),now()+120]).unwrap();
+        headers.insert("x-bungee-instance", instance.parse().unwrap());
+        headers.insert("x-bungee-runtime", old_runtime.parse().unwrap());
+        app.db
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE device_runtimes SET secret_hash=?,generation=2 WHERE device_id='phone'",
+                [hash(token())],
+            )
+            .unwrap();
+        let stale_input: Telemetry = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            commit_telemetry(&app, &id, stale_input, &headers)
+                .unwrap_err()
+                .0,
+            StatusCode::PRECONDITION_REQUIRED
+        );
         drop(app);
         std::fs::remove_dir_all(directory).unwrap();
     }

@@ -1,6 +1,8 @@
 import { useState } from "react";
 import QRCode from "qrcode";
 import { api } from "./api";
+import { ConnectionBadge, DuplicateNotice } from "./PhoneStatus";
+import { RecoveryPhotos } from "./RecoveryPhotos";
 
 export type ProfileAgent = {
   id: string;
@@ -8,6 +10,8 @@ export type ProfileAgent = {
   enrolled: boolean;
   revoked: boolean;
   last_contact?: number | null;
+  management_report_at?: number | null;
+  duplicate_blocked_at?: number | null;
   binding_released?: boolean;
   enrollment_state?: string;
   capabilities: string[];
@@ -28,10 +32,12 @@ export function ProfileCompanions({
   deviceId,
   deviceName,
   profiles,
+  detail = false,
 }: {
   deviceId: string;
   deviceName: string;
   profiles: ProfileAgent[];
+  detail?: boolean;
 }) {
   const [name, setName] = useState(""),
     [key, setKey] = useState("");
@@ -58,6 +64,7 @@ export function ProfileCompanions({
         body: "{}",
       });
       setNotice(`${profile.name} disconnected. Saved photos were kept.`);
+      window.dispatchEvent(new Event("bungee:refresh"));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -93,14 +100,14 @@ export function ProfileCompanions({
       aria-label="Android profiles"
     >
       <div className="panel-heading">
-        <h2>Android profiles</h2>
-        <span>{profiles.filter((p) => !p.revoked).length}/8 linked</span>
+        <h2>{detail?profiles[0]?.name:"Manage sandbox profiles"}</h2>
+        <span>{detail?"Profile actions":`${profiles.filter(p=>!p.revoked&&p.enrolled).length}/8 paired`}</span>
       </div>
-      <p>
+      {!detail && <p>
         Phone status, GPS, battery, network history, sound and flash come from{" "}
         {deviceName}’s main installation. Linked companions handle photos and
-        messages inside their own Android user.
-      </p>
+        messages inside their own Android user. Pending invitations appear only here until pairing finishes.
+      </p>}
       {error && (
         <p className="error" role="alert">
           {error}
@@ -111,6 +118,7 @@ export function ProfileCompanions({
           {notice}
         </p>
       )}
+      <DuplicateNotice agents={profiles}/>
       {profiles.map((profile) => {
         const camera = profile.management?.camera;
         const recent =
@@ -120,20 +128,13 @@ export function ProfileCompanions({
           <article className="profile-agent" key={profile.id}>
             <div className="panel-heading">
               <h3>{profile.name}</h3>
-              <span>
-                {profile.revoked
-                  ? "Disconnected"
-                  : !profile.enrolled
-                    ? profile.enrollment_state === "expired"
-                      ? "Invitation expired"
-                      : "Awaiting pairing"
-                    : recent
-                      ? "Connected"
-                      : "No recent contact"}
-              </span>
+              <ConnectionBadge phone={profile} profile/>
+              {profile.revoked && <span className="role-badge">Saved profile</span>}
+
             </div>
+            {!profile.enrolled && !profile.revoked && <p className="fine">{profile.enrollment_state==="expired"?"Invitation expired":"Invitation pending"} · hidden from the phone navigation until officially paired.</p>}
             <p className="fine">
-              {profile.management?.foreground_user && recent
+              {profile.management?.foreground_user && recent && !!profile.management_report_at && Date.now()/1000-profile.management_report_at<90
                 ? "Foreground user at last report. "
                 : ""}
               {camera?.status ||
@@ -148,6 +149,7 @@ export function ProfileCompanions({
             )}
             {profile.enrolled && !profile.revoked && (
               <>
+                {!profile.capabilities.includes("message")&&<p className="fine">Recovery messages are off in this profile. Approve them locally in its Bungee app.</p>}
                 <label htmlFor={`profile-message-${profile.id}`}>
                   Message for {profile.name}
                 </label>
@@ -257,7 +259,7 @@ export function ProfileCompanions({
           </article>
         );
       })}
-      <details
+      {!detail && <details
         className="profile-setup"
         open={setupOpen}
         onToggle={(e) => setSetupOpen(e.currentTarget.open)}
@@ -302,6 +304,7 @@ export function ProfileCompanions({
               setInvitation(text);
               setQr(await QRCode.toDataURL(text, { width: 320, margin: 2 }));
               setNotice("Profile invitation ready. It expires in ten minutes.");
+              window.dispatchEvent(new Event("bungee:refresh"));
             } catch (e) {
               setError((e as Error).message);
             } finally {
@@ -389,7 +392,8 @@ export function ProfileCompanions({
             </button>
           </div>
         )}
-      </details>
+      </details>}
+      {detail&&profiles[0]&&<RecoveryPhotos deviceId={profiles[0].id}/> }
     </section>
   );
 }

@@ -17,6 +17,8 @@ pub struct Enrollment {
     wg_public_key: String,
     #[serde(default)]
     primary_device_id: Option<String>,
+    #[serde(default)]
+    main_profile_name: Option<String>,
 }
 
 fn wg_key(key: &str) -> bool {
@@ -154,10 +156,16 @@ fn retire_binding(db: &rusqlite::Connection, id: &str) -> ApiResult<()> {
     Ok(())
 }
 fn retire_one_binding(db: &rusqlite::Connection, id: &str) -> ApiResult<()> {
-    for table in ["enrollments", "nonces", "commands", "device_policies"] {
+    for table in [
+        "enrollments",
+        "nonces",
+        "commands",
+        "device_policies",
+        "device_runtimes",
+    ] {
         db.execute(&format!("DELETE FROM {table} WHERE device_id=?"), [id])?;
     }
-    db.execute("UPDATE devices SET revoked=1,public_key=NULL,wg_psk=NULL,wg_key=?,address=?,binding_released=1,management_report=NULL,capabilities='[]',history_revision=history_revision+1,gps_epoch=?,photo_epoch=? WHERE id=?",params![format!("released:{id}"),format!("retired:{id}"),token(),token(),id])?;
+    db.execute("UPDATE devices SET revoked=1,public_key=NULL,wg_psk=NULL,wg_key=?,address=?,binding_released=1,management_report=NULL,management_report_at=NULL,profile_fingerprint=NULL,capabilities='[]',history_revision=history_revision+1,gps_epoch=?,photo_epoch=? WHERE id=?",params![format!("released:{id}"),format!("retired:{id}"),token(),token(),id])?;
     Ok(())
 }
 pub async fn disconnect(
@@ -215,6 +223,7 @@ pub async fn reconnect(
             name,
             wg_public_key: input.wg_public_key,
             primary_device_id: None, // Reconnect preserves the stored relationship.
+            main_profile_name: None,
         },
         Some(&id),
         prepare_peers,
@@ -243,6 +252,7 @@ pub async fn delete_archive(
     }
     for member in crate::profiles::members(&tx, &id)? {
         for table in [
+            "device_runtimes",
             "enrollments",
             "nonces",
             "commands",
@@ -280,6 +290,14 @@ fn issue_for(
     replace: Option<&str>,
     prepare: fn(&App, &rusqlite::Connection) -> ApiResult<PeerUpdate>,
 ) -> ApiResult<Json<Value>> {
+    if input.main_profile_name.as_ref().is_some_and(|n| {
+        n.trim().is_empty() || n.chars().count() > 60 || n.chars().any(char::is_control)
+    }) || (input.main_profile_name.is_some() && input.primary_device_id.is_some())
+    {
+        return Err(bad(
+            "Choose a main profile only when pairing the overall phone",
+        ));
+    }
     if input.name.trim().is_empty()
         || input.name.chars().count() > 60
         || input.name.chars().any(char::is_control)
@@ -321,10 +339,17 @@ fn issue_for(
     } else {
         input.primary_device_id.clone()
     };
-    let primary_name: Option<String> = if let Some(parent) = primary_device_id.as_deref() {
+    let _primary_name: Option<String> = if let Some(parent) = primary_device_id.as_deref() {
         let name: Option<String> = tx.query_row("SELECT name FROM devices WHERE id=? AND primary_device_id IS NULL AND revoked=0 AND public_key IS NOT NULL", [parent], |r| r.get(0)).optional()?;
         if name.is_none() {
             return Err(bad("Choose an enrolled primary phone for this profile"));
+        }
+        let ready: bool=tx.query_row("SELECT profiles_enabled=1 AND profile_fingerprint IS NOT NULL AND runtime_required=1 FROM devices WHERE id=?",[parent],|r|r.get(0))?;
+        if !ready {
+            return Err(Error(
+                StatusCode::CONFLICT,
+                "Select the main profile and let its updated app confirm this setup before adding companions",
+            ));
         }
         let count: i64 = tx.query_row(
             "SELECT COUNT(*) FROM devices WHERE primary_device_id=? AND revoked=0 AND wg_key<>? AND (? IS NULL OR id<>?)",
@@ -378,12 +403,13 @@ fn issue_for(
             Some(target),
             "New invitation; saved GPS/history retained",
         )?;
+        let profile = crate::profiles::metadata(&tx, target)?;
         let peers = prepare(app, &tx)?;
         tx.commit()?;
         peers.publish()?;
         return Ok(Json(
             json!({"version":2,"device_id":target,"name":input.name.trim(),"token":code,"expires":now()+600,"history_retained":true,
-          "profile":primary_device_id.as_ref().map(|parent|json!({"primary_device_id":parent,"primary_name":primary_name,"role":"companion"})),
+          "runtime_protocol":1,"profile":profile,
           "wireguard":{"endpoint":endpoint,"server_public_key":key.trim(),"client_public_key":input.wg_public_key,"preshared_key":psk,"address":format!("{address}/32"),"allowed_ip":"10.77.0.1/32"},"api_url":"http://10.77.0.1:8081"}),
         ));
     }
@@ -455,6 +481,13 @@ fn issue_for(
             (id, address)
         }
     };
+    if let Some(label) = input.main_profile_name.as_deref() {
+        tx.execute(
+            "UPDATE devices SET profiles_enabled=1,main_profile_name=? WHERE id=?",
+            params![label.trim(), id],
+        )?;
+    }
+    let profile = crate::profiles::metadata(&tx, &id)?;
     let expires = now() + 600;
     tx.execute(
         "INSERT INTO enrollments(hash,device_id,expires) VALUES(?,?,?)",
@@ -481,7 +514,7 @@ fn issue_for(
     })?;
     Ok(Json(
         json!({"version":2,"device_id":id,"name":input.name.trim(),"token":code,"expires":expires,
-      "profile":primary_device_id.as_ref().map(|parent|json!({"primary_device_id":parent,"primary_name":primary_name,"role":"companion"})),
+      "runtime_protocol":1,"profile":profile,
       "wireguard":{"endpoint":endpoint,"server_public_key":key.trim(),"client_public_key":input.wg_public_key,"preshared_key":psk,"address":format!("{address}/32"),"allowed_ip":"10.77.0.1/32"},
       "api_url":"http://10.77.0.1:8081"}),
     ))
@@ -542,6 +575,7 @@ mod tests {
                 name: "Storage failure test".into(),
                 wg_public_key: STANDARD.encode([8u8; 32]),
                 primary_device_id: None,
+                main_profile_name: None,
             };
             assert!(issue(&app, input, prepare).is_err());
             let db = app.db.lock().unwrap();

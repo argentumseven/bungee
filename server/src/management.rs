@@ -69,6 +69,8 @@ pub fn safe_package(p: &str) -> bool {
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Report {
+    pub runtime_sequence: Option<i64>,
+    pub profile_fingerprint: Option<String>,
     pub foreground_user: Option<bool>,
     pub profile_capabilities: Option<Vec<String>>,
     pub app_signer_sha256: Option<String>,
@@ -341,18 +343,59 @@ pub async fn sync(
         return Err(bad("Invalid management report values"));
     }
     let db = app.db.lock().unwrap();
+    crate::runtime::fence(&db, &id, &headers)?;
     let (revision, policy) = read(&db, &id)?;
     if r.revision > revision {
         return Err(bad("Unknown policy revision"));
     }
-    let changed = db.execute(
-        "UPDATE devices SET management_report=? WHERE id=? AND revoked=0",
-        params![serde_json::to_string(r).unwrap(), id],
+    let multi: bool = db.query_row(
+        "SELECT profiles_enabled OR primary_device_id IS NOT NULL FROM devices WHERE id=?",
+        [&id],
+        |r| r.get(0),
     )?;
+    if multi && let Some(f) = r.profile_fingerprint.as_deref() {
+        if !crate::runtime::fingerprint(f) {
+            return Err(bad("Invalid profile identity"));
+        }
+        crate::profiles::check_fingerprint(&db, &id, f)?;
+        db.execute("UPDATE devices SET profile_fingerprint=? WHERE id=? AND (profile_fingerprint IS NULL OR profile_fingerprint=?)",params![f,id,f])?;
+        let matches: bool = db.query_row(
+            "SELECT profile_fingerprint=? FROM devices WHERE id=?",
+            params![f, id],
+            |r| r.get(0),
+        )?;
+        if !matches {
+            return Err(Error(
+                StatusCode::CONFLICT,
+                "This pairing belongs to another Android profile",
+            ));
+        }
+    }
+    let ordered = if headers.contains_key("x-bungee-instance") {
+        if let Some(seq) = r.runtime_sequence.filter(|v| *v > 0) {
+            db.execute("UPDATE device_runtimes SET report_sequence=? WHERE device_id=? AND report_sequence<?",params![seq,id,seq])?==1
+        } else if serde_json::from_slice::<Value>(&body)
+            .is_ok_and(|v| v["report"].as_object().is_some_and(|r| r.is_empty()))
+        {
+            false
+        } else {
+            return Err(bad("A runtime report sequence is required"));
+        }
+    } else {
+        true
+    };
+    let changed = if ordered {
+        db.execute(
+        "UPDATE devices SET management_report=?,management_report_at=? WHERE id=? AND revoked=0",
+        params![serde_json::to_string(r).unwrap(), now(), id],
+    )?
+    } else {
+        1
+    };
     if changed != 1 {
         return Err(denied());
     }
-    if let Some(caps) = &r.profile_capabilities {
+    if ordered && let Some(caps) = &r.profile_capabilities {
         db.execute(
             "UPDATE devices SET capabilities=? WHERE id=?",
             params![serde_json::to_string(caps).unwrap(), id],
@@ -364,7 +407,7 @@ pub async fn sync(
         |r| r.get(0),
     )?;
     Ok(Json(
-        json!({"server_version":crate::release::version(),"app_update_preparation":crate::app_updates::preparation(),"app_update":crate::app_updates::for_signer(r.app_signer_sha256.as_deref()),"revision":revision,"policy":if companion {Policy::default()} else {policy.reversible()},"profile_companion":companion,"gps_epoch":epoch,"photo_epoch":db.query_row("SELECT photo_epoch FROM devices WHERE id=?",[&id],|r|r.get::<_,String>(0))?,"server_time":now(),"persistent_controls_enabled":false}),
+        json!({"server_version":crate::release::version(),"app_update_preparation":crate::app_updates::preparation(),"app_update":crate::app_updates::for_signer(r.app_signer_sha256.as_deref()),"revision":revision,"policy":if companion {Policy::default()} else {policy.reversible()},"profile_companion":companion,"profile":crate::profiles::metadata(&db,&id)?,"report_accepted":ordered,"gps_epoch":epoch,"photo_epoch":db.query_row("SELECT photo_epoch FROM devices WHERE id=?",[&id],|r|r.get::<_,String>(0))?,"server_time":now(),"persistent_controls_enabled":false}),
     ))
 }
 #[cfg(test)]

@@ -7,7 +7,8 @@ import {
 import { api } from "./api";
 import { RecoveryMessagePreview } from "./RecoveryMessagePreview";
 import { RecoveryPhotos } from "./RecoveryPhotos";
-import { ProfileCompanions, type ProfileAgent } from "./ProfileCompanions";
+import { ProfileSetup } from "./ProfileSetup";
+import type { PhoneProfiles } from "./PhoneStatus";
 
 type Policy = {
   auto_resume: boolean;
@@ -60,7 +61,7 @@ const time = (n: number) => new Date(n * 1000).toLocaleString();
 export function DeviceCare({
   device,
 }: {
-  device: { id: string; name: string; profiles?: ProfileAgent[] };
+  device: PhoneProfiles;
 }) {
   const [saved, setSaved] = useState<Saved | null>(null),
     [draft, setDraft] = useState<Policy | null>(null);
@@ -345,7 +346,7 @@ export function DeviceCare({
               </p>
             </section>
           </div>
-          <ProfileCompanions key={`profiles-${device.id}`} deviceId={device.id} deviceName={device.name} profiles={device.profiles||[]}/>
+          <ProfileSetup key={`profiles-${device.id}`} phone={device}/>
           <RecoveryPhotos key={device.id} deviceId={device.id} />
         </>
       )}

@@ -16,6 +16,13 @@ class ProfileCompanionPolicyTest {
         bundle.getJSONObject("profile").put("primary_device_id",parent).put("role","primary")
         assertThrows(IllegalArgumentException::class.java){ProfileCompanionPolicy.isCompanion(bundle)}
     }
+    @Test fun explicitMainIsTheRootAndCannotNameAnotherPhone() {
+        val id="33201124-a4e7-44d7-b07f-cf17fd11c8e7"
+        val bundle=JSONObject().put("device_id",id).put("profile",JSONObject().put("role","main").put("primary_device_id",id))
+        assertFalse(ProfileCompanionPolicy.isCompanion(bundle))
+        bundle.getJSONObject("profile").put("primary_device_id","2891420d-12ef-4de9-baf3-81a6ce9c7942")
+        assertThrows(IllegalArgumentException::class.java){ProfileCompanionPolicy.isCompanion(bundle)}
+    }
     @Test fun forgedHardwareAndLocationCommandsCannotExecuteInACompanion() {
         for(kind in listOf("locate","best_guess","ring","ring_flash","flash","lock","reboot")) {
             assertFalse(kind,ProfileCompanionPolicy.permits(true,kind))

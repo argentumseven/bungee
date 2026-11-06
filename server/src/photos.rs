@@ -52,6 +52,7 @@ pub async fn upload(
     let bytes = input.photo.validate()?;
     let mut db = app.db.lock().unwrap();
     let tx = db.transaction()?;
+    crate::runtime::fence(&tx, &id, &headers)?;
     let accepted = commit(&tx, &id, Some(&input.photo_epoch), &input.photo, &bytes)?;
     let epoch: String = tx.query_row("SELECT photo_epoch FROM devices WHERE id=?", [&id], |r| {
         r.get(0)

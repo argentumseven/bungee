@@ -344,7 +344,19 @@ pub fn verify_device(app: &App, headers: &HeaderMap, path: &str, body: &[u8]) ->
         .decode(get("x-bungee-signature")?)
         .map_err(|_| denied())?;
     let sig = Signature::from_der(&sig).map_err(|_| denied())?;
-    let message = format!("BUNGEE-V1\nPOST\n{path}\n{time}\n{nonce}\n{}", hash(body));
+    let message = if let Some(instance) = headers.get("x-bungee-instance") {
+        let instance = instance.to_str().map_err(|_| denied())?;
+        let runtime = get("x-bungee-runtime")?;
+        if instance.len() > 64 || runtime.len() != 43 {
+            return Err(denied());
+        }
+        format!(
+            "BUNGEE-V2\nPOST\n{path}\n{time}\n{nonce}\n{}\n{instance}\n{runtime}",
+            hash(body)
+        )
+    } else {
+        format!("BUNGEE-V1\nPOST\n{path}\n{time}\n{nonce}\n{}", hash(body))
+    };
     verify
         .verify(message.as_bytes(), &sig)
         .map_err(|_| denied())?;
@@ -367,10 +379,13 @@ pub fn verify_device(app: &App, headers: &HeaderMap, path: &str, body: &[u8]) ->
     if inserted != 1 {
         return Err(Error(StatusCode::CONFLICT, "Request already used"));
     }
-    db.execute(
+    if path != "/v1/runtime" {
+        crate::runtime::fence(&db, id, headers)?;
+        db.execute(
         "UPDATE devices SET last_contact=MAX(COALESCE(last_contact,0),?) WHERE id=? AND revoked=0",
         params![now(), id],
     )?;
+    }
     Ok(id.into())
 }
 

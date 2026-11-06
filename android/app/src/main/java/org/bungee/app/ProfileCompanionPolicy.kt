@@ -8,10 +8,11 @@ object ProfileCompanionPolicy {
     fun isCompanion(bundle: JSONObject): Boolean {
         if (bundle.isNull("profile")) return false
         val profile = bundle.getJSONObject("profile")
-        require(profile.getString("role") == "companion") { "Unsupported profile role" }
+        val companion = profile.getString("role") == "companion"
+        require(companion || profile.getString("role") == "main") { "Unsupported profile role" }
         val parent = profile.getString("primary_device_id")
-        require(runCatching { java.util.UUID.fromString(parent).toString() == parent }.getOrDefault(false) && parent != bundle.optString("device_id")) { "Invalid primary phone" }
-        return true
+        require(runCatching { java.util.UUID.fromString(parent).toString() == parent }.getOrDefault(false) && (if (companion) parent != bundle.optString("device_id") else parent == bundle.optString("device_id"))) { "Invalid primary phone" }
+        return companion
     }
     fun permits(companion: Boolean, command: String) = !companion || command in commands
 }

@@ -10,7 +10,7 @@ const caps=['locate','flash','ring','message','clear_message','stop_all'];
 const invite=(f,parent,name='Work')=>f.admin('/api/enrollments','POST',{name,wg_public_key:randomBytes(32).toString('base64'),primary_device_id:parent});
 
 test('one phone groups independent profile credentials and enforces the action-only role',async t=>{
- const f=await fixture(t),main=await phone(f,{name:'My phone',capabilities:caps});
+ const f=await fixture(t),main=await phone(f,{profiles:true,name:'My phone',capabilities:caps});
  const profile=await phone(f,{name:'Sandbox',primaryDeviceId:main.id,capabilities:caps});
  assert.equal(profile.bundle.profile.primary_device_id,main.id);assert.equal(profile.bundle.profile.primary_name,'My phone');
  const at=Math.floor(Date.now()/1000);
@@ -46,7 +46,7 @@ test('one phone groups independent profile credentials and enforces the action-o
 });
 
 test('profile photos join the same phone album with source labels and independent erasure fences',async t=>{
- const f=await fixture(t),main=await phone(f),profile=await phone(f,{name:'Sandbox',primaryDeviceId:main.id});
+ const f=await fixture(t),main=await phone(f,{profiles:true}),profile=await phone(f,{name:'Sandbox',primaryDeviceId:main.id});
  const jpeg=await readFile('tests/fixtures/recovery-test.jpg');
  const photo={id:randomUUID(),captured_at:Math.floor(Date.now()/1000),failed_attempts:3,reason:'failed_unlock',jpeg:jpeg.toString('base64')};
  const body={photo_epoch:profile.photoEpoch,photo};
@@ -66,7 +66,7 @@ test('profile photos join the same phone album with source labels and independen
 });
 
 test('primary disconnection and archive deletion include all linked profile credentials and saved photos',async t=>{
- const f=await fixture(t),main=await phone(f),profile=await phone(f,{primaryDeviceId:main.id});
+ const f=await fixture(t),main=await phone(f,{profiles:true}),profile=await phone(f,{primaryDeviceId:main.id});
  assert.equal((await f.admin(`/api/devices/${main.id}/disconnect`,'POST',{})).status,200);
  assert.equal((await main.request('/v1/commands',{})).status,401);
  assert.equal((await profile.request('/v1/commands',{})).status,401);
@@ -76,7 +76,7 @@ test('primary disconnection and archive deletion include all linked profile cred
 });
 
 test('phone revocation disables profile access while an unrelated phone stays connected',async t=>{
- const f=await fixture(t),main=await phone(f),profile=await phone(f,{primaryDeviceId:main.id}),other=await phone(f);
+ const f=await fixture(t),main=await phone(f,{profiles:true}),profile=await phone(f,{primaryDeviceId:main.id}),other=await phone(f);
  assert.equal((await f.admin(`/api/devices/${main.id}`,'DELETE')).status,200);
  assert.equal((await profile.request('/v1/commands',{})).status,401);
  assert.equal((await other.request('/v1/commands',{})).status,200);
@@ -85,7 +85,7 @@ test('phone revocation disables profile access while an unrelated phone stays co
 });
 
 test('profile-local message approval refreshes capabilities without sending device telemetry',async t=>{
- const f=await fixture(t),main=await phone(f),profile=await phone(f,{primaryDeviceId:main.id,capabilities:[]});
+ const f=await fixture(t),main=await phone(f,{profiles:true}),profile=await phone(f,{primaryDeviceId:main.id,capabilities:[]});
  assert.equal((await f.admin(`/api/devices/${profile.id}/commands`,'POST',{kind:'message',message:'Hello'})).status,400);
  const update=report=>profile.request('/v1/sync',{report});
  assert.equal((await update({recovery_consent:true,profile_capabilities:['message','clear_message','stop_all']})).status,200);
@@ -97,18 +97,18 @@ test('profile-local message approval refreshes capabilities without sending devi
 });
 
 test('an older app cannot redeem a profile invitation as a normal telemetry phone',async t=>{
- const f=await fixture(t),main=await phone(f),wg=randomBytes(32).toString('base64');
+ const f=await fixture(t),main=await phone(f,{profiles:true}),wg=randomBytes(32).toString('base64');
  const invitation=await (await f.admin('/api/enrollments','POST',{name:'Sandbox',wg_public_key:wg,primary_device_id:main.id})).json();
  const keys=generateKeyPairSync('ec',{namedCurve:'P-256'}),publicKey=keys.publicKey.export({type:'spki',format:'der'}).toString('base64');
  const proof=sign('sha256',Buffer.from(`BUNGEE-ENROLL-V1\n${invitation.token}\n${wg}\n${publicKey}`),keys.privateKey).toString('base64');
  const body={token:invitation.token,public_key:publicKey,wg_public_key:wg,proof,capabilities:['locate']};
  assert.equal((await f.device('/v1/enroll',body)).status,400);
- assert.equal((await f.device('/v1/enroll',{...body,profile_companion:true})).status,200,'the rejected legacy request does not consume the invitation');
+ assert.equal((await f.device('/v1/enroll',{...body,profile_companion:true,runtime_protocol:1,profile_fingerprint:randomBytes(32).toString("hex")})).status,200,'the rejected legacy request does not consume the invitation');
  assert.equal(f.sql('SELECT telemetry FROM devices WHERE id=?',[invitation.device_id])[0][0],null);
 });
 
 test('eight companion slots are enforced through reconnect while an enabled profile can rotate its key',async t=>{
- const f=await fixture(t),main=await phone(f),retired=await phone(f,{name:'Retired',primaryDeviceId:main.id});
+ const f=await fixture(t),main=await phone(f,{profiles:true}),retired=await phone(f,{name:'Retired',primaryDeviceId:main.id});
  assert.equal((await f.admin(`/api/devices/${retired.id}/disconnect`,'POST',{})).status,200);
  const active=[];
  for(let n=0;n<8;n++)active.push(await phone(f,{name:`Profile ${n+1}`,primaryDeviceId:main.id}));
@@ -123,7 +123,7 @@ test('eight companion slots are enforced through reconnect while an enabled prof
 });
 
 test('simultaneously connected companions keep reports and messages separate from a delayed main profile',async t=>{
- const f=await fixture(t),main=await phone(f),first=await phone(f,{name:'Sandbox',primaryDeviceId:main.id,capabilities:['message']}),second=await phone(f,{name:'Work',primaryDeviceId:main.id,capabilities:['message']});
+ const f=await fixture(t),main=await phone(f,{profiles:true}),first=await phone(f,{name:'Sandbox',primaryDeviceId:main.id,capabilities:['message']}),second=await phone(f,{name:'Work',primaryDeviceId:main.id,capabilities:['message']});
  const stale=Math.floor(Date.now()/1000)-600;f.sql('UPDATE devices SET last_contact=? WHERE id=?',[stale,main.id]);
  const report=label=>({report:{foreground_user:true,camera:{armed:true,pending:0,dropped:0,status:label,failed_in_row:0,queued:[],reported_at:Math.floor(Date.now()/1000)}}});
  const responses=await Promise.all([first.request('/v1/sync',report('Sandbox ready')),second.request('/v1/sync',report('Work ready'))]);

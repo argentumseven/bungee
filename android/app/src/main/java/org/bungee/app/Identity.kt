@@ -62,6 +62,26 @@ class Identity(context: Context) {
     val wgPrivate: String get() = secret("wg_private")!!
     val publicKey: String get() = encode(keys.getCertificate("bungee-signing").publicKey.encoded)
     val profileCompanion: Boolean get() = bundle?.let { ProfileCompanionPolicy.isCompanion(JSONObject(it)) } ?: false
+    val profileWorkflow: Boolean get() = bundle?.let { !JSONObject(it).isNull("profile") } ?: false
+    internal val runtimeLockFile get() = java.io.File(appContext.filesDir, "runtime.lock")
+    internal var runtimeState: String?
+        get() = secret("runtime_lease")
+        set(value) { if (value != null) putSecret("runtime_lease", value) }
+    fun profileFingerprint(): String? {
+        val b = bundle?.let { JSONObject(it) } ?: return null
+        val p = b.optJSONObject("profile") ?: return null
+        val userId = android.provider.Settings.Secure.getString(appContext.contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+        check(!userId.isNullOrEmpty()) { "Android profile identity is unavailable" }
+        return ProfileIdentity.fingerprint(userId, b.getJSONObject("wireguard").getString("server_public_key"), p.getString("primary_device_id"))
+    }
+    fun adoptProfile(profile: JSONObject?) {
+        if (profile == null) return
+        val b = JSONObject(checkNotNull(bundle))
+        val wasCompanion = profileCompanion
+        b.put("profile", profile)
+        check(ProfileCompanionPolicy.isCompanion(b) == wasCompanion) { "The server cannot change this installation’s profile role" }
+        bundle = b.toString()
+    }
     val primaryName: String? get() = bundle?.let { JSONObject(it).optJSONObject("profile")?.optString("primary_name") }
     var bundle: String?
         get() = secret("bundle")
