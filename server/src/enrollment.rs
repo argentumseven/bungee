@@ -327,11 +327,11 @@ fn issue_for(
             return Err(bad("Choose an enrolled primary phone for this profile"));
         }
         let count: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM devices WHERE primary_device_id=? AND revoked=0 AND wg_key<>?",
-            params![parent, input.wg_public_key],
+            "SELECT COUNT(*) FROM devices WHERE primary_device_id=? AND revoked=0 AND wg_key<>? AND (? IS NULL OR id<>?)",
+            params![parent, input.wg_public_key, replace, replace],
             |r| r.get(0),
         )?;
-        if replace.is_none() && count >= 8 {
+        if count >= 8 {
             return Err(bad("A phone can have up to eight profile companions"));
         }
         name

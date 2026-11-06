@@ -106,3 +106,35 @@ test('an older app cannot redeem a profile invitation as a normal telemetry phon
  assert.equal((await f.device('/v1/enroll',{...body,profile_companion:true})).status,200,'the rejected legacy request does not consume the invitation');
  assert.equal(f.sql('SELECT telemetry FROM devices WHERE id=?',[invitation.device_id])[0][0],null);
 });
+
+test('eight companion slots are enforced through reconnect while an enabled profile can rotate its key',async t=>{
+ const f=await fixture(t),main=await phone(f),retired=await phone(f,{name:'Retired',primaryDeviceId:main.id});
+ assert.equal((await f.admin(`/api/devices/${retired.id}/disconnect`,'POST',{})).status,200);
+ const active=[];
+ for(let n=0;n<8;n++)active.push(await phone(f,{name:`Profile ${n+1}`,primaryDeviceId:main.id}));
+ assert.equal((await invite(f,main.id,'Ninth profile')).status,400);
+ assert.equal((await f.admin(`/api/devices/${retired.id}/reconnect`,'POST',{wg_public_key:randomBytes(32).toString('base64')})).status,400,'reconnect cannot reactivate a ninth companion');
+ assert.equal((await f.admin('/api/enrollments','POST',{name:'Duplicate',wg_public_key:active[1].bundle.wireguard.client_public_key,primary_device_id:main.id})).status,400,'one bound profile key cannot create a second binding');
+ const replacement=await f.admin(`/api/devices/${active[0].id}/reconnect`,'POST',{wg_public_key:randomBytes(32).toString('base64')});
+ assert.equal(replacement.status,200,'rotating an enabled profile keeps its reserved slot');
+ const bundle=await replacement.json();assert.equal(bundle.device_id,active[0].id);assert.equal(bundle.profile.primary_device_id,main.id);
+ assert.equal((await active[0].request('/v1/commands',{})).status,401,'the earlier profile identity is retired before its replacement pairs');
+ assert.deepEqual(f.sql('SELECT count(*) FROM devices WHERE primary_device_id=? AND revoked=0',[main.id]),[[8]]);
+});
+
+test('simultaneously connected companions keep reports and messages separate from a delayed main profile',async t=>{
+ const f=await fixture(t),main=await phone(f),first=await phone(f,{name:'Sandbox',primaryDeviceId:main.id,capabilities:['message']}),second=await phone(f,{name:'Work',primaryDeviceId:main.id,capabilities:['message']});
+ const stale=Math.floor(Date.now()/1000)-600;f.sql('UPDATE devices SET last_contact=? WHERE id=?',[stale,main.id]);
+ const report=label=>({report:{foreground_user:true,camera:{armed:true,pending:0,dropped:0,status:label,failed_in_row:0,queued:[],reported_at:Math.floor(Date.now()/1000)}}});
+ const responses=await Promise.all([first.request('/v1/sync',report('Sandbox ready')),second.request('/v1/sync',report('Work ready'))]);
+ for(const response of responses)assert.equal(response.status,200);
+ const devices=await (await f.admin('/api/devices')).json(),device=devices.devices[0];
+ assert.equal(devices.devices.length,1);assert.equal(device.last_contact,stale,'a companion does not make the main profile appear fresh');
+ assert.equal(device.management,null);
+ for(const [p,label]of [[first,'Sandbox ready'],[second,'Work ready']])assert.equal(device.profiles.find(r=>r.id===p.id).management.camera.status,label);
+ const queued=await Promise.all([f.admin(`/api/devices/${first.id}/commands`,'POST',{kind:'message',message:'Sandbox only'}),f.admin(`/api/devices/${second.id}/commands`,'POST',{kind:'message',message:'Work only'})]);
+ for(const response of queued)assert.equal(response.status,200);
+ const polled=await Promise.all([first.request('/v1/commands',{}).then(r=>r.json()),second.request('/v1/commands',{}).then(r=>r.json())]);
+ assert.deepEqual(polled.map(r=>r.commands.map(c=>c.payload.message)),[['Sandbox only'],['Work only']]);
+ assert.notEqual(polled[0].commands[0].id,polled[1].commands[0].id);
+});

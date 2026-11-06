@@ -4,6 +4,8 @@ One physical phone stays one device in the manager. Its main installation remain
 
 A linked companion uses the same Bungee APK inside another Android user. It handles the actions that must occur in that user's sandbox: recovery messages, message dismissal, locally armed failed-unlock photos, and their acknowledgements/readiness. It does not collect or send GPS, battery or a second device/network history. The server rejects device telemetry and shared hardware commands from companion credentials even if a client claims those capabilities.
 
+Each phone supports eight enabled companion links in addition to its main installation. Pending invitations reserve a slot until canceled; disconnected companions do not. Reconnecting an existing enabled profile keeps its slot. Reconnecting a disconnected profile needs a free slot.
+
 ## Setup
 
 1. Pair the main installation normally. In its **Device care → Android profiles**, choose **Add a profile companion**.
@@ -16,6 +18,10 @@ The companion UI omits GPS sharing and never requests location permission. Its o
 ## Daily use
 
 The manager lists companions underneath their phone in **Device care → Android profiles**. Send or clear a message on the named profile directly. Messages are queued only for that profile's credentials, and Android's notification permissions/settings govern their display. A recent foreground-user indicator describes the last report; it is not a guarantee that the user is still active. Message delivery does not automatically switch users or change Android locks.
+
+Concurrent connections from the main installation and several companions are expected. Main telemetry authority is fixed, rather than elected by response time: companion activity does not refresh the main installation’s contact or telemetry timestamps, and a companion never fills in its GPS, battery or network history. Profile messages remain addressed to their selected profile even when delivery is delayed. Two recent foreground claims do not cause automatic routing or duplicate a shared hardware action.
+
+Each installation has independent credentials, and a bound WireGuard key cannot be enrolled twice. Android also runs one connection worker per installation, with saved command receipts to prevent ordinary redelivery from repeating an action. These guards do not constitute server-side exclusive-session fencing for deliberately cloned credentials. Foreground reports are snapshots; the server does not select a single foreground winner or reject an older same-profile report that arrives late. Profile names are labels, not verified Android user identities.
 
 Phone-wide **Stop all Bungee actions** also queues a stop for connected, locally approved companions, clearing their pending recovery actions and messages. Stopping one companion leaves the main installation unchanged.
 
