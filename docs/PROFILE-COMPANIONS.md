@@ -18,7 +18,7 @@ For a multi-user OS such as GrapheneOS, enable **This phone uses multiple sandbo
 
 For a phone already paired normally, open **Device care → Set up sandbox profiles**. Select the Android user containing its existing installation, then choose **Use … as main**. Open the updated Bungee app in that user and connect. The dashboard waits for its profile identity confirmation before allowing a companion invitation. To make a different installation main, pair that installation as the phone first. Main authority is fixed after setup; connection timing cannot change it.
 
-Use Bungee **1.1.18 or newer** in every installation participating in this workflow. Upgrading an existing normal pairing does not require enabling profiles or resetting its saved history.
+Use Bungee **1.1.18 or newer** in every installation participating in this workflow. Upgrading an existing normal pairing does not require enabling profiles or resetting its saved history. Bungee 1.1.19 also handles upgrading the app before the server: it retries legacy compatibility after one minute, and selecting profile mode immediately requires the runtime protocol. Once runtime support is confirmed, that binding never falls back to the legacy protocol.
 
 ## Add a companion deliberately
 

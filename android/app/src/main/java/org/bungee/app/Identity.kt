@@ -74,6 +74,10 @@ class Identity(context: Context) {
         check(!userId.isNullOrEmpty()) { "Android profile identity is unavailable" }
         return ProfileIdentity.fingerprint(userId, b.getJSONObject("wireguard").getString("server_public_key"), p.getString("primary_device_id"))
     }
+    fun markRuntimeRequired() = synchronized(identityInitialization) {
+        val b=JSONObject(checkNotNull(bundle))
+        if (b.optInt("runtime_protocol") != 1) bundle=b.put("runtime_protocol",1).toString()
+    }
     fun adoptProfile(profile: JSONObject?) {
         if (profile == null) return
         val b = JSONObject(checkNotNull(bundle))

@@ -14,7 +14,7 @@ object RuntimeLease {
     private var lock: RuntimeProcessLock? = null
     private var realm = ""
     private var lease: Lease? = null
-    private var legacyRealm: String? = null
+    private val legacy = LegacyRuntimeWindow()
     @Volatile var conflict = false
         private set
     fun nextSequence() = sequence.incrementAndGet()
@@ -24,7 +24,7 @@ object RuntimeLease {
         val bundle = JSONObject(checkNotNull(identity.bundle))
         val nextRealm = bundle.getString("device_id") + ":" + bundle.getJSONObject("wireguard").getString("preshared_key")
         if (nextRealm != realm) { realm = nextRealm; lease = null; conflict = false }
-        if (legacyRealm == realm) return null
+        if (legacy.allows(realm, identity.profileWorkflow, bundle.optInt("runtime_protocol") == 1, SystemClock.elapsedRealtime())) return null
         lease?.takeIf { it.renewAt > SystemClock.elapsedRealtime() }?.let { return it }
         val saved = identity.runtimeState?.let { JSONObject(it) }?.takeIf { it.optString("realm") == realm }
         // Save the candidate before sending. A lost reply can then be retried exactly,
@@ -36,11 +36,13 @@ object RuntimeLease {
         identity.profileFingerprint()?.let { request.put("profile_fingerprint", it) }
         identity.runtimeState = JSONObject().put("realm", realm).put("active", saved?.optString("active") ?: "").put("pending", request).toString()
         try { acquire(request) } catch (e: HomeApiException) {
-            if (e.status == 404 && !identity.profileWorkflow && bundle.optInt("runtime_protocol") == 0) { legacyRealm = realm; return null }
+            if (e.status == 404 && !identity.profileWorkflow && bundle.optInt("runtime_protocol") == 0) { legacy.observeOldServer(realm, SystemClock.elapsedRealtime()); return null }
             if (e.status == 423 || e.status == 409) conflict = true
             throw e
         }
+        identity.markRuntimeRequired()
         identity.runtimeState = JSONObject().put("realm", realm).put("active", candidate).toString()
+        legacy.clear()
         conflict = false
         return Lease(instance, candidate, SystemClock.elapsedRealtime() + 60000).also { lease = it }
     }
