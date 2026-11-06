@@ -50,6 +50,8 @@ Android may restore the service through `START_STICKY`. An encrypted checkpoint 
 
 A new visible session takes the current OS failure count as its baseline and requires three new failures. Same-boot restoration preserves that baseline. Successful credential entry resets the streak. Android's watch-login callbacks cover eligible device/profile credentials for this user; biometric failures and other app logins may be excluded.
 
+A different Android user needs its own locally armed [profile companion](PROFILE-COMPANIONS.md). It is grouped under the same phone and does not duplicate device telemetry. It cannot observe that user's first login before its own service can run after unlock.
+
 After each capture attempt, another three new failed credential entries can trigger a further attempt. Attempts are at least 30 seconds apart and capped at 20 per rolling hour, including failed acquisitions and local tests. Repeated callbacks without new credential entries cannot trigger more pictures. This is event-driven; no timer-driven capture retry loop runs. **Take a labelled test photo** shares the rate budget and records `local_test`. Failed-unlock capture requires the phone locked; the local test requires Bungee visible and unlocked.
 
 Capture has an eight-second timeout and closes the camera, reader and session on completion, error or cancellation. It uses no flash or microphone. Camera privacy controls, another camera app, background/battery restrictions and hardware availability can prevent output.

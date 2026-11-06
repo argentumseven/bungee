@@ -53,7 +53,7 @@ There is no remote unattended enrollment and no server-generated phone private k
 
 ## Signed device requests
 
-Each POST includes `X-Bungee-Device`, `X-Bungee-Time` (Unix seconds), `X-Bungee-Nonce` (random UUID), and a base64 DER ECDSA/SHA-256 signature of UTF-8:
+Legacy requests and `/v1/runtime` registration include `X-Bungee-Device`, `X-Bungee-Time` (Unix seconds), `X-Bungee-Nonce` (random UUID), and a base64 DER ECDSA/SHA-256 signature of UTF-8:
 
 ```text
 BUNGEE-V1
@@ -65,6 +65,27 @@ POST
 ```
 
 The server verifies the enrolled P-256 key, a ±120-second timestamp window, and a durable per-device nonce. Used nonces remain for 300 seconds, longer than the validity window. Devices need a reasonably correct system clock. Transport authentication comes from WireGuard’s pinned peer key plus the per-device preshared secret. Legacy peers without a PSK are omitted from gateway configuration; their existing history is preserved for owner review. Device responses are trusted only within that channel; there is no public device endpoint and redirects are disabled in the Android client.
+
+Updated 1.1.18 installations register a process at `/v1/runtime`, using the enrolled signing key. The client creates a random process UUID and 256-bit lease secret; SQLite stores only its SHA-256 hash, monotonic generation, expiration, last accepted report sequence and bounded conflict metadata. The lease expires after 120 seconds and is renewed by the active process. An unexpired different holder needs proof of the previous secret for a handoff; an unapproved duplicate receives HTTP 423 without refreshing presence. HTTP 428 requires runtime registration before a request may proceed.
+
+After registration, signed requests additionally include `X-Bungee-Instance` and `X-Bungee-Runtime`. Their exact values are bound into the signature:
+
+```text
+BUNGEE-V2
+POST
+<exact path>
+<timestamp>
+<nonce>
+<lowercase SHA-256 hex of exact request bytes>
+<process UUID from X-Bungee-Instance>
+<lease secret from X-Bungee-Runtime>
+```
+
+Requiring a runtime is a one-way upgrade for an enrolled binding. A legacy signature cannot bypass it; reconnecting explicitly retires the old binding and runtime. Existing older normal phones can continue using V1 until upgraded. New sandbox pairings require `runtime_protocol: 1` and a scoped profile identity. That identity is SHA-256 of `BUNGEE-PROFILE-V1\n<ANDROID_ID>\n<home WireGuard public key>\n<physical phone ID>`; the raw Android user ID is never sent. Active identities must be unique within their physical phone. This detects cooperating apps accidentally linked twice, not a malicious OS that can impersonate its identifiers.
+
+Android holds an OS file lock before reading encrypted active/staged handoff state. It persists a candidate before registration and reuses that candidate after repeated lost replies or process deaths, proving either the prior active secret or the staged one. The server checks the current runtime again under the same database lock/transaction as telemetry, photo, sync, command offer, execution claim and receipt mutations. Late management reports cannot overwrite a newer accepted report sequence. Runtime-protected `/v1/command-check` atomically grants one execution claim per command, including across handoffs; a lost outcome is not automatically repeated. Already-started physical actions remain subject to their existing bounded duration and local Stop controls.
+
+A valid signature proves the paired installation, not a hardware identity. Someone able to copy all signing keys, lease secrets and OS identifiers remains outside these cooperating-client safeguards. Separate legitimate Android users have separate signing keys, peers, leases and profile action queues; only the explicitly chosen main installation supplies device telemetry. See [the profile workflow and concurrency contract](PROFILE-COMPANIONS.md).
 
 Commands are typed data, never executable scripts. Local consent and Android permissions are checked again at execution. The phone persists a receipt before acting and never repeats a saved command ID. A process crash may leave an action uncertain; it will not trigger a lock or alarm twice. Alarms last at most 30 seconds and respect Android audio controls. Command queue, delivery, receipt, failure, rejection, and expiration are distinct. Reboot is disabled at queue and phone execution. Old pending/delivered reboots are rejected before polling. No reboot, shutdown or wipe endpoint can enqueue an action.
 

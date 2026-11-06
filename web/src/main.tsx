@@ -44,6 +44,9 @@ import {
 } from "./PrivateMap";
 import { DeviceRecords } from "./DeviceRecords";
 import { DeviceCare } from "./DeviceCare";
+import { ProfileCompanions } from "./ProfileCompanions";
+import { PhoneHeader, ProfileTabs, ConnectionBadge, phoneConnection, type PhoneProfiles } from "./PhoneStatus";
+import { MainProfileChoice } from "./ProfileSetup";
 import { AppearanceControl, useAppearance } from "./Appearance";
 import { RecoveryMessagePreview } from "./RecoveryMessagePreview";
 import { PasswordSettings } from "./PasswordSettings";
@@ -61,7 +64,7 @@ type Location = {
   system_vpn?: boolean | null;
   observed_at: number;
 };
-type Device = {
+type Device = PhoneProfiles & {
   id: string;
   name: string;
   address: string;
@@ -136,6 +139,8 @@ function App() {
     [selected, setSelected] = useState(""),
     [page, setPage] = useState("Overview");
   const [devicesExpanded,setDevicesExpanded]=useState(true);
+  const [profileView,setProfileView]=useState("");
+  const [multiProfile,setMultiProfile]=useState(false),[mainProfile,setMainProfile]=useState("Owner");
   const [recordsDevice,setRecordsDevice]=useState("");
   const [pairingTarget,setPairingTarget]=useState<Device|null>(null);
   const [trackingTab,setTrackingTab]=useState("Current estimate");
@@ -169,11 +174,13 @@ function App() {
       setError((e as Error).message);
     }
   };
+  useEffect(()=>{if(profileView && device && profileView!==device.id && !device.profiles?.some(p=>p.id===profileView))setProfileView("");},[device,profileView]);
   useEffect(() => {
     api("/session")
       .then(() => setAuth(true))
       .catch(() => setAuth(false));
   }, []);
+  useEffect(()=>{window.scrollTo({top:0,left:0,behavior:"instant"});},[page,selected,profileView]);
   useEffect(()=>{
     const show=()=>{setPage("Settings");window.setTimeout(()=>document.getElementById("map-downloads")?.scrollIntoView({behavior:"smooth",block:"start"}),0);};
     window.addEventListener("bungee:maps",show);
@@ -185,7 +192,7 @@ function App() {
       setDevices([]);
       setCommands([]);
       setEvents([]);
-      setSelected("");
+      setSelected("");setProfileView("");setMultiProfile(false);setMainProfile("Owner");
       setPage("Overview");
       setTrackingTab("Current estimate");
       setModal(null);
@@ -202,7 +209,8 @@ function App() {
     if (!auth) return;
     void load();
     const id = setInterval(load, 5000);
-    return () => clearInterval(id);
+    const refresh=()=>void load();window.addEventListener("bungee:refresh",refresh);
+    return () => {clearInterval(id);window.removeEventListener("bungee:refresh",refresh);};
   }, [auth]);
   useEffect(() => {
     if (auth && page === "Activity")
@@ -287,7 +295,7 @@ function App() {
     try {
       const data = await api("/enrollments", {
         method: "POST",
-        body: JSON.stringify({ name, wg_public_key: wgKey.trim() }),
+        body: JSON.stringify({ name, wg_public_key: wgKey.trim(), ...(multiProfile?{main_profile_name:mainProfile}:{}) }),
       });
       setBundle(JSON.stringify(data));
       await load();
@@ -336,6 +344,7 @@ function App() {
     setBundle("");
     setQr(null);
     setPreviousWgKey("");
+    setMultiProfile(false);setMainProfile("Owner");
     setError("");
   }
   if (auth === null)
@@ -454,7 +463,7 @@ function App() {
               {name === "Devices" && (
                 <span className="nav-count">{active.length}</span>
               )}
-            </button>{name==="Devices" && devicesExpanded && <div className="nav-phones" aria-label="Paired phones">{active.slice(0,5).map(d=><button key={d.id} className={page==="Devices" && device?.id===d.id ? "nav-item active":"nav-item"} onClick={()=>{setSelected(d.id);setPage("Devices");}}><i className={`status-dot ${online(d)?"":"offline"}`} />{d.name}</button>)}</div>}</React.Fragment>
+            </button>{name==="Devices" && devicesExpanded && <div className="nav-phones" aria-label="Paired phones">{active.slice(0,5).map(d=><div key={d.id}><button className={page==="Devices" && device?.id===d.id && !profileView ? "nav-item active":"nav-item"} onClick={()=>{setSelected(d.id);setProfileView("");setPage("Devices");}}><i className={`profile-dot ${phoneConnection(d).tone}`} aria-hidden="true"/>{d.name}</button>{d.profiles_enabled&&!!d.profiles?.length&&<div className="nav-profiles" aria-label={`${d.name} profiles`}><button className={device?.id===d.id&&profileView===d.id?"selected":""} onClick={()=>{setSelected(d.id);setProfileView(d.id);setPage("Devices");}}>{d.main_profile_name||"Main profile"}<small>Main</small></button>{d.profiles.map(p=><button key={p.id} className={device?.id===d.id&&profileView===p.id?"selected":""} onClick={()=>{setSelected(d.id);setProfileView(p.id);setPage("Devices");}}>{p.name}<ConnectionBadge phone={p} profile/></button>)}</div>}</div>)}</div>}</React.Fragment>
           ))}
 
         </nav>
@@ -547,8 +556,8 @@ function App() {
           )}
           {page === "Overview" && <section className="phone-overview" aria-label="Your devices">
             {active.length===0 && <section className="panel care-card"><h2>No paired phones</h2><p>Add a device and scan its invitation in Bungee.</p></section>}
-            {active.map(d=><button className="panel phone-card" key={d.id} onClick={()=>{setSelected(d.id);setPage("Devices");}}>
-              <Smartphone size={26}/><h2>{d.name}</h2><strong><i className={`status-dot ${online(d)?"":"offline"}`}/>{!d.enrolled?"Awaiting enrollment":online(d)?"Connected":"Offline"}</strong>
+            {active.map(d=><button className="panel phone-card" key={d.id} onClick={()=>{setSelected(d.id);setProfileView("");setPage("Devices");}}>
+              <Smartphone size={26}/><h2>{d.name}</h2><ConnectionBadge phone={d}/>
               <p>Battery {d.telemetry ? `${d.telemetry.battery}%${d.telemetry.charging?" · charging":""}`:"not reported"}</p>
               <p>{connectionLabel(d)}{d.management?.connection_health?.signal_dbm!=null?` · ${d.management.connection_health.signal_dbm} dBm`:" · signal strength unavailable"}</p>
               <small>{d.name}: last authenticated contact {ago(d.last_contact??d.last_seen)}</small><span>Open recovery controls →</span>
@@ -557,7 +566,8 @@ function App() {
           {page === "Devices" && (
             <>
               {active.length>1 && <label className="device-picker">Phone<select value={device?.id||""} onChange={e=>setSelected(e.target.value)}>{active.map(d=><option key={d.id} value={d.id}>{d.name}</option>)}</select></label>}
-              {device && <section className="panel care-card device-summary"><h2>{device.name} · {online(device)?"Connected":"Offline"}</h2><p>Last authenticated contact {ago(device.last_contact??device.last_seen)} · Battery {device.telemetry?`${device.telemetry.battery}%`:"not reported"} · {connectionLabel(device)}</p><button className="text-button" onClick={()=>setPage("Device care")}>Device care &amp; theft-photo status</button><button className="text-button" onClick={()=>setPage("Tracking")}>Tracking &amp; history</button><button className="secondary" onClick={()=>{setRecordsDevice(device.id);setPage("Pairing & history");}}>Pairing &amp; history settings</button></section>}
+              {device && <><PhoneHeader phone={device} networkLabel={connectionLabel(device)}><div className="phone-links"><button className="text-button" onClick={()=>setPage("Device care")}>{device.profiles_enabled?"Device care & profile setup":"Device care & theft-photo status"}</button><button className="text-button" onClick={()=>setPage("Tracking")}>Tracking &amp; history</button><button className="text-button" onClick={()=>{setRecordsDevice(device.id);setPage("Pairing & history");}}>Pairing &amp; history settings</button></div></PhoneHeader><ProfileTabs phone={device} selected={profileView} onSelect={setProfileView}/></>}
+              {device && profileView===device.id && device.profiles_enabled ? <DeviceCare key={`main-${device.id}`} device={device}/> : device?.profiles?.some(p=>p.id===profileView) ? <ProfileCompanions key={profileView} deviceId={device.id} deviceName={device.name} profiles={device.profiles.filter(p=>p.id===profileView)} detail/> : <>
               <div className="dashboard-grid device-detail-grid">
                 <section className="panel location-panel">
                   <div className="panel-heading">
@@ -690,7 +700,7 @@ function App() {
                     <Activity size={17} />
                   </div>
                   {commands
-                    .filter((c) => !device || c.device_id === device.id)
+                    .filter((c) => !device || c.device_id === device.id || device.profiles?.some(p=>p.id===c.device_id))
                     .slice(0, 20)
                     .map((c) => (
                       <div className="command-row" key={c.id}>
@@ -704,7 +714,7 @@ function App() {
                           )}
                         </span>
                         <div>
-                          <strong>{c.kind.replaceAll("_", " ")}</strong>
+                          <strong>{device?.profiles?.find(p=>p.id===c.device_id)?.name ? `${device.profiles.find(p=>p.id===c.device_id)!.name} · ` : ""}{c.kind.replaceAll("_", " ")}</strong>
                           <small>
                             {ago(c.created)}
                             {c.result && ` · ${c.result}`}
@@ -735,6 +745,7 @@ function App() {
                   )}
                 </section>
               </div>
+              </>}
             </>
           )}
           {page === "Tunnels" && <TunnelView devices={active}/>}
@@ -960,6 +971,8 @@ function App() {
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                 />
+                <label className="pair-profile-toggle"><input type="checkbox" checked={multiProfile} onChange={e=>setMultiProfile(e.target.checked)}/>This phone uses multiple sandbox profiles</label>
+                {multiProfile&&<div className="pair-main-choice"><MainProfileChoice value={mainProfile} onChange={setMainProfile}/><p>Open Bungee inside {mainProfile||"the selected Android profile"} and copy its public key below. This installation supplies phone-wide status. Pair companions separately after the main profile connects.</p></div>}
                 <label htmlFor="wg-key">Phone’s WireGuard public key</label>
                 <textarea
                   id="wg-key"

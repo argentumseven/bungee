@@ -6,7 +6,7 @@ import java.security.MessageDigest
 import java.util.UUID
 import org.bungee.transport.Transport
 
-class HomeApiException(val status: Int) : Exception(when (status) { 401 -> "The server rejected this phone’s pairing. Use Retry saved pairing or check the saved device in the manager."; 404 -> "The server could not find this request (HTTP 404). Check its version."; 429 -> "The server is busy; wait a moment and try again."; else -> "The server rejected the request (HTTP $status)." })
+class HomeApiException(val status: Int) : Exception(when (status) { 401 -> "The server rejected this phone’s pairing. Use Retry saved pairing or check the saved device in the manager."; 423 -> "Another instance of this profile is connected. Stop the duplicate or reconnect its saved profile."; 428 -> "This app instance must reconnect before continuing."; 404 -> "The server could not find this request (HTTP 404). Check its version."; 429 -> "The server is busy; wait a moment and try again."; else -> "The server rejected the request (HTTP $status)." })
 
 class HomeApi(private val identity: Identity, val clock: HomeClock = HomeClock()) {
     private val bundle get() = JSONObject(checkNotNull(identity.bundle) { "Not paired" })
@@ -15,6 +15,8 @@ class HomeApi(private val identity: Identity, val clock: HomeClock = HomeClock()
         val token = bundle.optString("token", "")
         val proof = "BUNGEE-ENROLL-V1\n$token\n${identity.wgPublic}\n${identity.publicKey}"
         val body = JSONObject().put("token", token).put("public_key", identity.publicKey)
+            .put("runtime_protocol", 1).apply { identity.profileFingerprint()?.let { put("profile_fingerprint", it) } }
+            .put("profile_companion", identity.profileCompanion)
             .put("wg_public_key", identity.wgPublic).put("proof", identity.sign(proof)).put("capabilities", JSONArray(capabilities))
         val result = try { request("/v1/enroll", body, signed = false, authorization = authorization) }
         catch (e: Exception) {
@@ -24,9 +26,11 @@ class HomeApi(private val identity: Identity, val clock: HomeClock = HomeClock()
             val existing = request("/v1/sync", JSONObject().put("report", JSONObject()), authorization = authorization)
             require(existing.has("revision") && existing.has("policy")) { "Registration could not be confirmed" }
             JSONObject().put("device_id", bundle.getString("device_id")).put("gps_epoch", existing.getString("gps_epoch"))
+                .put("profile_companion", existing.optBoolean("profile_companion", false))
                 .apply { existing.optString("photo_epoch").takeIf { it.isNotEmpty() }?.let { put("photo_epoch", it) } }
         }
         require(result.getString("device_id") == bundle.getString("device_id"))
+        require(result.optBoolean("profile_companion", false) == identity.profileCompanion) { "The server profile role differs from this invitation" }
         PrivacySends.fence.checked(authorization, { identity.requestsAllowed() }) {
             identity.reconcileGpsEpoch(result.getString("gps_epoch"))
             result.optString("photo_epoch").takeIf { it.isNotEmpty() }?.let { identity.reconcilePhotoEpoch(it) }
@@ -34,17 +38,27 @@ class HomeApi(private val identity: Identity, val clock: HomeClock = HomeClock()
             identity.bundle = bundle.apply { remove("token") }.toString()
         }
     }
-    fun request(path: String, body: JSONObject = JSONObject(), signed: Boolean = true, reservation: Long? = null, timeoutMillis: Long = 10000, deadlineElapsed: Long = Long.MAX_VALUE, authorization: DisclosureFence.Stamp = PrivacySends.fence.stamp()): JSONObject {
+    fun request(path: String, body: JSONObject = JSONObject(), signed: Boolean = true, reservation: Long? = null, timeoutMillis: Long = 10000, deadlineElapsed: Long = Long.MAX_VALUE, authorization: DisclosureFence.Stamp = PrivacySends.fence.stamp(), runtimeRetry: Boolean = true): JSONObject {
+        check(path != "/v1/telemetry" || !identity.profileCompanion) { "Profile companions do not send device telemetry" }
         check(identity.requestsAllowed()) { "Bungee is stopped or its pairing changed; reopen the app" }
         check(HomeTunnel.state == com.wireguard.android.backend.Tunnel.State.UP) { "The private tunnel is disconnected" }
-        require(path in listOf("/v1/enroll", "/v1/telemetry", "/v1/photos", "/v1/commands", "/v1/command-check", "/v1/ack", "/v1/sync", "/v1/app-update", "/v1/app-update/chunk"))
+        require(path in listOf("/v1/runtime", "/v1/enroll", "/v1/telemetry", "/v1/photos", "/v1/commands", "/v1/command-check", "/v1/ack", "/v1/sync", "/v1/app-update", "/v1/app-update/chunk"))
+        val lease = if (signed && path != "/v1/runtime") RuntimeLease.ensure(identity) { candidate ->
+            request("/v1/runtime", candidate, timeoutMillis = timeoutMillis.coerceAtMost(10000), deadlineElapsed = deadlineElapsed, authorization = authorization)
+        } else null
+        if (path == "/v1/sync" && lease != null && body.optJSONObject("report")?.length() != 0) {
+            body.getJSONObject("report").put("runtime_sequence", RuntimeLease.nextSequence())
+            identity.profileFingerprint()?.let { body.getJSONObject("report").put("profile_fingerprint", it) }
+        }
         val bytes = body.toString().toByteArray(Charsets.UTF_8)
         val headers = JSONObject()
         if (signed) {
             val timestamp = (System.currentTimeMillis() / 1000).toString()
             val nonce = UUID.randomUUID().toString()
             val hash = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
-            val signature = identity.sign("BUNGEE-V1\nPOST\n$path\n$timestamp\n$nonce\n$hash")
+            val canonical = if (lease == null) "BUNGEE-V1\nPOST\n$path\n$timestamp\n$nonce\n$hash" else "BUNGEE-V2\nPOST\n$path\n$timestamp\n$nonce\n$hash\n${lease.instance}\n${lease.secret}"
+            val signature = identity.sign(canonical)
+            if (lease != null) { headers.put("X-Bungee-Instance", lease.instance); headers.put("X-Bungee-Runtime", lease.secret) }
             headers.put("X-Bungee-Device", bundle.getString("device_id"))
             headers.put("X-Bungee-Time", timestamp)
             headers.put("X-Bungee-Nonce", nonce)
@@ -60,9 +74,14 @@ class HomeApi(private val identity: Identity, val clock: HomeClock = HomeClock()
                 }
         } else Transport.exchangeRequest(reservation, path, bytes.toString(Charsets.UTF_8), headers.toString(), remaining))
         val status = response.getInt("status")
+        if (status == 428 && signed && path != "/v1/runtime" && runtimeRetry) {
+            RuntimeLease.invalidate()
+            return request(path, body, signed, reservation, timeoutMillis, deadlineElapsed, authorization, runtimeRetry = false)
+        }
         if (status !in 200..299) throw HomeApiException(status)
         val result = JSONObject(response.getString("body"))
         if (result.optLong("server_time", 0) > 0) clock.observe(result.getLong("server_time"), started, android.os.SystemClock.elapsedRealtime())
+        if (path == "/v1/sync") identity.adoptProfile(result.optJSONObject("profile"))
         return result
     }
 }

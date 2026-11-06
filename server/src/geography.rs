@@ -314,7 +314,7 @@ pub fn collect(app: &App) -> ApiResult<()> {
         {
             continue;
         }
-        let id: Option<String> = tx.query_row("SELECT id FROM devices WHERE wg_key=? AND revoked=0 AND wg_psk IS NOT NULL AND public_key IS NOT NULL AND network_floor<?",params![peer.public_key,peer.observed_at],|r|r.get(0)).optional()?;
+        let id: Option<String> = tx.query_row("SELECT id FROM devices WHERE wg_key=? AND primary_device_id IS NULL AND revoked=0 AND wg_psk IS NOT NULL AND public_key IS NOT NULL AND network_floor<?",params![peer.public_key,peer.observed_at],|r|r.get(0)).optional()?;
         if let Some(id) = id {
             let geo = app.geography.locate(peer.ip).map(|v| v.to_string());
             tx.execute("INSERT OR IGNORE INTO network_history(device_id,observed_at,received_at,ip,geoip) VALUES(?,?,?,?,?)",params![id,peer.observed_at,current,peer.ip.to_string(),geo])?;

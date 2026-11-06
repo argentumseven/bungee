@@ -108,7 +108,7 @@ class ArmedCameraService : Service() {
         }
         return START_STICKY
     }
-    private fun enabled() = LocalSafety.isCameraEnabled(this) && !LocalSafety.isStopped(this) && !ManagementAgent.blocksPersonalOperation(this) && identity.enrolled && identity.allowCommands
+    private fun enabled() = !RuntimeLease.conflict && LocalSafety.isCameraEnabled(this) && !LocalSafety.isStopped(this) && !ManagementAgent.blocksPersonalOperation(this) && identity.enrolled && identity.allowCommands
     private fun notification(ready: Boolean): Notification {
         val stop = PendingIntent.getService(this, 10, Intent(this, ArmedCameraService::class.java).setAction("DISARM"), PendingIntent.FLAG_IMMUTABLE)
         val open = PendingIntent.getActivity(this, 11, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
@@ -143,7 +143,7 @@ class ArmedCameraService : Service() {
         captureJob = scope.launch {
             val stamp = PrivacySends.fence.stamp()
             val epoch = identity.photoEpoch
-            val allowed = { session == armedSession && identity.enrolled && identity.allowCommands && identity.photoEpoch == epoch && LocalSafety.isCameraEnabled(this@ArmedCameraService) && !LocalSafety.isStopped(this@ArmedCameraService) && getSystemService(KeyguardManager::class.java).isDeviceLocked != manual }
+            val allowed = { !RuntimeLease.conflict && session == armedSession && identity.enrolled && identity.allowCommands && identity.photoEpoch == epoch && LocalSafety.isCameraEnabled(this@ArmedCameraService) && !LocalSafety.isStopped(this@ArmedCameraService) && getSystemService(KeyguardManager::class.java).isDeviceLocked != manual }
             var ticket: DisclosureFence.Ticket? = null
             try {
                 check(epoch != null)

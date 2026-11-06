@@ -342,7 +342,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     for (const theme of ["light", "dark"]) {
       await appearance.selectOption(theme);
       await assertTheme(theme);
-      await assertReadable([".device-summary h2", ".device-summary p", ".network-card p", ".private-map-status", ".primary", ".nav-item.active"]);
+      await assertReadable([".phone-hero h2", ".phone-hero p", ".phone-hero .connection-badge", ".network-card p", ".private-map-status", ".primary", ".nav-item.active"]);
     }
     await appearance.selectOption("system");
     await assertTheme("dark");

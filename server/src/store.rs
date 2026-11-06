@@ -63,6 +63,7 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
         )?;
     }
     for (name, definition) in [
+        ("execution_started_at", "INTEGER"),
         ("canceled_at", "INTEGER"),
         ("canceled_after_offer", "INTEGER NOT NULL DEFAULT 0"),
     ] {
@@ -95,6 +96,35 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
         .prepare("PRAGMA table_info(devices)")?
         .query_map([], |r| r.get::<_, String>(1))?
         .collect::<Result<Vec<_>, _>>()?;
+    for (name, definition) in [
+        ("profiles_enabled", "INTEGER NOT NULL DEFAULT 0"),
+        ("main_profile_name", "TEXT"),
+        ("profile_fingerprint", "TEXT"),
+        ("runtime_required", "INTEGER NOT NULL DEFAULT 0"),
+        ("management_report_at", "INTEGER"),
+    ] {
+        if !columns.iter().any(|c| c == name) {
+            tx.execute(
+                &format!("ALTER TABLE devices ADD COLUMN {name} {definition}"),
+                [],
+            )?;
+        }
+    }
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS device_runtimes(
+        device_id TEXT PRIMARY KEY REFERENCES devices(id), instance TEXT NOT NULL,
+        secret_hash TEXT NOT NULL, generation INTEGER NOT NULL, expires INTEGER NOT NULL,
+        report_sequence INTEGER NOT NULL DEFAULT 0, conflict_at INTEGER, conflicts INTEGER NOT NULL DEFAULT 0);")?;
+    if !columns.iter().any(|c| c == "primary_device_id") {
+        tx.execute(
+            "ALTER TABLE devices ADD COLUMN primary_device_id TEXT REFERENCES devices(id)",
+            [],
+        )?;
+    }
+    tx.execute(
+        "CREATE INDEX IF NOT EXISTS devices_primary ON devices(primary_device_id)",
+        [],
+    )?;
+    tx.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS devices_profile_identity ON devices(COALESCE(primary_device_id,id),profile_fingerprint) WHERE revoked=0 AND public_key IS NOT NULL AND profile_fingerprint IS NOT NULL;")?;
     if !columns.iter().any(|c| c == "binding_released") {
         tx.execute(
             "ALTER TABLE devices ADD COLUMN binding_released INTEGER NOT NULL DEFAULT 0",

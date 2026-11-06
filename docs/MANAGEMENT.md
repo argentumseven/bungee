@@ -20,6 +20,8 @@ Scheduled airplane-mode cycling requires protected system networking authority t
 
 The app-contained WireGuard/gVisor transport carries only Bungee's home API and leaves Android's VPN slot free. Bungee changes no system routes or DNS. Other VPNs can route or filter its outer socket. Ordinary networking remains under Android and the user's network/VPN configuration.
 
+[Android profile companions](PROFILE-COMPANIONS.md) link secondary-user installations under one phone. Phone telemetry and shared actions stay with the main installation; companions handle only their profile's messages, locally armed photos and readiness.
+
 DNS routing, logs and relay services were removed in 1.1.17. [Upgrade cleanup](DNS-REMOVAL.md) restores settings changed by the previous version without retaining any DNS control or relay functionality.
 
 ## Legacy device-owner enrollment

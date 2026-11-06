@@ -76,7 +76,7 @@ class MainActivity : FragmentActivity() {
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         runCatching { ContextCompat.startForegroundService(this, Intent(this, TelemetryService::class.java).setAction("USER_START")) }
             .onFailure { error = "Android did not allow sharing to start. Keep Bungee open and try again." }
-        if (!TelemetryService.hasLocation(this)) error = "GPS permission was not granted. The connection and approved recovery controls can still work."
+        if (!identity.profileCompanion && !TelemetryService.hasLocation(this)) error = "GPS permission was not granted. The connection and approved recovery controls can still work."
     }
     private val scan = registerForActivityResult(ScanContract()) { result -> result.contents?.let { pairingText = it; showPairing = true } }
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -204,7 +204,8 @@ class MainActivity : FragmentActivity() {
     }
     private fun startSharing() {
         if (LocalSafety.isStopped(this) || ManagementAgent.blocksPersonalOperation(this)) { error = "Open Pairing & recovery before restarting. Resolve any Android device/profile ownership there first."; return }
-        val needed = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+        val needed = mutableListOf<String>()
+        if (!identity.profileCompanion) needed.addAll(listOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
         if (Build.VERSION.SDK_INT >= 33) needed.add(Manifest.permission.POST_NOTIFICATIONS)
         permissions.launch(needed.toTypedArray())
     }
@@ -244,15 +245,15 @@ class MainActivity : FragmentActivity() {
                 Spacer(Modifier.weight(1f)); Icon(Icons.Outlined.Shield, "Self hosted", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
             }
             Text("SELF-HOSTED DEVICE FINDER", letterSpacing = 2.sp, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
-            Text(if (enrolled) "This phone" else "Pair with your\nhome server", fontSize = 30.sp, lineHeight = 37.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 12.dp))
-            Text(if (enrolled) "Location sharing and recovery settings for this phone." else "Connect to a Bungee server to share location\nand receive recovery commands.", fontSize = 12.sp, lineHeight = 21.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 13.dp, bottom = 26.dp))
+            Text(if (enrolled && identity.profileCompanion) "Profile companion" else if (enrolled && identity.profileWorkflow) "Main profile" else if (enrolled) "This phone" else "Pair with your\nhome server", fontSize = 30.sp, lineHeight = 37.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 12.dp))
+            Text(if (enrolled && identity.profileCompanion) "Linked to ${identity.primaryName ?: "your primary phone"}. Photos and recovery messages stay in this profile; phone status comes from the main installation." else if (enrolled && identity.profileWorkflow) "${JSONObject(identity.bundle!!).getJSONObject("profile").optString("profile_name", "Main")} supplies phone-wide status and shared recovery controls. Companion profiles handle their own photos and messages." else if (enrolled) "Location sharing and recovery settings for this phone." else "Connect to a Bungee server to share location\nand receive recovery commands.", fontSize = 12.sp, lineHeight = 21.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 13.dp, bottom = 26.dp))
             OutlinedButton(onClick = { openRecovery() }, modifier=Modifier.fillMaxWidth().padding(bottom=18.dp)) { Text("Pairing & recovery") }
             if (!enrolled) {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), shape = RoundedCornerShape(20.dp)) {
                     Column(Modifier.padding(22.dp)) {
                         Icon(Icons.Outlined.Key, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(27.dp))
                         Text("Phone public key", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp))
-                        Text("Copy this public key into “Add a device” on your home server. Your private keys stay on this phone.", fontSize = 12.sp, lineHeight = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 9.dp, bottom = 17.dp))
+                        Text("Copy this public key into “Add a device”, or into your phone’s Profiles section when pairing another Android user. Private keys stay in this installation.", fontSize = 12.sp, lineHeight = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 9.dp, bottom = 17.dp))
                         Text(identity.wgPublic, fontSize = 11.sp, color = MaterialTheme.colorScheme.primary, modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(10.dp)).clickable {
                             getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Bungee WireGuard public key", identity.wgPublic))
                             android.widget.Toast.makeText(this@MainActivity, "Public key copied", android.widget.Toast.LENGTH_SHORT).show()
@@ -274,6 +275,7 @@ class MainActivity : FragmentActivity() {
                         HorizontalDivider(Modifier.padding(vertical = 20.dp), color = MaterialTheme.colorScheme.outlineVariant)
                         Row { Icon(Icons.Outlined.VpnLock, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(17.dp)); Text("  Bungee traffic uses WireGuard to your server.", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                         Text("Bungee’s app-contained connection leaves Android’s VPN slot free for your other VPN. That VPN may still filter Bungee’s UDP connection.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
+                        if (!identity.profileCompanion) {
                         Text("Queued GPS fixes: ${status.queuedFixes} · dropped at capacity: ${status.droppedFixes}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.padding(top = 10.dp))
                         Text(when (status.gpsAccess) {
                             "foreground" -> "GPS active while the location service continues. Allow background location for restart recovery."
@@ -283,6 +285,7 @@ class MainActivity : FragmentActivity() {
                             else -> "GPS is paused. Open this screen and resume GPS, or grant background location for automatic restart."
                         }, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
                         if (status.running && status.gpsAccess !in listOf("foreground", "background", "disabled")) TextButton(onClick = { startSharing() }) { Text("Resume GPS from this screen") }
+                        }
                         status.nextRetryAt?.let { Text("Next retry around ${java.text.DateFormat.getTimeInstance().format(java.util.Date(it))}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp) }
                         status.lastSent?.let { Text("Last check-in · ${java.text.DateFormat.getTimeInstance().format(java.util.Date(it))}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, modifier = Modifier.padding(top = 16.dp)) }
                         Button(onClick = {
@@ -361,6 +364,7 @@ class MainActivity : FragmentActivity() {
                 Text("SHARING AND PERMISSIONS", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp, letterSpacing = 1.8.sp, modifier = Modifier.padding(top = 30.dp, bottom = 15.dp))
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), shape = RoundedCornerShape(17.dp)) {
                     Column(Modifier.padding(horizontal = 18.dp)) {
+                        if (!identity.profileCompanion) {
                         SettingRow("Share GPS history", "Turning off cancels pending sends; already sent data stays at home until erased", locate) { value ->
                             scope.launch {
                                 runCatching { withContext(Dispatchers.IO) { identity.allowLocate = value } }
@@ -369,7 +373,8 @@ class MainActivity : FragmentActivity() {
                             }
                         }
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                        SettingRow("Household commands", "Off until you approve sound, messages, fresh GPS & optional locking", commands) { enabled ->
+                        }
+                        SettingRow(if (identity.profileCompanion) "Profile recovery messages" else "Household commands", if (identity.profileCompanion) "Approve messages for this Android user; camera protection has separate local approval" else "Off until you approve sound, messages, fresh GPS & optional locking", commands) { enabled ->
                             if (enabled) showCommandConsent = true
                             else scope.launch {
                                 try {
@@ -414,7 +419,7 @@ class MainActivity : FragmentActivity() {
                         Text(camera.detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
                         Text("Pending pictures: ${pendingPhotos.first}/${PhotoOutbox.CAPACITY} · memory only · discarded at capacity: ${pendingPhotos.second}", fontSize = 10.sp, modifier = Modifier.padding(top = 8.dp))
                         Text("Failed PIN/password entries toward next capture: ${camera.failedInRow}/3", fontSize = 10.sp)
-                        Text("Enable before the phone is lost. While ready, three new failed PIN/password entries trigger one front-camera attempt. Optional boot recovery restores protection after Android’s first unlock. After a force-stop, open Bungee manually. Camera privacy settings apply; biometric failures may not be reported.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 8.dp))
+                        Text("Enable before the phone is lost. While ready, three new failed PIN/password entries in this Android user trigger one front-camera attempt. Other users need their own linked companion. Protection starts after this user’s first unlock. Optional boot recovery restores protection after Android’s first unlock. After a force-stop, open Bungee manually. Camera privacy settings apply; biometric failures may not be reported.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 8.dp))
                         if (!cameraGranted) TextButton(onClick = { cameraPermission.launch(Manifest.permission.CAMERA) }) { Text("Grant camera permission") }
                         if (cameraEnabled) {
                             HorizontalDivider(Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outlineVariant)
@@ -478,7 +483,7 @@ class MainActivity : FragmentActivity() {
             Text("Version ${BuildConfig.VERSION_NAME} · no Google Play services required", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp, modifier = Modifier.padding(bottom = 22.dp))
         }
         if (showCommandConsent) AlertDialog(onDismissRequest = { showCommandConsent = false }, title = { Text("Allow household recovery commands?") }, text = {
-            Text("The server administrator can request a fresh GPS fix, play or stop an alarm, and show or clear a recovery notification. Screen locking also needs removable Android device administration.\n\nEnabling commands can apply an existing lost-mode request. GPS sharing has separate consent. Turn commands off here, or stop Bungee through local recovery or Android Settings.")
+            Text(if (identity.profileCompanion) "The server administrator can show and clear recovery notifications in this Android profile. Phone-wide actions and device telemetry remain with the main installation. Camera protection requires separate local approval. Turn messages off here or stop this profile companion through local recovery." else "The server administrator can request a fresh GPS fix, play or stop an alarm, and show or clear a recovery notification. Screen locking also needs removable Android device administration.\n\nEnabling commands can apply an existing lost-mode request. GPS sharing has separate consent. Turn commands off here, or stop Bungee through local recovery or Android Settings.")
         }, confirmButton = { TextButton(onClick = {
             showCommandConsent = false
             unlock {
@@ -519,7 +524,7 @@ class MainActivity : FragmentActivity() {
             }
         }, confirmButton = {})
         if (showPairing) AlertDialog(onDismissRequest = { if (!busy) showPairing = false }, title = { Text("Pair with your server") }, text = {
-            Column { Text("Pairing connects this phone to the selected server. When sharing is active, location and battery reports go to that server. GPS history stays there until erased or the device is revoked. Up to 10,080 unsent GPS fixes are encrypted on this phone. Recovery commands stay off until you approve them separately.", fontSize = 12.sp, lineHeight = 20.sp); OutlinedTextField(value = pairingText, onValueChange = { pairingText = it }, label = { Text("Enrollment invitation") }, modifier = Modifier.fillMaxWidth().padding(top = 16.dp), minLines = 4); error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 11.sp) } }
+            Column { Text(if (runCatching { ProfileCompanionPolicy.isCompanion(JSONObject(pairingText)) }.getOrDefault(false)) "This invitation links this Android profile to an existing phone. The main installation supplies phone status, GPS, battery and network history. This companion receives profile recovery messages and can upload locally approved theft photos. Camera protection and messages need separate approval here, after this user’s first unlock." else "Pairing connects this phone to the selected server. When sharing is active, location and battery reports go to that server. GPS history stays there until erased or the device is revoked. Up to 10,080 unsent GPS fixes are encrypted on this phone. Recovery commands stay off until you approve them separately.", fontSize = 12.sp, lineHeight = 20.sp); OutlinedTextField(value = pairingText, onValueChange = { pairingText = it }, label = { Text("Enrollment invitation") }, modifier = Modifier.fillMaxWidth().padding(top = 16.dp), minLines = 4); error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 11.sp) } }
         }, confirmButton = { TextButton(onClick = { pair(pairingText) }, enabled = !busy) { Text("Agree & pair") } }, dismissButton = { TextButton(onClick = { showPairing = false }, enabled = !busy) { Text("Cancel") } })
 
     }

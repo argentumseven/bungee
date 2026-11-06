@@ -9,8 +9,10 @@ mod history_import;
 mod management;
 mod maps;
 mod photos;
+mod profiles;
 mod recurrence;
 mod release;
+mod runtime;
 mod security;
 mod store;
 mod tls;
@@ -152,6 +154,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/maps/{z}/{x}/{y}", get(geography::tile))
         .route("/api/devices", get(api::devices))
         .route("/api/enrollments", post(enrollment::create_enrollment))
+        .route("/api/devices/{id}/profiles/setup", post(profiles::setup))
         .route("/api/devices/{id}", delete(api::revoke))
         .route("/api/devices/{id}/disconnect", post(enrollment::disconnect))
         .route("/api/devices/{id}/reconnect", post(enrollment::reconnect))
@@ -207,6 +210,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let device = Router::new()
         .route("/healthz", get(api::health))
         .route("/v1/enroll", post(api::enroll))
+        .route("/v1/runtime", post(runtime::acquire))
         .route("/v1/telemetry", post(api::telemetry))
         .route(
             "/v1/photos",
