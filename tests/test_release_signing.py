@@ -19,9 +19,12 @@ class SigningSetupTests(unittest.TestCase):
     def test_setup_uploads_secrets_over_stdin_and_reuses_the_same_local_identity(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory=Path(temporary)/'identity';calls=[];remote={};certificate=b'test public certificate'
-            def command(args,*,data=None):
+            def command(args,*,step,data=None):
                 calls.append((args,data))
+                if args==['keytool','-help']:return b''
                 if args[:3]==['gh','secret','list']:return json.dumps([{'name':n} for n in remote]).encode()
+                if args[:3]==['gh','variable','list']:
+                    return json.dumps([{'name':'BUNGEE_RELEASE_SIGNER_SHA256','value':remote['pin']}] if 'pin' in remote else []).encode()
                 if args[:2]==['keytool','-genkeypair']:
                     Path(args[args.index('-keystore')+1]).write_bytes(b'test private keystore');return b''
                 if args[:2]==['keytool','-exportcert']:return certificate
@@ -30,8 +33,7 @@ class SigningSetupTests(unittest.TestCase):
                     return b''
                 if args[:3]==['gh','secret','set']:remote[args[3]]=data;return b''
                 raise AssertionError(args)
-            def pin(*args,**kwargs):return subprocess.CompletedProcess(args,0 if 'pin' in remote else 1,remote.get('pin','').encode(),b'')
-            with patch.object(setup,'command',command),patch.object(setup.subprocess,'run',pin):
+            with patch.object(setup,'command',command):
                 first=setup.configure(directory);second=setup.configure(directory)
             self.assertEqual(first,second);self.assertEqual(first,hashlib.sha256(certificate).hexdigest())
             self.assertEqual(sum(args[:2]==['keytool','-genkeypair'] for args,_ in calls),1)
@@ -44,19 +46,72 @@ class SigningSetupTests(unittest.TestCase):
 
     def test_missing_local_key_cannot_replace_an_established_github_identity(self):
         with tempfile.TemporaryDirectory() as temporary:
-            with patch.object(setup,'command',return_value=b'[{"name":"BUNGEE_RELEASE_KEYSTORE_BASE64"}]') as command,patch.object(setup.subprocess,'run',return_value=subprocess.CompletedProcess([],0,b'a'*64,b'')):
+            def command(args,**kwargs):
+                if args==['keytool','-help']:return b''
+                if args[:3]==['gh','secret','list']:return b'[{"name":"BUNGEE_RELEASE_KEYSTORE_BASE64"}]'
+                if args[:3]==['gh','variable','list']:return b'[]'
+                raise AssertionError('A missing established key reached a remote write')
+            with patch.object(setup,'command',side_effect=command) as calls:
                 with self.assertRaisesRegex(ValueError,'Restore'):setup.configure(Path(temporary)/'identity')
-                self.assertEqual(command.call_count,1)
+                self.assertEqual(calls.call_count,3)
 
     def test_changed_local_key_cannot_overwrite_repository_secrets(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory=Path(temporary);(directory/'bungee.p12').write_bytes(b'wrong key');(directory/'password').write_text('not a real secret')
             def command(args,**kwargs):
+                if args==['keytool','-help']:return b''
                 if args[:3]==['gh','secret','list']:return b'[]'
+                if args[:3]==['gh','variable','list']:return json.dumps([{'name':'BUNGEE_RELEASE_SIGNER_SHA256','value':'a'*64}]).encode()
                 if args[:2]==['keytool','-exportcert']:return b'different certificate'
                 raise AssertionError('A mismatched key reached a remote write')
-            with patch.object(setup,'command',command),patch.object(setup.subprocess,'run',return_value=subprocess.CompletedProcess([],0,b'a'*64,b'')):
+            with patch.object(setup,'command',command):
                 with self.assertRaisesRegex(ValueError,'differs'):setup.configure(directory)
+
+    def test_unreadable_pin_stops_before_creating_or_overwriting_any_signing_files(self):
+        for existing in (False,True):
+            with self.subTest(existing=existing),tempfile.TemporaryDirectory() as temporary:
+                directory=Path(temporary)/'identity'
+                if existing:
+                    directory.mkdir();(directory/'bungee.p12').write_bytes(b'PRIVATE_KEY');(directory/'password').write_bytes(b'PRIVATE_PASSWORD')
+                def execute(args,**kwargs):
+                    if args==['keytool','-help']:return b''
+                    if args[:3]==['gh','secret','list']:return b'[]'
+                    if args[:3]==['gh','variable','list']:
+                        raise subprocess.CalledProcessError(1,args,output=b'PRIVATE_STDOUT',stderr=b'HTTP 403 PRIVATE_TOKEN')
+                    raise AssertionError('An unreadable pin reached key generation or a remote write')
+                with patch.object(setup.subprocess,'check_output',side_effect=execute):
+                    with self.assertRaisesRegex(setup.SetupError,'Read repository certificate pin:.*HTTP 403.*Variables') as caught:
+                        setup.configure(directory)
+                self.assertNotIn('PRIVATE',str(caught.exception))
+                if existing:
+                    self.assertEqual((directory/'bungee.p12').read_bytes(),b'PRIVATE_KEY')
+                    self.assertEqual((directory/'password').read_bytes(),b'PRIVATE_PASSWORD')
+                else:self.assertFalse(directory.exists())
+
+    def test_missing_java_is_named_before_any_password_file_is_created(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory=Path(temporary)/'identity'
+            with patch.object(setup.subprocess,'check_output',side_effect=FileNotFoundError) as execute:
+                with self.assertRaisesRegex(setup.SetupError,'Check Java keytool: keytool was not found.*default-jre-headless'):
+                    setup.configure(directory)
+            self.assertEqual(execute.call_count,1)
+            self.assertFalse(directory.exists())
+
+    def test_failed_commands_never_echo_credentials_or_subprocess_output(self):
+        cases=[(['gh','secret','list'],b'HTTP 401 Bad credentials PRIVATE_TOKEN','authentication failed'),
+               (['gh','secret','set'],b'HTTP 403 PRIVATE_TOKEN','Secrets permission: Read and write'),
+               (['gh','variable','set'],b'HTTP 404 PRIVATE_TOKEN','Variables permission: Read and write'),
+               (['gh','variable','list'],b'dial tcp: timeout PRIVATE_TOKEN','Could not reach GitHub'),
+               (['keytool','-exportcert'],b'PRIVATE_KEY PRIVATE_PASSWORD','Java keytool failed')]
+        for args,stderr,expected in cases:
+            with self.subTest(args=args),patch.dict(os.environ,{'GH_TOKEN':'PRIVATE_ENV_TOKEN'},clear=True):
+                error=subprocess.CalledProcessError(1,args,output=b'PRIVATE_STDOUT',stderr=stderr)
+                with patch.object(setup.subprocess,'check_output',side_effect=error):
+                    with self.assertRaisesRegex(setup.SetupError,expected) as caught:
+                        setup.command(args,step='Named setup step',data=b'PRIVATE_STDIN')
+                self.assertNotIn('PRIVATE',str(caught.exception))
+                self.assertTrue(str(caught.exception).startswith('Named setup step:'))
+                if args[0]=='gh':self.assertIn('GH_TOKEN',str(caught.exception))
 
 
 class ReleaseSignerTests(unittest.TestCase):
