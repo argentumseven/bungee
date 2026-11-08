@@ -22,7 +22,7 @@ The dashboard's **Phone preview** illustrates lock-screen and heads-up layouts u
 
 Enable protection on the phone before it is lost. While ready, Bungee attempts one front-camera photo after three new eligible failed PIN/password entries in a row. It uses a locally approved Camera2 foreground service with a visible notification. Camera access is optional; ordinary pairing, GPS and recovery commands work without it.
 
-**Physical GrapheneOS camera and boot-recovery testing is pending.** Android can deny camera access or return a blank image. Follow the device checks below before relying on this feature.
+**The maintainer reports successful Bungee device testing; device/build-specific camera and boot-recovery test results have not yet been documented here.** Android can deny camera access or return a blank image under some conditions. The device checks below give a reproducible acceptance procedure.
 
 ### Initial setup
 
