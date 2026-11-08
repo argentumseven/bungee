@@ -1,6 +1,6 @@
 # Validation record
 
-This record covers automated checks and their limits. Physical GrapheneOS testing and an independent security audit are pending. The [device procedure](RECOVERY_CONTROLS.md#physical-device-checks) covers camera/boot acceptance; [SAFETY.md](SAFETY.md) covers local recovery and removal.
+The maintainer reports successful real-device operation. This record primarily covers automated checks and their limits; device/build-specific physical test results have not yet been recorded here, and an independent security audit is not documented. The [device procedure](RECOVERY_CONTROLS.md#physical-device-checks) covers camera/boot acceptance; [SAFETY.md](SAFETY.md) covers local recovery and removal.
 
 ## Phone C2 and internal management isolation (unreleased)
 
