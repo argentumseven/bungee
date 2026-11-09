@@ -6,11 +6,11 @@ Open `bungee.apk` on your phone to install it. Every checked main-branch Android
 
 <img src="web/public/bungee-mark.png" width="96" alt="Bungee home and location icon">
 
-Bungee is a self-hosted device finder for Android 12+ and GrapheneOS. Pair household phones with your server to save location history, send recovery commands and view optional theft photos.
+Bungee is a self-hosted device finder for Android 12+ and GrapheneOS. It runs without Google Play services, Firebase Cloud Messaging, Google Maps APIs or a Google account. Pair household phones with your own server to save location history, send recovery commands and view optional theft photos.
 
 The Kotlin app connects through an app-contained WireGuard tunnel to a Rust server and web dashboard. Only Bungee traffic uses that tunnel; Android's VPN slot remains available. Phone records stay on your server until you erase them or revoke the device.
 
-**Version 1.1.17.** Physical GrapheneOS testing and an independent security audit are pending. See the [validation record](docs/VALIDATION.md) for completed checks and [security design](docs/SECURITY.md) for the trust model.
+**Android version:** [`release.json`](release.json) defines the main-branch source version; the [latest published APK release](https://github.com/argentumseven/bungee/releases/latest) identifies the downloadable version and source commit. The maintainer reports successful device testing; detailed device/build-specific results have not yet been added to the validation record, and an independent security audit is not documented. See the [validation record](docs/VALIDATION.md) for completed checks and [security design](docs/SECURITY.md) for the trust model.
 
 ![Bungee dashboard in dark mode](docs/screenshots/dashboard.png)
 
@@ -21,6 +21,7 @@ The Kotlin app connects through an app-contained WireGuard tunnel to a Rust serv
 | Area | Features |
 | --- | --- |
 | Dashboard | Multiple named phones, enrollment state, last contact, battery/charging, dated last-known GPS and accuracy, manual refresh, mobile layout, sign-out |
+| Android sandbox profiles | One physical phone with a selected main Android user and up to eight paired companions; separate app identities and in-app tunnels; profile-local recovery messages, camera approval and theft photos without duplicate GPS/battery/network telemetry. [Workflow and limits](docs/PROFILE-COMPANIONS.md) |
 | GPS history | Saved observations and check-in logs; inclusive time ranges; pagination; point selection and coordinate trail; CSV downloads with cancellation and server resource limits |
 | Recurring lookups | All records, newest per 5 minutes/hour/custom 1–1,440 minutes, or nearest to a daily time in an IANA timezone; configurable ±0–120 minute tolerance; matching CSV; originals preserved. Interval ranges: 366 days/10,000 buckets; daily ranges: 366 days |
 | Maps | Regional OpenStreetMap vector PMTiles and raster MBTiles, local street labels, one map for GPS/current/history views, installed-map picker and capacity checks; no public tile fallback |
@@ -37,7 +38,7 @@ The Kotlin app connects through an app-contained WireGuard tunnel to a Rust serv
 | Photo recovery | RAM-only eight-photo queue, same-boot process recovery preserves failure counts/rate limits; optional boot/update restoration after first Android unlock through a brief startup screen and separately granted special access |
 | Photo gallery | Signed uploads, authenticated paginated gallery, capture/receipt times, local-test labels and separate photo erasure; old erased generations cannot upload again |
 | Phone consent | QR or pasted invitation, separate GPS/command consent, commands off by default, visible sharing notification, optional restart after first unlock, background-location grant for automatic GPS recovery, authenticated unpairing |
-| Local recovery | Separate offline launcher independent of pairing keys, Compose and native transport; authenticated stop, saved stop across reboot/update, cleanup results, Android Settings links and explicit manual restart |
+| Local recovery | In-app offline **Pairing & recovery** panel independent of pairing keys, Compose and native transport; authenticated stop, saved stop across reboot/update, cleanup results, Android Settings links and explicit manual restart |
 | App privacy | Biometric/device-credential app lock, screen capture/OS backup disabled, Keystore signing key, AES-GCM local secret/queue storage; no Play services, analytics, crash-upload or push provider |
 | Appearance | System/Light/Dark themes on web and Android, saved local choices, slate/charcoal/teal palettes and pink home/location icon |
 | VPN coexistence | Userspace WireGuard/TCP carries the fixed home API without OS routes, root or VpnService. Other VPNs can route or filter the outer UDP socket |
@@ -54,7 +55,7 @@ The Kotlin app connects through an app-contained WireGuard tunnel to a Rust serv
 
 Bungee does not support device-owner/work-profile management, forced system DNS, app suspension, hidden launchers, lock-screen overlays, airplane-mode cycling, radio schedules, power-off/reboot/wipe, credential reset, arbitrary scripts or software deployment. Powered-off finding, a crowdsourced offline network, relay/NAT traversal, household roles/MFA and hardware attestation are also unavailable. Guided installs include the world overview and DB-IP Lite City data and offer a regional street-map checklist. Settings → Maps & storage offers the same regional downloads, planned sizes, installed maps and safe free capacity.
 
-For phones with multiple Android users, see the [illustrated sandbox profile workflow](docs/PROFILE-COMPANIONS.md): one phone overview, an explicitly selected main installation, and optional paired companions for profile-local photos and messages.
+For phones with multiple Android users, the [illustrated sandbox profile workflow](docs/PROFILE-COMPANIONS.md) explains main/companion pairing, profile-specific recovery actions and Android isolation limits. It requires Bungee 1.1.18 or newer in each participating user and compatible server support; the published 1.1.19 APK includes the newer runtime-negotiation behavior. This is not enterprise device-owner or work-profile management.
 
 ## Install the server
 
