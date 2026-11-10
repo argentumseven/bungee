@@ -103,6 +103,28 @@ class ArmedCameraPolicyTest {
         assertThrows(IllegalArgumentException::class.java) { PhotoOutbox.append(PhotoOutbox.empty("s"), photo(reason = "local_test", attempts = 3)) }
         assertEquals(1, PhotoOutbox.append(PhotoOutbox.empty("s"), photo(reason = "local_test", attempts = 0)).getJSONArray("records").length())
     }
+    @Test fun manualPicturesHaveNoFailedEntriesAndSurviveTheUploadQueue() {
+        val picture = photo(reason = "remote_manual", attempts = 0)
+        PendingPhotos.clear(); PendingPhotos.resume("armed")
+        PendingPhotos.append(picture, "armed")
+        assertEquals("remote_manual", PendingPhotos.metadata().getJSONObject(0).getString("reason"))
+        assertEquals(picture.toString(), PendingPhotos.first("armed")!!.toString())
+        PendingPhotos.acknowledge(picture.getString("id"), "armed")
+        assertNull(PendingPhotos.first("armed"))
+        assertThrows(IllegalArgumentException::class.java) { PhotoOutbox.append(PhotoOutbox.empty("s"), photo(reason = "remote_manual", attempts = 3)) }
+        assertThrows(IllegalArgumentException::class.java) { PhotoOutbox.append(PhotoOutbox.empty("s"), photo(reason = "unknown", attempts = 0)) }
+        PendingPhotos.clear()
+    }
+    @Test fun remotePicturesAllowEitherLockStateWithoutChangingAutomaticOrTestRules() {
+        assertTrue(RecoveryPhotoTrigger.REMOTE_MANUAL.manual)
+        assertTrue(RecoveryPhotoTrigger.REMOTE_MANUAL.allowsCapture(true))
+        assertTrue(RecoveryPhotoTrigger.REMOTE_MANUAL.allowsCapture(false))
+        assertTrue(RecoveryPhotoTrigger.LOCAL_TEST.allowsCapture(false))
+        assertFalse(RecoveryPhotoTrigger.LOCAL_TEST.allowsCapture(true))
+        assertTrue(RecoveryPhotoTrigger.FAILED_UNLOCK.allowsCapture(true))
+        assertFalse(RecoveryPhotoTrigger.FAILED_UNLOCK.allowsCapture(false))
+        assertFalse(RecoveryPhotoTrigger.FAILED_UNLOCK.manual)
+    }
     @Test fun withdrawalVetoesBothCaptureCommitAndPreparedUploadEvenAfterRearm() {
         val fence = DisclosureFence(); var armed = true; var canceled = 0
         val stamp = fence.stamp(); val ticket = fence.reserve(stamp, { armed }, { canceled++ })

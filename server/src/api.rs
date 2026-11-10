@@ -223,6 +223,7 @@ const CAPABILITIES: &[&str] = &[
     "ring",
     "ring_flash",
     "flash",
+    "take_picture",
     "stop_ringing",
     "stop_all",
     "message",

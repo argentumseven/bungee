@@ -30,7 +30,7 @@ The Kotlin app connects through an app-contained WireGuard tunnel to a Rust serv
 | Offline GPS | Independent sampling, individually AES-GCM encrypted SQLite records, up to 10,080 unique unsent fixes, bounded uploads, deduplication, transactional legacy-queue migration and capacity-loss counts |
 | Poor connectivity | Network-aware exponential backoff/jitter, adaptive 1–100-point catch-up, command priority, encrypted receipt retries, late receipt reconciliation and separate contact/telemetry ages. [DDIL details](docs/DDIL.md) |
 | Last-known location | Retained through outages, missing fixes and server restarts; older backfills cannot replace a newer point |
-| Recovery commands | Fresh GPS, alarm/flash, messages, normal Android screen lock and Stop all actions; cancellation of current actions and queued offers; five-minute normal expiry, 24-hour stop expiry and phone-reported outcomes |
+| Recovery commands | Fresh GPS, alarm/flash, manual front-camera pictures (locally enabled theft photos), messages, normal Android screen lock and Stop all actions; cancellation of current actions and queued offers; five-minute normal expiry, 24-hour stop expiry and phone-reported outcomes |
 | Alarm | Bundled rising/falling siren, at most 30 seconds, phone alarm volume and interruption settings, local stop controls, two-second browser preview |
 | Messages | Up to 240 characters in Android recovery notifications; lock-screen and heads-up illustrations in the dashboard; normal credential entry remains accessible |
 | Lost mode | Saved state survives outages, one lock attempt per revision when permitted, contact notification and more frequent check-ins |

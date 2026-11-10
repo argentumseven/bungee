@@ -316,7 +316,8 @@ pub async fn sync(
                 uuid::Uuid::parse_str(&p.id).is_err()
                     || p.captured_at <= 0
                     || p.captured_at > now() + 120
-                    || !["local_test", "failed_unlock"].contains(&p.reason.as_str())
+                    || !["local_test", "failed_unlock", "remote_manual"]
+                        .contains(&p.reason.as_str())
             })
             || c.failed_in_row > 3
             || c.dropped > 9_007_199_254_740_991

@@ -80,7 +80,7 @@ impl Photo {
             || self.captured_at > now() + 120
             || !matches!(
                 (self.reason.as_str(), self.failed_attempts),
-                ("failed_unlock", 3..) | ("local_test", 0)
+                ("failed_unlock", 3..) | ("local_test" | "remote_manual", 0)
             )
             || self.jpeg.len() > MAX_BASE64_CHARS
         {

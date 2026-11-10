@@ -64,9 +64,17 @@ The app selects the largest suitable bounded front-camera output, then briefly p
 
 With camera consent still enabled, the connection uploads queued photos separately from GPS, even if the camera service is temporarily unavailable, through signed `/v1/photos` requests over the fixed-home WireGuard transport. Photo failures have their own retry delay. The dedicated photo route accepts at most 2 MiB of JSON and a 60-second request deadline; ordinary telemetry/control routes retain 32 KiB and ten seconds. The native path allowlist enforces both limits independently. At most two photo request bodies are admitted at once on the server, each with an independent 75-second deadline so a stalled sender cannot keep its slot indefinitely. Exact-content retries acknowledge the same photo ID; conflicting reuse is rejected. The server admits at most 28 new photos per device per rolling hour, allowing an eight-image offline queue to catch up alongside the phone’s 20 attempts/hour.
 
-**Device care → Recovery photos → View saved photos** opens an authenticated, paginated gallery. Images load only when opened, from the home server, with `image/jpeg`, `nosniff` and `no-store`. The gallery records capture/receipt times and failure count or local-test label. Signed reports have no hardware attestation and do not establish a person's identity or prove theft. Camera status is dated; an offline phone's present state is unknown.
+**Device care → Recovery photos → View saved photos** opens an authenticated, paginated gallery. Images load only when opened, from the home server, with `image/jpeg`, `nosniff` and `no-store`. The gallery records capture/receipt times and failure count, local-test label or manual-request label. Signed reports have no hardware attestation and do not establish a person's identity or prove theft. Camera status is dated; an offline phone's present state is unknown.
 
 Photos remain on the server until separately erased, full history is erased, or the phone is revoked. GPS-only erasure leaves them intact. Photo erasure rotates an independent generation, rejecting earlier queues and in-flight uploads. On reconciliation the phone discards the old-generation queue; newly captured photos may arrive afterward. Deletion is logical and does not scrub filesystem blocks or backups. Encrypt server storage and backup copies.
+
+## Manual pictures from the web GUI
+
+Select a phone and use **Recovery commands → Take picture** to request one front-camera photo. Enable theft photos on the phone first and keep its camera service ready; the command cannot enable or start the camera remotely. The updated phone advertises `take_picture` only while its locally approved service is ready. Older or disarmed phones leave the button disabled. The screen may be locked or unlocked; Android camera restrictions still apply.
+
+Manual requests use the same capture, resizing, EXIF removal, in-memory queue and signed upload as failed-entry photos. All triggers share the 30-second cooldown and 20-attempts-per-hour budget. Manual photos have reason `remote_manual`, zero failed entries, and the gallery label **Manually requested picture**. They appear in **Device care → Recovery photos** after delivery.
+
+The request expires after five minutes and uses the normal command cancellation and receipt flow. The receipt confirms capture and queuing, not server delivery. A busy camera, rate limit or capture failure returns a failed result. Stop all actions cancels an in-flight manual capture; local disarm and consent withdrawal also cancel it. Photos already queued retain the ordinary upload and erasure behavior.
 
 ## Physical-device checks
 
@@ -74,6 +82,7 @@ Use a personal test phone with a stable signer. Record the GrapheneOS build, per
 
 | Check | Expected result |
 | --- | --- |
+| Manual web picture | Ready phone accepts Take picture while locked or unlocked; gallery labels it as manually requested. Disarmed/older phones cannot accept it. Verify rate limits, Stop all, expiry and capture failures |
 | Local test | Labelled image, capture/receipt times and authenticated gallery. This checks unlocked capture only |
 | Failed PIN/password entries | Three new eligible failures trigger one attempt; a successful unlock resets the streak. Respect Android retry delays |
 | Camera unavailable | Privacy toggle, camera contention and denied permission produce a reported failure without a capture loop |

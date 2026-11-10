@@ -5,6 +5,7 @@ import {
   ArrowDownLeft,
   ArrowRight,
   BellRing,
+  Camera,
   Check,
   ChevronRight,
   CircleHelp,
@@ -630,6 +631,7 @@ function App() {
                       {kind:"best_guess",name:"Best guess",desc:"Collect a longer GPS burst",icon:Compass},
                       {kind:"ring_flash",name:"Alarm + flash",desc:"Sound and rear-camera flash",icon:BellRing},
                       {kind:"flash",name:"Flash only",desc:"Find the phone visually",icon:Zap},
+                      {kind:"take_picture",name:"Take picture",desc:"Front camera · enable theft photos on phone first",icon:Camera},
                       {
                         kind: "message",
                         name: "Leave a message",

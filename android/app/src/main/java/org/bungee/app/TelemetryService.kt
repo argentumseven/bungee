@@ -397,6 +397,12 @@ class TelemetryService : Service() {
                 receipt.put("status", "rejected").put("result", "Permission or local consent was revoked")
             } else {
                 val result = when (kind) {
+                    "take_picture" -> {
+                        val actionContext = currentCoroutineContext()
+                        ArmedCameraService.takePicture {
+                            elapsed() < deadline && api.clock.upperNow(elapsed()) < expires && actionContext.isActive
+                        }
+                    }
                     "locate", "best_guess" -> {
                         val available = minOf(deadline - elapsed(), (expires - api.clock.upperNow(elapsed())) * 1000).coerceAtLeast(0)
                         val fix = withTimeoutOrNull(available) { freshObservation(command = true, mode = if (kind == "best_guess") "best_guess" else "homing") } ?: error("No timely, authorized location fix available")
@@ -450,7 +456,7 @@ class TelemetryService : Service() {
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            receipt.put("status", "failed").put("result", "Device could not complete this command")
+            receipt.put("status", "failed").put("result", if (kind == "take_picture") (e.message ?: "Device could not take a picture").take(240) else "Device could not complete this command")
         }
         withContext(Dispatchers.IO) { identity.saveResult(id, receipt, expires) }
         sendReceipt(api, receipt)
@@ -504,6 +510,7 @@ class TelemetryService : Service() {
                 }
                 if (identity.allowLocate && hasLocation(context) && status.value.gpsAccess in listOf("foreground", "background")) addAll(listOf("locate", "best_guess"))
                 addAll(listOf("ring", "stop_ringing", "stop_all"))
+                if (ArmedCameraService.canTakePicture()) add("take_picture")
                 if (RecoveryAlarm.flashCamera(context) != null) addAll(listOf("flash", "ring_flash"))
                 if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) addAll(listOf("message", "clear_message"))
                 if (context.getSystemService(DevicePolicyManager::class.java).isAdminActive(ComponentName(context, BungeeAdminReceiver::class.java))) add("lock")

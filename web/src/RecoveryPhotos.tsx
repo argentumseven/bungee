@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { Camera, RefreshCw, Trash2 } from "lucide-react";
 import { api } from "./api";
 
-type Photo = { id: string; device_id?: string; source_device_id?: string; profile_name?: string; device_name?: string; captured_at: number; received_at: number; failed_attempts: number; reason: "failed_unlock" | "local_test" };
+type Photo = { id: string; device_id?: string; source_device_id?: string; profile_name?: string; device_name?: string; captured_at: number; received_at: number; failed_attempts: number; reason: "failed_unlock" | "local_test" | "remote_manual" };
+const photoLabel = (photo: Photo) => photo.reason === "remote_manual" ? "Manually requested picture" : photo.reason === "local_test" ? "Local camera test" : `${photo.failed_attempts} failed credential entries`;
 type Album = { photos: Photo[]; next_before: number | null };
 export function RecoveryPhotos({ deviceId }: { deviceId?: string }) {
   const [open, setOpen] = useState(true), [before, setBefore] = useState<number | null>(null);
@@ -45,9 +46,9 @@ export function RecoveryPhotos({ deviceId }: { deviceId?: string }) {
       {album && !album.photos.length && <p className="fine">No saved photos in this view.</p>}
       <div className="photo-grid">{album?.photos.map(photo => <figure key={`${photo.source_device_id||deviceId||photo.device_id}-${photo.id}`}>
         <a href={`/api${imagePath(photo)}`} target="_blank" rel="noopener noreferrer">
-          <img src={`/api${imagePath(photo)}`} loading="lazy" alt={photo.reason === "local_test" ? "Labelled local camera test" : `Recovery capture after ${photo.failed_attempts} failed credential entries`} />
+          <img src={`/api${imagePath(photo)}`} loading="lazy" alt={photo.reason === "local_test" ? "Labelled local camera test" : photoLabel(photo)} />
         </a>
-        <figcaption>{photo.device_name && <strong>{photo.device_name}</strong>}{photo.profile_name && <span>{photo.profile_name}</span>}<strong>{photo.reason === "local_test" ? "Local camera test" : `${photo.failed_attempts} failed credential entries`}</strong>
+        <figcaption>{photo.device_name && <strong>{photo.device_name}</strong>}{photo.profile_name && <span>{photo.profile_name}</span>}<strong>{photoLabel(photo)}</strong>
           <span>Captured {new Date(photo.captured_at * 1000).toLocaleString()}</span><span>Received {new Date(photo.received_at * 1000).toLocaleString()}</span><button type="button" className="danger-button" disabled={busy} onClick={async () => {
             if (!window.confirm("Erase this recovery photo? It cannot be restored by a retry from the phone.")) return;
             setBusy(true);

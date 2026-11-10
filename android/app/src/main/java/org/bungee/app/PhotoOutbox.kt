@@ -12,7 +12,7 @@ object PhotoOutbox {
     fun append(state: JSONObject, photo: JSONObject): JSONObject {
         require(photo.getString("id").matches(Regex("[a-f0-9-]{36}")))
         require(photo.getLong("captured_at") > 0)
-        require((photo.getString("reason") == "failed_unlock" && photo.getInt("failed_attempts") >= 3) || (photo.getString("reason") == "local_test" && photo.getInt("failed_attempts") == 0))
+        require((photo.getString("reason") == "failed_unlock" && photo.getInt("failed_attempts") >= 3) || (photo.getString("reason") in listOf("local_test", "remote_manual") && photo.getInt("failed_attempts") == 0))
         require(photo.getString("jpeg").length <= RecoveryPhotoPolicy.MAX_BASE64_CHARS)
         val records = state.getJSONArray("records")
         records.put(photo)
