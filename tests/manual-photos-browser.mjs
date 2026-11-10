@@ -7,7 +7,7 @@ import { fixture } from "./support/server.mjs";
 import { phone } from "./support/phone.mjs";
 
 test("manual picture command requires a ready camera capability and displays its labelled photo", async t => {
-  const f = await fixture(t), p = await phone(f);
+  const f = await fixture(t), p = await phone(f, { profiles: true });
   const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN || "/usr/bin/chromium", headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width: 1440, height: 1050 } });
@@ -42,5 +42,21 @@ test("manual picture command requires a ready camera capability and displays its
   await button.waitFor();
   await page.screenshot({ path: "work/manual-picture-mobile.png", fullPage: true });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  const sandbox = await phone(f, { name: "Sandbox", primaryDeviceId: p.id, capabilities: ["take_picture"] });
+  await page.setViewportSize({ width: 1440, height: 1050 });
+  await page.evaluate(() => window.dispatchEvent(new Event("bungee:refresh")));
+  await page.locator(".nav-profiles").getByRole("button", { name: /^Sandbox/ }).click();
+  await page.getByRole("button", { name: "Take picture in Sandbox", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "Request queued for Sandbox" }).waitFor();
+  assert.deepEqual(f.sql("SELECT device_id,kind FROM commands WHERE status='pending'"), [[sandbox.id, "take_picture"]]);
+  const profileCommands = (await (await sandbox.request("/v1/commands", {})).json()).commands;
+  assert.deepEqual(profileCommands.map(command => command.kind), ["take_picture"]);
+  assert.equal((await (await sandbox.request("/v1/command-check", { id: profileCommands[0].id })).json()).allowed, true);
+  const sandboxPhoto = { ...photo, id: randomUUID() };
+  assert.equal((await sandbox.request("/v1/photos", { photo_epoch: sandbox.photoEpoch, photo: sandboxPhoto })).status, 200);
+  await page.getByRole("button", { name: "Refresh photos", exact: true }).click();
+  await page.getByRole("img", { name: "Manually requested picture", exact: true }).waitFor();
+  const album = await (await f.admin(`/api/devices/${p.id}/photos`)).json();
+  assert.ok(album.photos.some(row => row.id === sandboxPhoto.id && row.profile_name === "Sandbox" && row.source_device_id === sandbox.id));
   assert.deepEqual(errors, []);
 });

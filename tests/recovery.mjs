@@ -9,6 +9,23 @@ import {phone} from "./support/phone.mjs";
 import {readFile} from "node:fs/promises";
 import {randomUUID} from "node:crypto";
 
+test("manual profile pictures target only the selected locally enabled profile",async t=>{
+ const f=await fixture(t),main=await phone(f,{profiles:true,capabilities:["take_picture","stop_all"]});
+ const sandbox=await phone(f,{name:"Sandbox",primaryDeviceId:main.id,capabilities:["take_picture","stop_all"]});
+ const other=await phone(f,{name:"Work",primaryDeviceId:main.id,capabilities:["stop_all"]});
+ assert.equal((await f.admin(`/api/devices/${other.id}/commands`,"POST",{kind:"take_picture"})).status,400);
+ const response=await f.admin(`/api/devices/${sandbox.id}/commands`,"POST",{kind:"take_picture"});assert.equal(response.status,200);
+ const queued=await response.json();
+ assert.deepEqual((await (await main.request("/v1/commands",{})).json()).commands,[]);
+ assert.deepEqual((await (await other.request("/v1/commands",{})).json()).commands,[]);
+ const offered=(await (await sandbox.request("/v1/commands",{})).json()).commands;
+ assert.deepEqual(offered.map(c=>[c.id,c.kind]),[[queued.id,"take_picture"]]);
+ assert.equal((await (await sandbox.request("/v1/command-check",{id:queued.id})).json()).allowed,true);
+ assert.equal((await (await sandbox.request("/v1/command-check",{id:queued.id})).json()).allowed,false,"runtime execution claims prevent repeated pictures");
+ assert.equal((await f.admin(`/api/devices/${main.id}/commands`,"POST",{kind:"stop_all"})).status,200);
+ assert.deepEqual((await (await sandbox.request("/v1/commands",{})).json()).commands.map(c=>c.kind),["stop_all"]);
+});
+
 test("manual pictures require a granted capability and use normal receipts, cancellation and photo storage",async t=>{
  const f=await fixture(t),p=await phone(f),other=await phone(f),path=`/api/devices/${p.id}/commands`;
  const queue=()=>f.admin(path,"POST",{kind:"take_picture"});

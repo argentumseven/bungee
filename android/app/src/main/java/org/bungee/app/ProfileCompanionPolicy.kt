@@ -4,7 +4,7 @@ import org.json.JSONObject
 
 /** A linked installation handles only actions and camera events in its Android user. */
 object ProfileCompanionPolicy {
-    val commands = setOf("message", "clear_message", "stop_all")
+    val commands = setOf("message", "clear_message", "stop_all", "take_picture")
     fun isCompanion(bundle: JSONObject): Boolean {
         if (bundle.isNull("profile")) return false
         val profile = bundle.getJSONObject("profile")

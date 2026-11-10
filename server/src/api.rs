@@ -714,7 +714,7 @@ pub async fn poll(
     let db = app.db.lock().unwrap();
     crate::runtime::fence(&db, &id, &headers)?;
     if crate::profiles::companion(&db, &id)? {
-        db.execute("UPDATE commands SET status='rejected',result='Not available to a profile companion' WHERE device_id=? AND kind NOT IN ('message','clear_message','stop_all') AND status IN ('pending','delivered')", [&id])?;
+        db.execute("UPDATE commands SET status='rejected',result='Not available to a profile companion' WHERE device_id=? AND kind NOT IN ('message','clear_message','stop_all','take_picture') AND status IN ('pending','delivered')", [&id])?;
     }
     db.execute("UPDATE commands SET status='rejected',result='Disabled by reversibility policy' WHERE device_id=? AND kind='reboot' AND status IN ('pending','delivered')", [&id])?;
     let mut q=db.prepare("SELECT id,kind,payload,expires FROM commands WHERE device_id=? AND status IN ('pending','delivered') AND expires>? AND (?=0 OR kind='stop_all') ORDER BY (kind='stop_all') DESC,created LIMIT 10")?;

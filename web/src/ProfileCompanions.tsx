@@ -166,6 +166,14 @@ export function ProfileCompanions({
                   <button
                     type="button"
                     className="secondary"
+                    disabled={busy || !profile.capabilities.includes("take_picture")}
+                    onClick={() => void command(profile, "take_picture")}
+                  >
+                    Take picture in {profile.name}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
                     disabled={
                       busy ||
                       !messages[profile.id]?.trim() ||

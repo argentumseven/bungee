@@ -503,6 +503,7 @@ class TelemetryService : Service() {
         fun capabilities(context: Context, identity: Identity): List<String> = buildList {
             if (LocalSafety.isStopped(context) || ManagementAgent.blocksPersonalOperation(context)) return@buildList
             if (identity.allowCommands) {
+                if (ArmedCameraService.canTakePicture()) add("take_picture")
                 if (identity.profileCompanion) {
                     add("stop_all")
                     if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) addAll(listOf("message", "clear_message"))
@@ -510,7 +511,6 @@ class TelemetryService : Service() {
                 }
                 if (identity.allowLocate && hasLocation(context) && status.value.gpsAccess in listOf("foreground", "background")) addAll(listOf("locate", "best_guess"))
                 addAll(listOf("ring", "stop_ringing", "stop_all"))
-                if (ArmedCameraService.canTakePicture()) add("take_picture")
                 if (RecoveryAlarm.flashCamera(context) != null) addAll(listOf("flash", "ring_flash"))
                 if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) addAll(listOf("message", "clear_message"))
                 if (context.getSystemService(DevicePolicyManager::class.java).isAdminActive(ComponentName(context, BungeeAdminReceiver::class.java))) add("lock")

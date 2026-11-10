@@ -70,9 +70,13 @@ Photos remain on the server until separately erased, full history is erased, or 
 
 ## Manual pictures from the web GUI
 
+Available in **1.1.20** (Android version code **36**). Update the server before installing the matching phone APK. A source checkout needs the documented [host rebuild](INSTALL.md#updates-encrypted-backups-and-recovery-keys); pulling source alone does not replace the running dashboard or containers.
+
 Select a phone and use **Recovery commands → Take picture** to request one front-camera photo. Enable theft photos on the phone first and keep its camera service ready; the command cannot enable or start the camera remotely. The updated phone advertises `take_picture` only while its locally approved service is ready. Older or disarmed phones leave the button disabled. The screen may be locked or unlocked; Android camera restrictions still apply.
 
 Manual requests use the same capture, resizing, EXIF removal, in-memory queue and signed upload as failed-entry photos. All triggers share the 30-second cooldown and 20-attempts-per-hour budget. Manual photos have reason `remote_manual`, zero failed entries, and the gallery label **Manually requested picture**. They appear in **Device care → Recovery photos** after delivery.
+
+For a linked Android profile, open that profile and use **Take picture in [profile name]**. The request goes only to the selected profile's locally approved camera. Its photo keeps the profile label in the phone's shared album.
 
 The request expires after five minutes and uses the normal command cancellation and receipt flow. The receipt confirms capture and queuing, not server delivery. A busy camera, rate limit or capture failure returns a failed result. Stop all actions cancels an in-flight manual capture; local disarm and consent withdrawal also cancel it. Photos already queued retain the ordinary upload and erasure behavior.
 

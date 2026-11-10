@@ -3,7 +3,7 @@ use axum::http::StatusCode;
 use rusqlite::Connection;
 use serde_json::Value;
 
-pub const COMMANDS: &[&str] = &["message", "clear_message", "stop_all"];
+pub const COMMANDS: &[&str] = &["message", "clear_message", "stop_all", "take_picture"];
 
 pub fn companion(db: &Connection, id: &str) -> rusqlite::Result<bool> {
     db.query_row(
