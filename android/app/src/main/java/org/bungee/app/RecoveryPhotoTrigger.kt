@@ -6,9 +6,9 @@ enum class RecoveryPhotoTrigger(val reason: String) {
     REMOTE_MANUAL("remote_manual");
 
     val manual: Boolean get() = this != FAILED_UNLOCK
-    fun allowsCapture(locked: Boolean): Boolean = when (this) {
+    fun allowsCapture(locked: Boolean, foregroundUser: Boolean = true): Boolean = when (this) {
         FAILED_UNLOCK -> locked
         LOCAL_TEST -> !locked
-        REMOTE_MANUAL -> true
+        REMOTE_MANUAL -> foregroundUser
     }
 }

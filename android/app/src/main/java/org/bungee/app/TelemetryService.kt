@@ -409,6 +409,8 @@ class TelemetryService : Service() {
         try {
             if (api.clock.upperNow(elapsed()) >= expires || elapsed() >= deadline) {
                 receipt.put("status", "rejected").put("result", "Deadline passed before execution; not repeated")
+            } else if (kind == "take_picture" && !ArmedCameraService.isForegroundUser(this)) {
+                receipt.put("status", "rejected").put("result", ArmedCameraService.INACTIVE_PROFILE)
             } else if (!capabilities(this, identity).contains(kind)) {
                 receipt.put("status", "rejected").put("result", "Permission or local consent was revoked")
             } else {

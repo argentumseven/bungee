@@ -2,6 +2,14 @@
 
 The maintainer reports successful real-device operation. This record primarily covers automated checks and their limits; device/build-specific physical test results have not yet been recorded here, and an independent security audit is not documented. The [device procedure](RECOVERY_CONTROLS.md#physical-device-checks) covers camera/boot acceptance; [SAFETY.md](SAFETY.md) covers local recovery and removal.
 
+## 1.1.21: manual pictures in the active Android profile
+
+The phone-level picture action resolves a unique, recently reporting foreground installation with local camera approval. The button names that profile, and sends directly to its existing command endpoint. It explains missing readiness and conflicting foreground reports instead of falling back to the inactive main user. Android rejects inactive-user requests before capture and rechecks foreground state before queuing the image. Shared hardware commands keep their existing destination.
+
+Eight resolver tests cover main/companion selection, missing consent/readiness, stale and conflicting reports, disconnected/revoked/duplicate installations and missing selection. The real-server Chromium picture regression covers routing from the phone overview without main-camera capability, profile-labelled receipts, unarmed and ambiguous profiles, explicit profile actions, photo attribution, unchanged alarm routing and mobile layout. These use simulated phones; physical camera access and profile switching on GrapheneOS remain unverified.
+
+Local verification: TypeScript/Vite production build, 18 TypeScript helper tests, 125 API tests, Android debug assembly, 137 JVM tests and lint with zero errors. The APK reports 1.1.21 / version code 37.
+
 ## Phone C2 and internal management isolation (unreleased)
 
 Server `wg0` permits phone C2 only. Administration uses the explicitly configured internal management address/prefixes and a Rust TLS socket bound to namespace `eth0`. The policy is documented in [the topology reference](NETWORK-TOPOLOGY.md#management-isolation).

@@ -149,7 +149,7 @@ class ArmedCameraService : Service() {
         val capture = scope.async {
             val stamp = PrivacySends.fence.stamp()
             val epoch = identity.photoEpoch
-            val allowed = { session == armedSession && enabled() && identity.photoEpoch == epoch && requestAllowed() && trigger.allowsCapture(getSystemService(KeyguardManager::class.java).isDeviceLocked) }
+            val allowed = { session == armedSession && enabled() && identity.photoEpoch == epoch && requestAllowed() && trigger.allowsCapture(getSystemService(KeyguardManager::class.java).isDeviceLocked, isForegroundUser(this@ArmedCameraService)) }
             val capturing = AtomicBoolean(true)
             var ticket: DisclosureFence.Ticket? = null
             try {
@@ -160,6 +160,7 @@ class ArmedCameraService : Service() {
                 val sensor = getSystemService(CameraManager::class.java).getCameraCharacteristics(FrontCamera.cameraId(this@ArmedCameraService))
                     .get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
                 val rotation = when (getSystemService(DisplayManager::class.java).getDisplay(Display.DEFAULT_DISPLAY)?.rotation) { Surface.ROTATION_90 -> 90; Surface.ROTATION_180 -> 180; Surface.ROTATION_270 -> 270; else -> 0 }
+                check(allowed()) { "Picture request is no longer allowed in this Android profile" }
                 val original = withTimeout(8000) { FrontCamera.capture(this@ArmedCameraService) }
                 val jpeg = withContext(Dispatchers.Default) { FrontCamera.privateJpeg(original, (sensor + rotation) % 360) }
                 val photo = JSONObject().put("id", UUID.randomUUID().toString()).put("captured_at", System.currentTimeMillis()/1000)
@@ -193,9 +194,14 @@ class ArmedCameraService : Service() {
         private val approvals = CameraStartApproval()
         private val controlLock = Any()
         fun currentSession(): String? = active?.session
-        fun canTakePicture(): Boolean = active?.let { it.session != null && it.enabled() } == true
+        const val INACTIVE_PROFILE = "This Android profile is inactive. Request a picture in the active profile after enabling theft photos there."
+        fun isForegroundUser(context: Context): Boolean = runCatching {
+            context.getSystemService(UserManager::class.java).isUserForeground
+        }.getOrDefault(false)
+        fun canTakePicture(): Boolean = active?.let { it.session != null && it.enabled() && isForegroundUser(it) } == true
         suspend fun takePicture(requestAllowed: () -> Boolean): String = withContext(Dispatchers.Main.immediate) {
             val service = checkNotNull(active) { "Enable theft photos on the phone and keep the camera ready" }
+            check(isForegroundUser(service)) { INACTIVE_PROFILE }
             check(service.session != null && service.enabled()) { "The locally enabled recovery camera is not ready" }
             check(requestAllowed()) { "Picture request expired or was canceled" }
             prerequisites(service, requireUnlocked = false)
@@ -208,7 +214,11 @@ class ArmedCameraService : Service() {
                 "Picture captured and queued for upload; view Recovery photos after delivery. Photo ID: $id"
             } catch (e: CancellationException) {
                 currentCoroutineContext().ensureActive()
+                check(isForegroundUser(service)) { INACTIVE_PROFILE }
                 error("Recovery camera capture was canceled or timed out; no picture queued")
+            } catch (e: Exception) {
+                check(isForegroundUser(service)) { INACTIVE_PROFILE }
+                throw e
             } finally {
                 // The camera service owns the job; a canceled remote command must cancel it too.
                 withContext(NonCancellable) { capture.cancelAndJoin() }
