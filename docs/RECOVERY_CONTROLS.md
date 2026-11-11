@@ -1,5 +1,7 @@
 # Recovery controls
 
+[Sharing history and temporary Locate](SHARING_HISTORY.md) describes manual stops, crashes/errors, delayed offline reports and bounded GPS requests when automatic sharing is off.
+
 ## Alarm
 
 **Sound alarm** plays the bundled rising/falling siren for up to 30 seconds using Android's alarm audio stream. It saves the current alarm-stream volume, raises it to maximum for playback, and restores it on completion, error or stop. A recovery checkpoint also restores volume on the next service launch after an interrupted process. Routing and interruption settings, including Do Not Disturb, still apply. A muted stream or audio failure can make it inaudible.

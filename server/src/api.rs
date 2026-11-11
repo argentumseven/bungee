@@ -309,7 +309,7 @@ pub async fn enroll(
         ],
     )?;
     tx.execute(
-        "UPDATE devices SET public_key=?,capabilities=?,last_seen=?,gps_epoch=?,photo_epoch=? WHERE id=?",
+        "UPDATE devices SET public_key=?,capabilities=?,last_seen=?,gps_epoch=?,photo_epoch=?,sharing_epoch=CASE WHEN sharing_epoch='' THEN lower(hex(randomblob(32))) ELSE sharing_epoch END WHERE id=?",
         params![
             input.public_key,
             serde_json::to_string(&input.capabilities.iter().filter(|kind|kind.as_str()!="dns_check" && (!companion || crate::profiles::COMMANDS.contains(&kind.as_str()))).collect::<Vec<_>>()).unwrap(),
@@ -543,6 +543,7 @@ fn erase_history(
     }
     tx.execute("DELETE FROM location_history WHERE device_id=?", [id])?;
     if include_state {
+        crate::sharing::erase(&tx, id)?;
         crate::photos::erase_in(&tx, id)?;
         tx.execute("DELETE FROM state_history WHERE device_id=?", [id])?;
         tx.execute(
@@ -834,6 +835,7 @@ pub async fn revoke(
         tx.execute("UPDATE devices SET revoked=1,telemetry=NULL,last_location=NULL,wg_psk=NULL,management_report=NULL,capabilities='[]' WHERE id=?",[&member])?;
         for table in [
             "device_runtimes",
+            "sharing_events",
             "enrollments",
             "commands",
             "location_history",

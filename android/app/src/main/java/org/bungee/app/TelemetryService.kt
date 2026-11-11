@@ -28,7 +28,10 @@ import kotlin.coroutines.resume
 data class SharingStatus(val running: Boolean = false, val connected: Boolean = false, val text: String = "Sharing is stopped", val lastSent: Long? = null, val queuedFixes: Int = 0, val droppedFixes: Long = 0, val nextRetryAt: Long? = null, val gpsAccess: String = "paused")
 
 class TelemetryService : Service() {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main + CoroutineExceptionHandler { _, _ ->
+        SharingHistory.ended(this, SharingReason.WORKER_ERROR)
+        stopSelf()
+    })
     private lateinit var identity: Identity
     private var worker: Job? = null
     private lateinit var recoveryAlarm: RecoveryAlarm
@@ -47,7 +50,7 @@ class TelemetryService : Service() {
         }
     }
     private var locationForeground = false
-    private fun canSample() = identity.allowLocate && hasLocation(this) && locationForeground && !ManagementAgent.blocksPersonalOperation(this)
+    private fun canSample(command: Boolean = false) = TemporaryLocatePolicy.allowed(identity.allowLocate, command, identity.allowCommands, hasLocation(this), locationForeground) && !ManagementAgent.blocksPersonalOperation(this)
     private fun updateLocationStatus() {
         status.value = status.value.copy(gpsAccess = LocationAccess.describe(hasLocation(this), hasBackgroundLocation(this), identity.allowLocate, locationForeground))
     }
@@ -83,18 +86,21 @@ class TelemetryService : Service() {
         CameraBootRecovery.resumePending(this)
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (LocalSafety.isStopped(this) || ManagementAgent.blocksPersonalOperation(this)) { stopSelf(); return START_NOT_STICKY }
+        if (LocalSafety.isStopped(this) || ManagementAgent.blocksPersonalOperation(this)) {
+            if (!LocalSafety.isStopped(this)) SharingHistory.ended(this, SharingReason.MANAGEMENT_BLOCKED)
+            stopSelf(); return START_NOT_STICKY
+        }
         if (intent == null && !LocalSafety.isConnectionRestartAllowed(this)) { stopSelf(); return START_NOT_STICKY }
         if (intent?.action == "STOP") {
-            runCatching { LocalSafety.setStopped(this, true) }.onFailure { android.widget.Toast.makeText(this, "Stop could not be saved. Deactivate Bungee administration, then force-stop it in Android Settings.", android.widget.Toast.LENGTH_LONG).show() }
+            runCatching { LocalSafety.setStopped(this, true, SharingReason.NOTIFICATION_STOP) }.onFailure { android.widget.Toast.makeText(this, "Stop could not be saved. Deactivate Bungee administration, then force-stop it in Android Settings.", android.widget.Toast.LENGTH_LONG).show() }
             runCatching { ArmedCameraService.disarm(this) }; stopSelf(); return START_NOT_STICKY
         }
         if (intent?.action == "STOP_RING") {
             if (!getSystemService(KeyguardManager::class.java).isDeviceLocked) stopRinging()
             return START_NOT_STICKY
         }
-        if (!identity.enrolled) { stopSelf(); return START_NOT_STICKY }
-        val locationType = LocationAccess.canStartLocation(intent?.action == "USER_START", hasLocation(this), hasBackgroundLocation(this), identity.allowLocate)
+        if (!identity.enrolled) { SharingHistory.ended(this, SharingReason.PAIRING_UNAVAILABLE); stopSelf(); return START_NOT_STICKY }
+        val locationType = LocationAccess.canStartLocation(intent?.action in listOf("USER_START", "VISIBLE_RECOVERY"), hasLocation(this), hasBackgroundLocation(this), identity.allowLocate)
         val fallbackType = if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE
         try {
             try {
@@ -110,6 +116,12 @@ class TelemetryService : Service() {
         }
         updateLocationStatus()
         if (worker?.isActive == true) return if (LocalSafety.isConnectionRestartAllowed(this)) START_STICKY else START_NOT_STICKY
+        SharingHistory.bind(this, JSONObject(identity.bundle!!).getString("device_id"))
+        SharingHistory.started(this, when (intent?.action) {
+            "USER_START" -> SharingReason.USER_START
+            "AUTO_START", "VISIBLE_RECOVERY" -> SharingReason.AUTOMATIC_START
+            else -> SharingReason.SYSTEM_RESTART
+        })
         status.value = status.value.copy(running = true, connected = false, text = "Connecting to your household", nextRetryAt = null)
         // A GPS wait or photo upload must not hold up an emergency stop.
         scope.launch {
@@ -147,7 +159,10 @@ class TelemetryService : Service() {
             var nextTelemetry = 0L
             var nextPhotoAttempt = 0L
             while (isActive) {
-                if (LocalSafety.isStopped(this@TelemetryService) || ManagementAgent.blocksPersonalOperation(this@TelemetryService)) { stopSelf(); break }
+                if (LocalSafety.isStopped(this@TelemetryService) || ManagementAgent.blocksPersonalOperation(this@TelemetryService)) {
+                    if (!LocalSafety.isStopped(this@TelemetryService)) SharingHistory.ended(this@TelemetryService, SharingReason.MANAGEMENT_BLOCKED)
+                    stopSelf(); break
+                }
                 if (networkChanged.tryReceive().isSuccess) {
                     withContext(Dispatchers.IO) { HomeTunnel.disconnectOwned(tunnelOwner) }
                     retry.networkChanged(elapsed())
@@ -184,6 +199,7 @@ class TelemetryService : Service() {
                     val generation = synchronized(actionsLock) { actionGeneration }
                     if (elapsed() < deadline) { withContext(Dispatchers.IO) {
                         val desired = api.request("/v1/sync", JSONObject().put("report", ManagementAgent.report(this@TelemetryService, identity)))
+                        SharingHistory.accepted(this@TelemetryService, desired)
                         runCatching { AppUpdates.observe(this@TelemetryService,desired.optJSONObject("app_update"),desired.optString("server_version").takeIf { it.isNotBlank() },desired.optJSONObject("app_update_preparation")) }
                         identity.reconcileGpsEpoch(desired.getString("gps_epoch"))
                         synchronized(actionsLock) { if (generation == actionGeneration)
@@ -242,7 +258,7 @@ class TelemetryService : Service() {
             .addAction(NotificationCompat.Action.Builder(0, "Stop sharing", pause).setAuthenticationRequired(true).build())
             .addAction(NotificationCompat.Action.Builder(0, "Stop alarm", hush).setAuthenticationRequired(true).build()).build()
     }
-    private fun disclosureAllowed(epoch: String, command: Boolean) = canSample() && identity.gpsEpoch == epoch &&
+    private fun disclosureAllowed(epoch: String, command: Boolean) = canSample(command) && identity.gpsEpoch == epoch &&
         !LocalSafety.isStopped(this) && (!command || identity.allowCommands)
     private suspend fun freshObservation(command: Boolean = false, mode: String = "passive"): Observation? {
         val epoch = identity.gpsEpoch ?: return null
@@ -404,10 +420,32 @@ class TelemetryService : Service() {
                         }
                     }
                     "locate", "best_guess" -> {
-                        val available = minOf(deadline - elapsed(), (expires - api.clock.upperNow(elapsed())) * 1000).coerceAtLeast(0)
-                        val fix = withTimeoutOrNull(available) { freshObservation(command = true, mode = if (kind == "best_guess") "best_guess" else "homing") } ?: error("No timely, authorized location fix available")
-                        upload(api, fix, commandId = id, deadline = deadline, expires = expires)
-                        "Fresh GPS accepted by home; expiry checked at commit"
+                        val previousLocationType = locationForeground
+                        try {
+                            if (!locationForeground) {
+                                check(hasBackgroundLocation(this)) { "Grant background location on the phone for temporary remote GPS" }
+                                startForeground(1, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+                                locationForeground = true
+                            }
+                            val available = minOf(deadline - elapsed(), (expires - api.clock.upperNow(elapsed())) * 1000).coerceAtLeast(0)
+                            SharingHistory.record(this, SharingReason.LOCATE_START)
+                            val fix = withTimeoutOrNull(available) { freshObservation(command = true, mode = if (kind == "best_guess") "best_guess" else "homing") } ?: error("No timely, authorized location fix available")
+                            upload(api, fix, commandId = id, deadline = deadline, expires = expires)
+                            SharingHistory.record(this, SharingReason.LOCATE_FINISHED)
+                            "Temporary GPS fix accepted by home; automatic sharing setting unchanged"
+                        } catch (e: Exception) {
+                            SharingHistory.record(this, SharingReason.LOCATE_ERROR)
+                            throw e
+                        } finally {
+                            if (!previousLocationType) {
+                                locationForeground = false
+                                // Late cancellation after a local stop must not recreate its notification.
+                                if (activeService === this && !LocalSafety.isStopped(this) && !ManagementAgent.blocksPersonalOperation(this)) {
+                                    runCatching { startForeground(1, notification(), if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE) }
+                                }
+                            }
+                            updateLocationStatus()
+                        }
                     }
                     "ring", "ring_flash", "flash" -> {
                         // Preparing local audio does not hold the consent/stop locks or start playback.
@@ -480,6 +518,7 @@ class TelemetryService : Service() {
         if (::recoveryAlarm.isInitialized) recoveryAlarm.stop()
     }
     override fun onDestroy() {
+        SharingHistory.ended(this)
         if (activeService === this) activeService = null
         // Unexpected connection-service teardown does not withdraw the camera's standing opt-in.
         // A deliberate local stop still cancels capture and clears its queue independently.
@@ -509,7 +548,7 @@ class TelemetryService : Service() {
                     if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) addAll(listOf("message", "clear_message"))
                     return@buildList
                 }
-                if (identity.allowLocate && hasLocation(context) && status.value.gpsAccess in listOf("foreground", "background")) addAll(listOf("locate", "best_guess"))
+                if (hasLocation(context) && (activeService?.locationForeground == true || hasBackgroundLocation(context))) addAll(listOf("locate", "best_guess"))
                 addAll(listOf("ring", "stop_ringing", "stop_all"))
                 if (RecoveryAlarm.flashCamera(context) != null) addAll(listOf("flash", "ring_flash"))
                 if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) addAll(listOf("message", "clear_message"))

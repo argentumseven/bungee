@@ -66,8 +66,8 @@ object ManagementAgent {
             .put("recovery_consent", identity.allowCommands && !LocalSafety.isStopped(context))
             .put("unlock_monitoring", attempts != null).put("failed_unlocks", attempts?.coerceAtLeast(0) ?: 0)
             .put("last_failed_at", if (identity.allowCommands) signals.opt("last_failed_at") ?: JSONObject.NULL else JSONObject.NULL)
-        if (identity.profileCompanion) return profileStatus.put("profile_capabilities", JSONArray(TelemetryService.capabilities(context, identity)))
-        return JSONObject().put("app_signer_sha256", AppUpdates.installedSigner(context)).put("owner", role == ManagementRole.DEVICE_OWNER || role == ManagementRole.PROFILE_OWNER).put("consent", false)
+        if (identity.profileCompanion) return SharingHistory.addReport(context, profileStatus.put("profile_capabilities", JSONArray(TelemetryService.capabilities(context, identity))))
+        return SharingHistory.addReport(context, JSONObject().put("app_signer_sha256", AppUpdates.installedSigner(context)).put("owner", role == ManagementRole.DEVICE_OWNER || role == ManagementRole.PROFILE_OWNER).put("consent", false)
             .put("foreground_user", profileStatus.opt("foreground_user"))
             .put("camera", cameraReport).put("connection_health", ConnectionHealth.report(context))
             .put("delivery", identity.backlogReport().put("reported_at", System.currentTimeMillis()/1000).put("gps_access", TelemetryService.status.value.gpsAccess))
@@ -81,7 +81,7 @@ object ManagementAgent {
             .put("secure_lock", context.getSystemService(KeyguardManager::class.java).isDeviceSecure)
             .put("screen_locked", context.getSystemService(KeyguardManager::class.java).isDeviceLocked)
             .put("unlock_monitoring", attempts != null)
-            .put("failed_unlocks", attempts?.coerceAtLeast(0) ?: 0).put("last_failed_at", if (identity.allowCommands) signals.opt("last_failed_at") ?: JSONObject.NULL else JSONObject.NULL)
+            .put("failed_unlocks", attempts?.coerceAtLeast(0) ?: 0).put("last_failed_at", if (identity.allowCommands) signals.opt("last_failed_at") ?: JSONObject.NULL else JSONObject.NULL))
     }
     @Synchronized fun apply(context: Context, identity: Identity, revision: Long, json: JSONObject) {
         check(!LocalSafety.isStopped(context) && !blocksPersonalOperation(context)) { "Local recovery is required before sharing" }

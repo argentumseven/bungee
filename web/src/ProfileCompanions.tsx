@@ -3,6 +3,7 @@ import QRCode from "qrcode";
 import { api } from "./api";
 import { ConnectionBadge, DuplicateNotice } from "./PhoneStatus";
 import { RecoveryPhotos } from "./RecoveryPhotos";
+import { SharingHistory } from "./SharingHistory";
 
 export type ProfileAgent = {
   id: string;
@@ -402,6 +403,7 @@ export function ProfileCompanions({
         )}
       </details>}
       {detail&&profiles[0]&&<RecoveryPhotos deviceId={profiles[0].id}/> }
+      {detail&&profiles[0]&&<SharingHistory deviceId={profiles[0].id}/> }
     </section>
   );
 }

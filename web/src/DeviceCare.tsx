@@ -7,6 +7,7 @@ import {
 import { api } from "./api";
 import { RecoveryMessagePreview } from "./RecoveryMessagePreview";
 import { RecoveryPhotos } from "./RecoveryPhotos";
+import { SharingHistory } from "./SharingHistory";
 import { ProfileSetup } from "./ProfileSetup";
 import type { PhoneProfiles } from "./PhoneStatus";
 
@@ -348,6 +349,7 @@ export function DeviceCare({
           </div>
           <ProfileSetup key={`profiles-${device.id}`} phone={device}/>
           <RecoveryPhotos key={device.id} deviceId={device.id} />
+          <SharingHistory key={`sharing-${device.id}`} deviceId={device.id} />
         </>
       )}
     </div>

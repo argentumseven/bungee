@@ -52,6 +52,7 @@ import { AppearanceControl, useAppearance } from "./Appearance";
 import { RecoveryMessagePreview } from "./RecoveryMessagePreview";
 import { PasswordSettings } from "./PasswordSettings";
 import { RecoveryPhotos } from "./RecoveryPhotos";
+import { SharingHistory } from "./SharingHistory";
 import { MapManager } from "./MapManager";
 import { AppUpdates } from "./AppUpdates";
 import { HistoryImport } from "./HistoryImport";
@@ -614,12 +615,13 @@ function App() {
                   </div>
                   <button className="stop-actions" disabled={busy || !device?.enrolled || !device.capabilities.includes("stop_all")} onClick={() => send("stop_all")}><VolumeX size={18}/> Stop all Bungee actions <small>Stop sound, flash and remote GPS; clear messages and lost mode</small></button>
                   <p className="fine">A stop waits for the phone to connect. It cancels outstanding commands. It cannot unlock Android after a screen lock has already happened.</p>
+                  <p className="fine">Refresh location makes a temporary GPS request even when automatic GPS sharing is off. Approved recovery commands and location permission are required. A locally stopped or offline app must reconnect before it can receive the request.</p>
                   <div className="actions-grid">
                     {[
                       {
                         kind: "locate",
                         name: "Refresh location",
-                        desc: "Ask for a fresh fix",
+                        desc: "Temporary GPS · works with automatic sharing off",
                         icon: MapPin,
                       },
                       {
@@ -753,7 +755,7 @@ function App() {
           {page === "Tunnels" && <TunnelView devices={active}/>}
           {page === "Tracking" && (
             <>
-              <div className="tracking-tabs" role="group" aria-label="Tracking views">{["Current estimate","GPS history","IP observations","Check-ins","Photos"].map(tab=><button key={tab} aria-pressed={trackingTab===tab} className={trackingTab===tab?"primary":"secondary"} onClick={()=>setTrackingTab(tab)}>{tab}</button>)}</div>
+              <div className="tracking-tabs" role="group" aria-label="Tracking views">{["Current estimate","GPS history","IP observations","Check-ins","Photos","Sharing history"].map(tab=><button key={tab} aria-pressed={trackingTab===tab} className={trackingTab===tab?"primary":"secondary"} onClick={()=>setTrackingTab(tab)}>{tab}</button>)}</div>
               <div className="tracking-device"><label htmlFor="history-device">Device</label>
               <select
                 id="history-device"
@@ -767,7 +769,7 @@ function App() {
                 ))}
               </select></div>
               {trackingTab==="Photos" ? <RecoveryPhotos/> : device ? (
-                trackingTab==="Current estimate"?<CurrentTracking device={device}/>:<HistoryView key={`${device.id}-${trackingTab}`} device={device} initialKind={trackingTab==="IP observations"?"network":trackingTab==="Check-ins"?"state":"locations"} />
+                trackingTab==="Sharing history"?<SharingHistory key={device.id} deviceId={device.id}/>:trackingTab==="Current estimate"?<CurrentTracking device={device}/>:<HistoryView key={`${device.id}-${trackingTab}`} device={device} initialKind={trackingTab==="IP observations"?"network":trackingTab==="Check-ins"?"state":"locations"} />
               ) : (
                 <section className="panel history-panel">
                   Pair a phone to begin saving history.

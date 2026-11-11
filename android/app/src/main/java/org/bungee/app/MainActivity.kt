@@ -75,7 +75,7 @@ class MainActivity : FragmentActivity() {
     }
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         runCatching { ContextCompat.startForegroundService(this, Intent(this, TelemetryService::class.java).setAction("USER_START")) }
-            .onFailure { error = "Android did not allow sharing to start. Keep Bungee open and try again." }
+            .onFailure { SharingHistory.record(this, SharingReason.START_RESTRICTED); error = "Android did not allow sharing to start. Keep Bungee open and try again." }
         if (!identity.profileCompanion && !TelemetryService.hasLocation(this)) error = "GPS permission was not granted. The connection and approved recovery controls can still work."
     }
     private val scan = registerForActivityResult(ScanContract()) { result -> result.contents?.let { pairingText = it; showPairing = true } }
@@ -142,7 +142,7 @@ class MainActivity : FragmentActivity() {
         cameraResumeJob = scope.launch {
             try {
                 if (!TelemetryService.status.value.running) {
-                    ContextCompat.startForegroundService(this@MainActivity, Intent(this@MainActivity, TelemetryService::class.java).setAction("USER_START"))
+                    ContextCompat.startForegroundService(this@MainActivity, Intent(this@MainActivity, TelemetryService::class.java).setAction("VISIBLE_RECOVERY"))
                     withTimeout(5000) { TelemetryService.status.first { it.running } }
                 }
                 if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) ArmedCameraService.resume(this@MainActivity)
@@ -223,6 +223,8 @@ class MainActivity : FragmentActivity() {
         val status by TelemetryService.status.collectAsState()
         val camera by ArmedCameraService.status.collectAsState()
         val pendingPhotos by PendingPhotos.counts.collectAsState()
+        val sharingEvents by SharingHistory.events.collectAsState()
+        val sharingHistoryError by SharingHistory.error.collectAsState()
         LaunchedEffect(camera) { cameraEnabled = LocalSafety.isCameraEnabled(this@MainActivity); cameraBootAllowed = LocalSafety.isCameraRestartAllowed(this@MainActivity) }
         var lockEnabled by remember { mutableStateOf(identity.appLock) }
         var locate by remember { mutableStateOf(identity.allowLocate) }
@@ -289,7 +291,7 @@ class MainActivity : FragmentActivity() {
                         status.nextRetryAt?.let { Text("Next retry around ${java.text.DateFormat.getTimeInstance().format(java.util.Date(it))}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp) }
                         status.lastSent?.let { Text("Last check-in · ${java.text.DateFormat.getTimeInstance().format(java.util.Date(it))}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, modifier = Modifier.padding(top = 16.dp)) }
                         Button(onClick = {
-                            if (status.running) { runCatching { LocalSafety.setStopped(this@MainActivity, true) }.onFailure { error = "Stop could not be saved. Deactivate Bungee administration, then force-stop it in Android Settings." }; locallyStopped = LocalSafety.isStopped(this@MainActivity); resume = false; cameraEnabled = false
+                            if (status.running) { runCatching { LocalSafety.setStopped(this@MainActivity, true, SharingReason.USER_STOP) }.onFailure { error = "Stop could not be saved. Deactivate Bungee administration, then force-stop it in Android Settings." }; locallyStopped = LocalSafety.isStopped(this@MainActivity); resume = false; cameraEnabled = false
                                 runCatching { ArmedCameraService.disarm(this@MainActivity) }.onFailure { error = "Camera cleanup failed; use local recovery or Android Settings." }
                                 stopService(Intent(this@MainActivity, TelemetryService::class.java)) }
                             else if (LocalSafety.isStopped(this@MainActivity)) unlock {
@@ -298,6 +300,19 @@ class MainActivity : FragmentActivity() {
                             else startSharing()
                         }, modifier = Modifier.fillMaxWidth().padding(top = 20.dp), shape = RoundedCornerShape(11.dp)) { Text(SharingControl.label(status.running, locallyStopped || LocalSafety.isStopped(this@MainActivity)), Modifier.padding(6.dp)) }
                         Text("Stop is saved across restarts. Resume sharing here when you are ready. Pairing & recovery can reset only Bungee if the connection is broken.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
+                    }
+                }
+                Card(Modifier.fillMaxWidth().padding(top = 18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                    Column(Modifier.padding(18.dp)) {
+                        Text("Sharing start / stop history", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        if (sharingEvents.isEmpty()) Text(if (LocalSafety.isStopped(this@MainActivity)) "Sharing is stopped; no recorded reason or time is available." else "No sharing events recorded yet.", fontSize = 11.sp, modifier = Modifier.padding(top = 8.dp))
+                        sharingHistoryError?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 11.sp) }
+                        sharingEvents.take(6).forEach { event ->
+                            Text("${event.reason.category.uppercase()} · ${event.reason.label}", fontSize = 11.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 12.dp))
+                            val date = java.text.DateFormat.getDateTimeInstance()
+                            Text((event.at?.let { date.format(java.util.Date(it * 1000)) } ?: "Stop time unknown · detected ${date.format(java.util.Date(event.recordedAt * 1000))}") + if (event.pending) " · awaiting server confirmation" else " · local record", fontSize = 10.sp, lineHeight = 17.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Text("Stops made while sharing is off appear on the server after the next connection. Android may end the app without giving a reason; this is shown as unknown.", fontSize = 10.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 12.dp))
                     }
                 }
                 val appUpdate by AppUpdates.status.collectAsState()
@@ -368,7 +383,7 @@ class MainActivity : FragmentActivity() {
                         SettingRow("Share GPS history", "Turning off cancels pending sends; already sent data stays at home until erased", locate) { value ->
                             scope.launch {
                                 runCatching { withContext(Dispatchers.IO) { identity.allowLocate = value } }
-                                    .onSuccess { locate = value }
+                                    .onSuccess { locate = value; SharingHistory.record(this@MainActivity, if (value) SharingReason.GPS_ON else SharingReason.GPS_OFF) }
                                     .onFailure { locate = identity.allowLocate; error = "Location preference or queue cleanup failed. Stop sharing and use local recovery or Android Settings." }
                             }
                         }
@@ -483,7 +498,7 @@ class MainActivity : FragmentActivity() {
             Text("Version ${BuildConfig.VERSION_NAME} · no Google Play services required", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp, modifier = Modifier.padding(bottom = 22.dp))
         }
         if (showCommandConsent) AlertDialog(onDismissRequest = { showCommandConsent = false }, title = { Text("Allow household recovery commands?") }, text = {
-            Text(if (identity.profileCompanion) "The server administrator can show and clear recovery notifications in this Android profile. Phone-wide actions and device telemetry remain with the main installation. Camera protection requires separate local approval. While its camera is ready, the administrator can also request a front-camera picture in this profile from the web GUI. Turn messages off here or stop this profile companion through local recovery." else "The server administrator can request a fresh GPS fix, play or stop an alarm, and show or clear a recovery notification. Screen locking also needs removable Android device administration. When theft photos are enabled locally and the camera is ready, the administrator can also request a front-camera picture from the web GUI.\n\nEnabling commands can apply an existing lost-mode request. GPS sharing has separate consent. Turn commands off here, or stop Bungee through local recovery or Android Settings.")
+            Text(if (identity.profileCompanion) "The server administrator can show and clear recovery notifications in this Android profile. Phone-wide actions and device telemetry remain with the main installation. Camera protection requires separate local approval. While its camera is ready, the administrator can also request a front-camera picture in this profile from the web GUI. Turn messages off here or stop this profile companion through local recovery." else "The server administrator can request a fresh GPS fix, play or stop an alarm, and show or clear a recovery notification. Screen locking also needs removable Android device administration. When theft photos are enabled locally and the camera is ready, the administrator can also request a front-camera picture from the web GUI.\n\nEnabling commands can apply an existing lost-mode request. Automatic GPS sharing has separate consent. Approved recovery commands can request a temporary GPS fix while automatic sharing is off, with Android location permission. Turn commands off here, or stop Bungee through local recovery or Android Settings.")
         }, confirmButton = { TextButton(onClick = {
             showCommandConsent = false
             unlock {

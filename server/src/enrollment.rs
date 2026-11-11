@@ -253,6 +253,7 @@ pub async fn delete_archive(
     for member in crate::profiles::members(&tx, &id)? {
         for table in [
             "device_runtimes",
+            "sharing_events",
             "enrollments",
             "nonces",
             "commands",

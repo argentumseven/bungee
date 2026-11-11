@@ -69,6 +69,11 @@ pub fn safe_package(p: &str) -> bool {
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Report {
+    #[serde(skip_serializing)]
+    pub sharing_epoch: Option<String>,
+    #[serde(skip_serializing)]
+    pub sharing_events: Vec<crate::sharing::Event>,
+    pub sharing_events_dropped: u64,
     pub runtime_sequence: Option<i64>,
     pub profile_fingerprint: Option<String>,
     pub foreground_user: Option<bool>,
@@ -309,22 +314,28 @@ pub async fn sync(
             "Profile companions send only camera, unlock and message status",
         ));
     }
-    if r.camera.as_ref().is_some_and(|c| {
-        c.pending > crate::photos::MAX_PENDING
-            || c.queued.len() > crate::photos::MAX_PENDING as usize
-            || c.queued.iter().any(|p| {
-                uuid::Uuid::parse_str(&p.id).is_err()
-                    || p.captured_at <= 0
-                    || p.captured_at > now() + 120
-                    || !["local_test", "failed_unlock", "remote_manual"]
-                        .contains(&p.reason.as_str())
-            })
-            || c.failed_in_row > 3
-            || c.dropped > 9_007_199_254_740_991
-            || c.status.len() > 240
-            || c.reported_at <= 0
-            || c.reported_at > now() + 120
-    }) || r.delivery.as_ref().is_some_and(|d| !d.valid())
+    if !crate::sharing::valid(&r.sharing_events)
+        || r.sharing_events_dropped > 9_007_199_254_740_991
+        || r.sharing_epoch
+            .as_ref()
+            .is_some_and(|e| e.len() != 43 && e.len() != 64)
+        || r.camera.as_ref().is_some_and(|c| {
+            c.pending > crate::photos::MAX_PENDING
+                || c.queued.len() > crate::photos::MAX_PENDING as usize
+                || c.queued.iter().any(|p| {
+                    uuid::Uuid::parse_str(&p.id).is_err()
+                        || p.captured_at <= 0
+                        || p.captured_at > now() + 120
+                        || !["local_test", "failed_unlock", "remote_manual"]
+                            .contains(&p.reason.as_str())
+                })
+                || c.failed_in_row > 3
+                || c.dropped > 9_007_199_254_740_991
+                || c.status.len() > 240
+                || c.reported_at <= 0
+                || c.reported_at > now() + 120
+        })
+        || r.delivery.as_ref().is_some_and(|d| !d.valid())
         || r.connection_health.as_ref().is_some_and(|c| !c.valid())
         || r.app_signer_sha256.as_ref().is_some_and(|value| {
             value.len() != 64
@@ -407,8 +418,14 @@ pub async fn sync(
         [&id],
         |r| r.get(0),
     )?;
+    let accepted_sharing_events = if ordered {
+        crate::sharing::commit(&db, &id, r.sharing_epoch.as_deref(), &r.sharing_events)?
+    } else {
+        vec![]
+    };
+    let sharing_epoch = crate::sharing::epoch(&db, &id)?;
     Ok(Json(
-        json!({"server_version":crate::release::version(),"app_update_preparation":crate::app_updates::preparation(),"app_update":crate::app_updates::for_signer(r.app_signer_sha256.as_deref()),"revision":revision,"policy":if companion {Policy::default()} else {policy.reversible()},"profile_companion":companion,"profile":crate::profiles::metadata(&db,&id)?,"report_accepted":ordered,"gps_epoch":epoch,"photo_epoch":db.query_row("SELECT photo_epoch FROM devices WHERE id=?",[&id],|r|r.get::<_,String>(0))?,"server_time":now(),"persistent_controls_enabled":false}),
+        json!({"server_version":crate::release::version(),"sharing_epoch":sharing_epoch,"accepted_sharing_events":accepted_sharing_events,"app_update_preparation":crate::app_updates::preparation(),"app_update":crate::app_updates::for_signer(r.app_signer_sha256.as_deref()),"revision":revision,"policy":if companion {Policy::default()} else {policy.reversible()},"profile_companion":companion,"profile":crate::profiles::metadata(&db,&id)?,"report_accepted":ordered,"gps_epoch":epoch,"photo_epoch":db.query_row("SELECT photo_epoch FROM devices WHERE id=?",[&id],|r|r.get::<_,String>(0))?,"server_time":now(),"persistent_controls_enabled":false}),
     ))
 }
 #[cfg(test)]

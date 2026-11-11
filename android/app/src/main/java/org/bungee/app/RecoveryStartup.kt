@@ -10,6 +10,7 @@ import androidx.core.content.ContextCompat
 class BungeeApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        SharingHistory.recover(this)
         // No device-owner or always-on activation. Local recovery initializes no pairing keys.
         RecoveryStartup.clearStartupReminders(this)
         runCatching { LegacyDnsRecovery.restore(this) }
@@ -22,6 +23,7 @@ object RecoveryStartup {
     }
     fun reportResumeNeeded(context: Context) {
         clearStartupReminders(context)
+        SharingHistory.record(context, SharingReason.START_RESTRICTED)
         TelemetryService.status.value=TelemetryService.status.value.copy(running=false,connected=false,text="Open Bungee to resume sharing; Android restricted automatic restart")
     }
     fun startIfApproved(context: Context) {

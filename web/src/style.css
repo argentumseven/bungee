@@ -2098,6 +2098,12 @@ select {
 .alarm-preview p { color: var(--muted); font-size: 10px; line-height: 1.7; margin-top: 7px; }
 .message-modal { width: 850px; }
 .recovery-photos { margin-top: 22px; }
+.sharing-history { margin-top: 22px; }
+.sharing-event-list { list-style: none; padding: 0; margin: 18px 0; }
+.sharing-event { padding: 14px; margin: 10px 0; border: 1px solid var(--border); border-radius: 10px; border-left: 4px solid var(--muted); }
+.sharing-event > div { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.sharing-event p { margin: 8px 0 0; overflow-wrap: anywhere; }
+.sharing-event-crash, .sharing-event-error { border-left-color: var(--danger); }
 .photo-tools, .photo-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin: 14px 0; }
 .photo-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
 .photo-grid figure { margin: 0; max-width: 360px; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--soft); }
