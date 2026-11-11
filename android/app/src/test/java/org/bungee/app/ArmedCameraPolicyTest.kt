@@ -134,4 +134,18 @@ class ArmedCameraPolicyTest {
         assertThrows(IllegalStateException::class.java) { DisclosureRequest(fence, { 1 }, {}).exchange(stamp, { armed }, { 100 }) { _, _ -> error("Old photo must not be sent") } }
         fence.release(ticket)
     }
+    @Test fun remotePicturesRequireTheActiveAndroidUserAtCaptureCommitToo() {
+        for (locked in listOf(true, false)) {
+            assertTrue(RecoveryPhotoTrigger.REMOTE_MANUAL.allowsCapture(locked, true))
+            assertFalse(RecoveryPhotoTrigger.REMOTE_MANUAL.allowsCapture(locked, false))
+        }
+        val fence = DisclosureFence()
+        var foreground = true
+        val allowed = { RecoveryPhotoTrigger.REMOTE_MANUAL.allowsCapture(false, foreground) }
+        val stamp = fence.stamp()
+        val ticket = fence.reserve(stamp, allowed, {})
+        foreground = false
+        assertThrows(IllegalStateException::class.java) { fence.checked(stamp, allowed) { error("An inactive user's capture must not be queued") } }
+        fence.release(ticket)
+    }
 }

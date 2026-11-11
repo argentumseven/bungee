@@ -21,10 +21,17 @@ test("manual picture command requires a ready camera capability and displays its
   await button.waitFor();
   assert.equal(await button.isDisabled(), true);
   assert.equal((await p.request("/v1/telemetry", { battery: 80, charging: false, device_owner: false, capabilities: ["take_picture"] })).status, 200);
+  const report = async (phone, data) => {
+    const response = await phone.request("/v1/sync", { report: { recovery_consent: true, ...data } });
+    assert.equal(response.status, 200, await response.text());
+  };
+  const camera = { armed: true, pending: 0, status: "Ready", reported_at: Math.floor(Date.now() / 1000) };
+  await report(p, { foreground_user: true, camera });
   await page.reload();
   await page.getByRole("button", { name: /^Devices/ }).click();
   await page.screenshot({ path: "work/manual-picture-desktop.png", fullPage: true });
   await button.click();
+  await page.getByRole("status").filter({ hasText: "Picture requested in Owner" }).waitFor();
   const queued = f.sql("SELECT id,kind,device_id,status FROM commands");
   assert.equal(queued.length, 1);
   assert.deepEqual(queued[0].slice(1), ["take_picture", p.id, "pending"]);
@@ -43,6 +50,35 @@ test("manual picture command requires a ready camera capability and displays its
   await page.screenshot({ path: "work/manual-picture-mobile.png", fullPage: true });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   const sandbox = await phone(f, { name: "Sandbox", primaryDeviceId: p.id, capabilities: ["take_picture"] });
+  const refresh = async () => page.evaluate(() => window.dispatchEvent(new Event("bungee:refresh")));
+  // Two fresh foreground claims during a switch must not choose either camera.
+  await report(sandbox, { foreground_user: true, camera, profile_capabilities: ["take_picture"] });
+  await refresh();
+  await page.getByRole("button", { name: /Take picture.*Profile switch/ }).waitFor();
+  assert.equal(await page.getByRole("button", { name: /Take picture.*Profile switch/ }).isDisabled(), true);
+  await report(p, { foreground_user: false, camera });
+  await report(sandbox, { foreground_user: true, camera: { ...camera, armed: false }, profile_capabilities: [] });
+  await refresh();
+  await page.getByRole("button", { name: /Take picture.*Sandbox is active/ }).waitFor();
+  assert.equal(await page.getByRole("button", { name: /Take picture.*Sandbox is active/ }).isDisabled(), true);
+  await report(sandbox, { foreground_user: true, camera, profile_capabilities: ["take_picture"] });
+  await refresh();
+  // The phone overview routes to the foreground companion even without main's capability.
+  await p.request("/v1/telemetry", { battery: 80, charging: false, device_owner: false, capabilities: ["ring"] });
+  await refresh();
+  await page.getByRole("button", { name: /^Take picture in Sandbox/ }).click();
+  await page.getByRole("status").filter({ hasText: "Picture requested in Sandbox" }).waitFor();
+  assert.deepEqual(f.sql("SELECT device_id,kind FROM commands WHERE status='pending'"), [[sandbox.id, "take_picture"]]);
+  const routed = (await (await sandbox.request("/v1/commands", {})).json()).commands[0];
+  assert.equal((await (await sandbox.request("/v1/command-check", { id: routed.id })).json()).allowed, true);
+  await sandbox.request("/v1/ack", { id: routed.id, status: "rejected", result: "This Android profile is inactive", attempted_at: Math.floor(Date.now() / 1000) });
+  await refresh();
+  await page.locator(".command-row").filter({ hasText: "Sandbox · take picture" }).filter({ hasText: "This Android profile is inactive" }).waitFor();
+  // Shared hardware commands retain their explicit main-installation destination.
+  await page.getByRole("button", { name: /Sound alarm/ }).click();
+  await page.getByRole("status").filter({ hasText: "Command queued" }).waitFor();
+  assert.deepEqual(f.sql("SELECT device_id,kind FROM commands WHERE status='pending'"), [[p.id, "ring"]]);
+  await f.admin(`/api/devices/${p.id}/commands/${f.sql("SELECT id FROM commands WHERE kind='ring'")[0][0]}`, "DELETE");
   await page.setViewportSize({ width: 1440, height: 1050 });
   await page.evaluate(() => window.dispatchEvent(new Event("bungee:refresh")));
   await page.locator(".nav-profiles").getByRole("button", { name: /^Sandbox/ }).click();

@@ -78,7 +78,9 @@ Select a phone and use **Recovery commands → Take picture** to request one fro
 
 Manual requests use the same capture, resizing, EXIF removal, in-memory queue and signed upload as failed-entry photos. All triggers share the 30-second cooldown and 20-attempts-per-hour budget. Manual photos have reason `remote_manual`, zero failed entries, and the gallery label **Manually requested picture**. They appear in **Device care → Recovery photos** after delivery.
 
-For a linked Android profile, open that profile and use **Take picture in [profile name]**. The request goes only to the selected profile's locally approved camera. Its photo keeps the profile label in the phone's shared album.
+From **1.1.21** (Android version code **37**), the phone-level button names and targets the active Android profile, using a recent foreground report (under 90 seconds) and its locally armed camera. Enable theft photos and approve recovery commands inside each profile that should support capture, and pair companion profiles with the phone. If no ready active profile is known, or two profiles still report foreground during a switch, the button explains why capture is unavailable. It never falls back to an inactive profile. An inactive profile rejects an already queued request with an explicit reason.
+
+You can also open a linked profile and use **Take picture in [profile name]** to target it explicitly. The profile must be active when the command executes. Its photo and receipt keep the profile label in the phone's shared album and Recent commands.
 
 The request expires after five minutes and uses the normal command cancellation and receipt flow. The receipt confirms capture and queuing, not server delivery. A busy camera, rate limit or capture failure returns a failed result. Stop all actions cancels an in-flight manual capture; local disarm and consent withdrawal also cancel it. Photos already queued retain the ordinary upload and erasure behavior.
 

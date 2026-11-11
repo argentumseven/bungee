@@ -52,6 +52,7 @@ import { AppearanceControl, useAppearance } from "./Appearance";
 import { RecoveryMessagePreview } from "./RecoveryMessagePreview";
 import { PasswordSettings } from "./PasswordSettings";
 import { RecoveryPhotos } from "./RecoveryPhotos";
+import { recoveryCamera } from "./recoveryCamera";
 import { SharingHistory } from "./SharingHistory";
 import { MapManager } from "./MapManager";
 import { AppUpdates } from "./AppUpdates";
@@ -81,7 +82,8 @@ type Device = PhoneProfiles & {
   preshared_key: boolean;
   capabilities: string[];
   network?: NetworkObservation | null;
-  management?: { connection_health?: Health | null };
+  management_report_at?: number | null;
+  management?: { connection_health?: Health | null; foreground_user?: boolean | null; camera?: { armed: boolean } | null };
   last_location?:Location|null;
   binding_released?:boolean;
   telemetry: null | {
@@ -176,6 +178,8 @@ function App() {
       setError((e as Error).message);
     }
   };
+  const picture = recoveryCamera(device);
+  const recentCommands = commands.filter(c => !device || c.device_id === device.id || device.profiles?.some(p => p.id === c.device_id));
   useEffect(()=>{if(profileView && device && profileView!==device.id && !device.profiles?.some(p=>p.id===profileView))setProfileView("");},[device,profileView]);
   useEffect(() => {
     api("/session")
@@ -272,16 +276,19 @@ function App() {
   }
   async function send(kind: string, text?: string) {
     if (!device) return;
+    const camera = kind === "take_picture" ? recoveryCamera(device) : undefined;
+    if (camera && !camera.target) { setError(camera.detail); return; }
+    const target = camera?.target || device;
     setBusy(true);
     try {
-      await api(`/devices/${device.id}/commands`, {
+      await api(`/devices/${target.id}/commands`, {
         method: "POST",
         body: JSON.stringify({
           kind,
           message: text,
         }),
       });
-      setToast("Command queued. Check Recent commands for the phone’s response.");
+      setToast(camera ? `Picture requested in ${target.name}. Check Recent commands for its response.` : "Command queued. Check Recent commands for the phone’s response.");
       setModal(null);
       setMessage("");
       await load();
@@ -633,7 +640,7 @@ function App() {
                       {kind:"best_guess",name:"Best guess",desc:"Collect a longer GPS burst",icon:Compass},
                       {kind:"ring_flash",name:"Alarm + flash",desc:"Sound and rear-camera flash",icon:BellRing},
                       {kind:"flash",name:"Flash only",desc:"Find the phone visually",icon:Zap},
-                      {kind:"take_picture",name:"Take picture",desc:"Front camera · enable theft photos on phone first",icon:Camera},
+                      {kind:"take_picture",name:picture.target ? `Take picture in ${picture.target.name}` : "Take picture",desc:picture.detail,icon:Camera},
                       {
                         kind: "message",
                         name: "Leave a message",
@@ -653,7 +660,7 @@ function App() {
                         disabled={
                           busy ||
                           !device?.enrolled ||
-                          !device.capabilities.includes(kind)
+                          (kind === "take_picture" ? !picture.target : !device.capabilities.includes(kind))
                         }
                         onClick={() =>
                           kind === "message" ? setModal("message") : send(kind)
@@ -703,8 +710,7 @@ function App() {
                     <h2>Recent commands</h2>
                     <Activity size={17} />
                   </div>
-                  {commands
-                    .filter((c) => !device || c.device_id === device.id || device.profiles?.some(p=>p.id===c.device_id))
+                  {recentCommands
                     .slice(0, 20)
                     .map((c) => (
                       <div className="command-row" key={c.id}>
@@ -739,8 +745,7 @@ function App() {
                         </span>
                       </div>
                     ))}
-                  {commands.filter((c) => !device || c.device_id === device.id)
-                    .length === 0 && (
+                  {recentCommands.length === 0 && (
                     <div className="empty-commands">
                       <Check size={22} />
                       <strong>No recent commands</strong>
