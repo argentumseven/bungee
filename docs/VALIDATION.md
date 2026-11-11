@@ -8,7 +8,7 @@ The phone-level picture action resolves a unique, recently reporting foreground 
 
 Eight resolver tests cover main/companion selection, missing consent/readiness, stale and conflicting reports, disconnected/revoked/duplicate installations and missing selection. The real-server Chromium picture regression covers routing from the phone overview without main-camera capability, profile-labelled receipts, unarmed and ambiguous profiles, explicit profile actions, photo attribution, unchanged alarm routing and mobile layout. These use simulated phones; physical camera access and profile switching on GrapheneOS remain unverified.
 
-Local verification: TypeScript/Vite production build, 18 TypeScript helper tests, 125 API tests, Android debug assembly, 137 JVM tests and lint with zero errors. The APK reports 1.1.21 / version code 37.
+Local verification: TypeScript/Vite production build, 18 TypeScript helper tests, 125 API tests, 42 browser passes (two Firefox checks skipped because Firefox is absent), Rust formatting/Clippy and 15 unit tests, Android debug assembly, 137 JVM tests and lint with zero errors. The APK reports 1.1.21 / version code 37.
 
 ## Phone C2 and internal management isolation (unreleased)
 
