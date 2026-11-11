@@ -22,6 +22,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.json.JSONObject
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 
 data class ArmedCameraStatus(val armed: Boolean = false, val detail: String = "Disabled · enable theft photos once on this phone", val pending: Int = 0, val dropped: Long = 0, val failedInRow: Int = 0)
 
@@ -114,7 +115,7 @@ class ArmedCameraService : Service() {
         val open = PendingIntent.getActivity(this, 11, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, "armed_camera").setSilent(true).setOnlyAlertOnce(true).setSmallIcon(R.drawable.ic_bungee)
             .setContentTitle(if (ready) "Bungee camera is armed" else "Starting Bungee camera protection")
-            .setContentText("Waiting for 3 new failed PIN/password entries. Armed does not mean a photo was captured.")
+            .setContentText("Ready for failed-entry photos and household Take picture commands.")
             .setContentIntent(open).setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setOngoing(true)
             .addAction(NotificationCompat.Action.Builder(0, "Disarm camera", stop).setAuthenticationRequired(true).build()).build()
     }
@@ -126,49 +127,59 @@ class ArmedCameraService : Service() {
         val stamp = PrivacySends.fence.stamp()
         PrivacySends.fence.checked(stamp, { session == lease.id && enabled() }) { identity.saveState("camera_lease", lease.snapshot()) }
     }
-    private fun failed(attempts: Int, manual: Boolean = false) {
-        if (session == null || captureJob?.isActive == true) return
+    private fun failed(attempts: Int, trigger: RecoveryPhotoTrigger = RecoveryPhotoTrigger.FAILED_UNLOCK, requestAllowed: () -> Boolean = { true }): Deferred<String>? {
+        if (session == null || captureJob?.isActive == true) return null
+        val manual = trigger.manual
         val before = gate.snapshot().toString()
         val permitted = if (manual) gate.test(SystemClock.elapsedRealtime()) else gate.failed(attempts, SystemClock.elapsedRealtime())
         status.value = status.value.copy(failedInRow = gate.progress)
-        try { if (before != gate.snapshot().toString()) saveGate() } catch (_: Exception) { markUnavailable("Capture checkpoint could not be saved"); stopSelf(); return }
+        try { if (before != gate.snapshot().toString()) saveGate() } catch (_: Exception) { markUnavailable("Capture checkpoint could not be saved"); stopSelf(); return null }
         if (!permitted) {
             if (manual) status.value = status.value.copy(detail = "Armed · capture rate limit; wait at least 30 seconds; maximum 20 attempts/hour")
             else if (gate.progress >= 3) status.value = status.value.copy(detail = "3 failures seen · waiting for shared photo cooldown; keep phone locked")
-            return
+            return null
         }
-        val armedSession = session ?: return
+        val armedSession = session ?: return null
         captureManual = manual
-        status.value = status.value.copy(detail = if (manual) "Capturing labelled test photo…" else "Capturing after failed credential entries…")
-        captureJob = scope.launch {
+        status.value = status.value.copy(detail = when (trigger) {
+            RecoveryPhotoTrigger.LOCAL_TEST -> "Capturing labelled test photo…"
+            RecoveryPhotoTrigger.REMOTE_MANUAL -> "Capturing picture requested by household…"
+            RecoveryPhotoTrigger.FAILED_UNLOCK -> "Capturing after failed credential entries…"
+        })
+        val capture = scope.async {
             val stamp = PrivacySends.fence.stamp()
             val epoch = identity.photoEpoch
-            val allowed = { !RuntimeLease.conflict && session == armedSession && identity.enrolled && identity.allowCommands && identity.photoEpoch == epoch && LocalSafety.isCameraEnabled(this@ArmedCameraService) && !LocalSafety.isStopped(this@ArmedCameraService) && getSystemService(KeyguardManager::class.java).isDeviceLocked != manual }
+            val allowed = { session == armedSession && enabled() && identity.photoEpoch == epoch && requestAllowed() && trigger.allowsCapture(getSystemService(KeyguardManager::class.java).isDeviceLocked) }
+            val capturing = AtomicBoolean(true)
             var ticket: DisclosureFence.Ticket? = null
             try {
                 check(epoch != null)
                 prerequisites(this@ArmedCameraService, requireUnlocked = false)
                 val job = currentCoroutineContext().job
-                ticket = PrivacySends.fence.reserve(stamp, allowed, { job.cancel() })
+                ticket = PrivacySends.fence.reserve(stamp, allowed, { if (capturing.get()) job.cancel() })
                 val sensor = getSystemService(CameraManager::class.java).getCameraCharacteristics(FrontCamera.cameraId(this@ArmedCameraService))
                     .get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
                 val rotation = when (getSystemService(DisplayManager::class.java).getDisplay(Display.DEFAULT_DISPLAY)?.rotation) { Surface.ROTATION_90 -> 90; Surface.ROTATION_180 -> 180; Surface.ROTATION_270 -> 270; else -> 0 }
                 val original = withTimeout(8000) { FrontCamera.capture(this@ArmedCameraService) }
                 val jpeg = withContext(Dispatchers.Default) { FrontCamera.privateJpeg(original, (sensor + rotation) % 360) }
                 val photo = JSONObject().put("id", UUID.randomUUID().toString()).put("captured_at", System.currentTimeMillis()/1000)
-                    .put("failed_attempts", attempts).put("reason", if (manual) "local_test" else "failed_unlock").put("jpeg", Identity.encode(jpeg))
+                    .put("failed_attempts", attempts).put("reason", trigger.reason).put("jpeg", Identity.encode(jpeg))
                 withContext(Dispatchers.IO) { identity.queuePhoto(photo, armedSession, epoch, stamp, allowed) }
                 status.value = status.value.copy(detail = "Photo captured · waiting in memory for upload")
                 refreshQueue(identity, armedSession)
                 TelemetryService.requestPhotoUpload()
+                photo.getString("id")
             } catch (e: Exception) {
                 if (e is CancellationException && !currentCoroutineContext().isActive) {
                     if (session == armedSession && enabled()) status.value = status.value.copy(detail="Capture canceled before completion · no new picture queued")
                     throw e
                 }
                 if (session == armedSession) status.value = status.value.copy(detail = "Capture failed: ${(e.message ?: e.javaClass.simpleName).take(110)} · no new photo")
-            } finally { ticket?.let { PrivacySends.fence.release(it) } }
+                throw e
+            } finally { capturing.set(false); ticket?.let { PrivacySends.fence.release(it) } }
         }
+        captureJob = capture
+        return capture
     }
     override fun onDestroy() {
         if (active === this) { runCatching { invalidate(this) }; refreshReadiness(this) }
@@ -182,6 +193,27 @@ class ArmedCameraService : Service() {
         private val approvals = CameraStartApproval()
         private val controlLock = Any()
         fun currentSession(): String? = active?.session
+        fun canTakePicture(): Boolean = active?.let { it.session != null && it.enabled() } == true
+        suspend fun takePicture(requestAllowed: () -> Boolean): String = withContext(Dispatchers.Main.immediate) {
+            val service = checkNotNull(active) { "Enable theft photos on the phone and keep the camera ready" }
+            check(service.session != null && service.enabled()) { "The locally enabled recovery camera is not ready" }
+            check(requestAllowed()) { "Picture request expired or was canceled" }
+            prerequisites(service, requireUnlocked = false)
+            check(service.captureJob?.isActive != true) { "A recovery picture is already being captured" }
+            val capture = checkNotNull(service.failed(0, RecoveryPhotoTrigger.REMOTE_MANUAL, requestAllowed)) {
+                "Capture unavailable or rate limited; wait at least 30 seconds; maximum 20 attempts/hour"
+            }
+            try {
+                val id = capture.await()
+                "Picture captured and queued for upload; view Recovery photos after delivery. Photo ID: $id"
+            } catch (e: CancellationException) {
+                currentCoroutineContext().ensureActive()
+                error("Recovery camera capture was canceled or timed out; no picture queued")
+            } finally {
+                // The camera service owns the job; a canceled remote command must cancel it too.
+                withContext(NonCancellable) { capture.cancelAndJoin() }
+            }
+        }
         fun enable(activity: FragmentActivity) = synchronized(controlLock) {
             check(activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) { "Keep Bungee visible while enabling theft photos" }
             prerequisites(activity, requireUnlocked = true)
@@ -256,7 +288,7 @@ class ArmedCameraService : Service() {
         fun monitorUnavailable(reason: String) { status.value = status.value.copy(detail = "PIN failure monitoring unavailable ($reason); check device administration") }
         fun test(activity: FragmentActivity) {
             check(activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && !activity.getSystemService(KeyguardManager::class.java).isDeviceLocked)
-            checkNotNull(active) { "Arm the camera first" }.failed(0, manual = true)
+            checkNotNull(active) { "Arm the camera first" }.failed(0, RecoveryPhotoTrigger.LOCAL_TEST)
         }
         fun passwordSucceeded(context: Context, identity: Identity) {
             if (!LocalSafety.isCameraEnabled(context) || !identity.allowCommands) return

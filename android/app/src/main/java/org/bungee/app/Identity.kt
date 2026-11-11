@@ -137,7 +137,7 @@ class Identity(context: Context) {
             catch (e: Exception) {
                 // Independent, best-effort durable stop. If storage prevents that too,
                 // the UI directs the user to deactivate administration and force-stop in Android Settings.
-                runCatching { LocalSafety.setStopped(appContext, true) }
+                runCatching { LocalSafety.setStopped(appContext, true, SharingReason.CONSENT_STORAGE_ERROR) }
                 runCatching { appContext.stopService(Intent(appContext, TelemetryService::class.java)) }
                 throw e
             }
@@ -258,6 +258,7 @@ class Identity(context: Context) {
             val edit = prefs.edit().clear().putString("identity_generation", java.util.UUID.randomUUID().toString()).putBoolean("app_lock", lock)
             keep?.let { edit.putString("wg_private", it.first).putString("wg_public", it.second) }
             check(edit.commit()) { "Could not reset Bungee's pairing state" }
+            SharingHistory.clear(context)
             if (newKeys) { keys.deleteEntry("bungee-signing"); keys.deleteEntry("bungee-storage") }
         } } }
         /** Read legacy recovery records without generating/replacing a key or changing identity state. */

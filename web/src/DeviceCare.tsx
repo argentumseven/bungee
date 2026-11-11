@@ -7,6 +7,7 @@ import {
 import { api } from "./api";
 import { RecoveryMessagePreview } from "./RecoveryMessagePreview";
 import { RecoveryPhotos } from "./RecoveryPhotos";
+import { SharingHistory } from "./SharingHistory";
 import { ProfileSetup } from "./ProfileSetup";
 import type { PhoneProfiles } from "./PhoneStatus";
 
@@ -239,7 +240,7 @@ export function DeviceCare({
                   </div>
                   <h3 className="delivery-heading">Theft-photo protection</h3>
                   <p className="fine">{report.camera ? `${report.camera.armed ? "Armed at last report" : "Not ready at last report"} · ${time(report.camera.reported_at)}. ${report.camera.status}. Pending ${report.camera.pending}/8; discarded at capacity ${report.camera.dropped}.` : "Not reported. Check the app version and theft-photo settings on the phone."} Enable protection on the phone before it is lost. This server cannot enable it remotely.</p>
-                  {!!report.camera?.queued?.length && <ul className="fine">{report.camera.queued.map(photo=><li key={photo.id}>{photo.reason==="local_test"?"Labelled camera test":"Failed-entry capture"} · {time(photo.captured_at)} · awaiting upload at last report</li>)}</ul>}
+                  {!!report.camera?.queued?.length && <ul className="fine">{report.camera.queued.map(photo=><li key={photo.id}>{photo.reason==="remote_manual"?"Manually requested picture":photo.reason==="local_test"?"Labelled camera test":"Failed-entry capture"} · {time(photo.captured_at)} · awaiting upload at last report</li>)}</ul>}
                   <h3 className="delivery-heading">Delivery &amp; offline queue</h3>
                   {report.delivery ? (
                     <>
@@ -348,6 +349,7 @@ export function DeviceCare({
           </div>
           <ProfileSetup key={`profiles-${device.id}`} phone={device}/>
           <RecoveryPhotos key={device.id} deviceId={device.id} />
+          <SharingHistory key={`sharing-${device.id}`} deviceId={device.id} />
         </>
       )}
     </div>

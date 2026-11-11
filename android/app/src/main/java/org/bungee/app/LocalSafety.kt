@@ -27,8 +27,11 @@ object LocalSafety {
         check(!ManagementAgent.blocksPersonalOperation(context)) { "Device/profile ownership is unsupported or unavailable" }
         return action()
     }
-    fun setStopped(context: Context, stopped: Boolean) = PrivacySends.fence.change { synchronized(this) {
-        write(context, if (stopped) read(context).stop() else read(context).clearStop())
+    fun setStopped(context: Context, stopped: Boolean, reason: SharingReason = SharingReason.SERVICE_ENDED) = PrivacySends.fence.change { synchronized(this) {
+        val previous = read(context)
+        try { write(context, if (stopped) previous.stop() else previous.clearStop()) }
+        catch (e: Exception) { SharingHistory.record(context, SharingReason.CONSENT_STORAGE_ERROR); throw e }
+        if (stopped && !previous.stopped) SharingHistory.record(context, reason)
     } }
     @Synchronized fun setRestartAllowed(context: Context, allowed: Boolean) { write(context, read(context).allowRestart(allowed)) }
     fun setCameraEnabled(context: Context, enabled: Boolean) = PrivacySends.fence.change { synchronized(this) {

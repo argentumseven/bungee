@@ -109,7 +109,7 @@ class PairingRecoveryPanel(private val activity: FragmentActivity, private val o
             finally { running = false }
         }
     }
-    private fun stop(): List<String> = RecoveryCoordinator.run({ LocalSafety.setStopped(activity, true) }, listOf(
+    private fun stop(): List<String> = RecoveryCoordinator.run({ LocalSafety.setStopped(activity, true, SharingReason.LOCAL_RECOVERY) }, listOf(
         "Could not close the Bungee connection; use Android Settings to force-stop Bungee." to { RecoveryConnection.current.stop() },
         "DNS restoration failed. Open Android Private DNS settings and select Automatic before resetting or uninstalling Bungee." to { LegacyDnsRecovery.restore(activity); Unit },
         "Could not finish camera cleanup." to { ArmedCameraService.disarm(activity) },
@@ -119,7 +119,7 @@ class PairingRecoveryPanel(private val activity: FragmentActivity, private val o
     private fun confirmReset() {
         val fresh = CheckBox(activity).apply { text = "Generate new phone keys too (use this if keys are damaged)" }
         AlertDialog.Builder(activity).setTitle("Reset only Bungee pairing?")
-            .setMessage("Stops Bungee and deletes its saved server invitation, sharing approvals and unsent GPS/photos/receipts. Server history and Android permissions/administration are unchanged. Your phone keys are kept unless selected below. Revoke and purge the old binding in the manager, then create a fresh invitation for the phone's current public key.")
+            .setMessage("Stops Bungee and deletes its saved server invitation, sharing approvals, local sharing history and unsent GPS/photos/receipts. Server history and Android permissions/administration are unchanged. Your phone keys are kept unless selected below. Revoke and purge the old binding in the manager, then create a fresh invitation for the phone's current public key.")
             .setView(fresh)
             .setPositiveButton("Reset pairing") { _, _ ->
                 val newKeys = fresh.isChecked

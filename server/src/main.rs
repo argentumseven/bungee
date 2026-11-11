@@ -14,6 +14,7 @@ mod recurrence;
 mod release;
 mod runtime;
 mod security;
+mod sharing;
 mod store;
 mod tls;
 
@@ -172,6 +173,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(history::history).delete(api::clear_history),
         )
         .route("/api/devices/{id}/commands", post(api::command))
+        .route("/api/devices/{id}/sharing-history", get(sharing::history))
         .route(
             "/api/devices/{id}/commands/{command}",
             delete(api::cancel_command),

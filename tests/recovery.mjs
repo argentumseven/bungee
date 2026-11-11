@@ -6,6 +6,63 @@ import {execFileSync} from "node:child_process";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {phone} from "./support/phone.mjs";
+import {readFile} from "node:fs/promises";
+import {randomUUID} from "node:crypto";
+
+test("manual profile pictures target only the selected locally enabled profile",async t=>{
+ const f=await fixture(t),main=await phone(f,{profiles:true,capabilities:["take_picture","stop_all"]});
+ const sandbox=await phone(f,{name:"Sandbox",primaryDeviceId:main.id,capabilities:["take_picture","stop_all"]});
+ const other=await phone(f,{name:"Work",primaryDeviceId:main.id,capabilities:["stop_all"]});
+ assert.equal((await f.admin(`/api/devices/${other.id}/commands`,"POST",{kind:"take_picture"})).status,400);
+ const response=await f.admin(`/api/devices/${sandbox.id}/commands`,"POST",{kind:"take_picture"});assert.equal(response.status,200);
+ const queued=await response.json();
+ assert.deepEqual((await (await main.request("/v1/commands",{})).json()).commands,[]);
+ assert.deepEqual((await (await other.request("/v1/commands",{})).json()).commands,[]);
+ const offered=(await (await sandbox.request("/v1/commands",{})).json()).commands;
+ assert.deepEqual(offered.map(c=>[c.id,c.kind]),[[queued.id,"take_picture"]]);
+ assert.equal((await (await sandbox.request("/v1/command-check",{id:queued.id})).json()).allowed,true);
+ assert.equal((await (await sandbox.request("/v1/command-check",{id:queued.id})).json()).allowed,false,"runtime execution claims prevent repeated pictures");
+ assert.equal((await f.admin(`/api/devices/${main.id}/commands`,"POST",{kind:"stop_all"})).status,200);
+ assert.deepEqual((await (await sandbox.request("/v1/commands",{})).json()).commands.map(c=>c.kind),["stop_all"]);
+});
+
+test("manual pictures require a granted capability and use normal receipts, cancellation and photo storage",async t=>{
+ const f=await fixture(t),p=await phone(f),other=await phone(f),path=`/api/devices/${p.id}/commands`;
+ const queue=()=>f.admin(path,"POST",{kind:"take_picture"});
+ assert.equal((await queue()).status,400,"older/disarmed phones have no manual camera capability");
+ assert.equal((await p.request("/v1/telemetry",{battery:70,charging:false,device_owner:false,capabilities:["take_picture","stop_all"]})).status,200);
+ assert.equal((await fetch(f.origin+path,{method:"POST",headers:{Origin:f.origin,"Content-Type":"application/json"},body:JSON.stringify({kind:"take_picture"})})).status,401);
+ assert.equal((await f.admin(path,"POST",{kind:"take_picture"},{Origin:"https://evil.invalid"})).status,403);
+ assert.equal((await f.admin(`/api/devices/${other.id}/commands`,"POST",{kind:"take_picture"})).status,400);
+ const response=await queue();assert.equal(response.status,200);const queued=await response.json();
+ const offered=await (await p.request("/v1/commands",{})).json();
+ assert.deepEqual(offered.commands.map(c=>[c.id,c.kind]),[[queued.id,"take_picture"]]);
+ assert.equal(f.sql("SELECT expires-created FROM commands WHERE id=?",[queued.id])[0][0],300);
+ assert.equal((await (await p.request("/v1/command-check",{id:queued.id})).json()).allowed,true);
+ const photo={id:randomUUID(),captured_at:Math.floor(Date.now()/1000),failed_attempts:0,reason:"remote_manual",jpeg:(await readFile("tests/fixtures/recovery-test.jpg")).toString("base64")};
+ const upload={photo_epoch:offered.photo_epoch,photo};
+ assert.equal((await p.request("/v1/photos",{...upload,photo:{...photo,failed_attempts:3}})).status,400);
+ for(let i=0;i<2;i++){
+  const accepted=await p.request("/v1/photos",upload);assert.equal(accepted.status,200);assert.equal((await accepted.json()).accepted_photo,photo.id);
+ }
+ const gallery=await (await f.admin(`/api/devices/${p.id}/photos`)).json();
+ assert.equal(gallery.photos.length,1);assert.equal(gallery.photos[0].reason,"remote_manual");assert.equal(gallery.photos[0].failed_attempts,0);
+ const report=await p.request("/v1/sync",{report:{recovery_consent:true,camera:{armed:true,pending:1,reported_at:photo.captured_at,queued:[{id:photo.id,captured_at:photo.captured_at,reason:photo.reason}]}}});
+ assert.equal(report.status,200,"pending manual photo metadata is accepted in signed status reports");
+ const receipt={id:queued.id,status:"executed",result:"Picture captured and queued for upload",attempted_at:photo.captured_at};
+ assert.equal((await p.request("/v1/ack",receipt)).status,200);
+ assert.deepEqual((await (await p.request("/v1/commands",{})).json()).commands,[]);
+ const canceled=await (await queue()).json();
+ assert.equal((await f.admin(`${path}/${canceled.id}`,"DELETE")).status,200);
+ assert.deepEqual((await (await p.request("/v1/commands",{})).json()).commands,[]);
+ const pending=await (await queue()).json();await p.request("/v1/commands",{});
+ assert.equal((await f.admin(path,"POST",{kind:"stop_all"})).status,200);
+ assert.equal((await (await p.request("/v1/command-check",{id:pending.id})).json()).allowed,false);
+ const expired=await (await queue()).json();f.sql("UPDATE commands SET expires=? WHERE id=?",[Math.floor(Date.now()/1000)-1,expired.id]);
+ assert.ok((await (await p.request("/v1/commands",{})).json()).commands.every(c=>c.id!==expired.id));
+ assert.equal((await p.request("/v1/telemetry",{battery:70,charging:false,device_owner:false,capabilities:[]})).status,200);
+ assert.equal((await queue()).status,400,"withdrawing the camera capability prevents new requests");
+});
 
 test("individual cancellation stops delivery and preserves truthful late receipts",async t=>{
  const f=await fixture(t),p=await phone(f);

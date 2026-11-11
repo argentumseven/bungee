@@ -27,6 +27,12 @@ Old encrypted preference queues migrate transactionally into individually AES-GC
 
 Automatic GPS restart requires precise and **background** location permission, granted explicitly in Android Settings after Bungee's explanation, plus the separate restart opt-in. Without background permission, an automatic start uses the connection-only foreground service and reports GPS needs a foreground start. Open Bungee and use **Resume GPS from this screen**. A rejected foreground-service start is handled without claiming GPS is collecting. Before the first unlock, credential-encrypted identity/data remain unavailable. No boot-before-unlock promise or hidden permission bypass is made.
 
+## Viewing GPS history during outages
+
+Saved server history has no automatic expiry. In the dashboard, the initial GPS history range includes the phone's last saved fix even if it predates the last 24 hours. **Show all saved history** opens the full saved range with pagination.
+
+The latest view refreshes every 15 seconds and extends its end time so queued fixes appear after reconnection. A failed refresh retains the loaded map and records while showing the error. Editing time filters or loading older pages pauses automatic refresh to keep that lookup stable; use **Show all saved history** to return to the latest view. Gaps represent missing observations, not deleted server records.
+
 ## Interrupted pairing
 
 An initial pairing still needs a usable path to the home server and a valid invitation. If the server commits redemption but its response is lost, the phone tries a normal signed policy-sync request using its existing signing key/device ID. That check can succeed only when the server already bound that exact key. Success confirms registration; it does not redeem the invitation again or permit a different key to bind. Failure preserves the local identity and invitation for a bounded retry rather than silently generating replacement keys. **Retry saved pairing** also works after an app restart; if first redemption already committed, signed confirmation does not depend on the old token still being redeemable. An expired invitation cannot enroll a new identity. Failed/completed pairing closes its own temporary tunnel unless the sharing service has already taken ownership. A service's delayed cleanup cannot close a replacement service's peer.

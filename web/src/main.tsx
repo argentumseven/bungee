@@ -5,6 +5,7 @@ import {
   ArrowDownLeft,
   ArrowRight,
   BellRing,
+  Camera,
   Check,
   ChevronRight,
   CircleHelp,
@@ -51,6 +52,7 @@ import { AppearanceControl, useAppearance } from "./Appearance";
 import { RecoveryMessagePreview } from "./RecoveryMessagePreview";
 import { PasswordSettings } from "./PasswordSettings";
 import { RecoveryPhotos } from "./RecoveryPhotos";
+import { SharingHistory } from "./SharingHistory";
 import { MapManager } from "./MapManager";
 import { AppUpdates } from "./AppUpdates";
 import { HistoryImport } from "./HistoryImport";
@@ -613,12 +615,13 @@ function App() {
                   </div>
                   <button className="stop-actions" disabled={busy || !device?.enrolled || !device.capabilities.includes("stop_all")} onClick={() => send("stop_all")}><VolumeX size={18}/> Stop all Bungee actions <small>Stop sound, flash and remote GPS; clear messages and lost mode</small></button>
                   <p className="fine">A stop waits for the phone to connect. It cancels outstanding commands. It cannot unlock Android after a screen lock has already happened.</p>
+                  <p className="fine">Refresh location makes a temporary GPS request even when automatic GPS sharing is off. Approved recovery commands and location permission are required. A locally stopped or offline app must reconnect before it can receive the request.</p>
                   <div className="actions-grid">
                     {[
                       {
                         kind: "locate",
                         name: "Refresh location",
-                        desc: "Ask for a fresh fix",
+                        desc: "Temporary GPS · works with automatic sharing off",
                         icon: MapPin,
                       },
                       {
@@ -630,6 +633,7 @@ function App() {
                       {kind:"best_guess",name:"Best guess",desc:"Collect a longer GPS burst",icon:Compass},
                       {kind:"ring_flash",name:"Alarm + flash",desc:"Sound and rear-camera flash",icon:BellRing},
                       {kind:"flash",name:"Flash only",desc:"Find the phone visually",icon:Zap},
+                      {kind:"take_picture",name:"Take picture",desc:"Front camera · enable theft photos on phone first",icon:Camera},
                       {
                         kind: "message",
                         name: "Leave a message",
@@ -751,7 +755,7 @@ function App() {
           {page === "Tunnels" && <TunnelView devices={active}/>}
           {page === "Tracking" && (
             <>
-              <div className="tracking-tabs" role="group" aria-label="Tracking views">{["Current estimate","GPS history","IP observations","Check-ins","Photos"].map(tab=><button key={tab} aria-pressed={trackingTab===tab} className={trackingTab===tab?"primary":"secondary"} onClick={()=>setTrackingTab(tab)}>{tab}</button>)}</div>
+              <div className="tracking-tabs" role="group" aria-label="Tracking views">{["Current estimate","GPS history","IP observations","Check-ins","Photos","Sharing history"].map(tab=><button key={tab} aria-pressed={trackingTab===tab} className={trackingTab===tab?"primary":"secondary"} onClick={()=>setTrackingTab(tab)}>{tab}</button>)}</div>
               <div className="tracking-device"><label htmlFor="history-device">Device</label>
               <select
                 id="history-device"
@@ -765,7 +769,7 @@ function App() {
                 ))}
               </select></div>
               {trackingTab==="Photos" ? <RecoveryPhotos/> : device ? (
-                trackingTab==="Current estimate"?<CurrentTracking device={device}/>:<HistoryView key={`${device.id}-${trackingTab}`} device={device} initialKind={trackingTab==="IP observations"?"network":trackingTab==="Check-ins"?"state":"locations"} />
+                trackingTab==="Sharing history"?<SharingHistory key={device.id} deviceId={device.id}/>:trackingTab==="Current estimate"?<CurrentTracking device={device}/>:<HistoryView key={`${device.id}-${trackingTab}`} device={device} initialKind={trackingTab==="IP observations"?"network":trackingTab==="Check-ins"?"state":"locations"} />
               ) : (
                 <section className="panel history-panel">
                   Pair a phone to begin saving history.
@@ -1184,7 +1188,9 @@ const localDateTime = (time: number) => {
     .slice(0, 16);
 };
 function HistoryView({ device, initialKind="locations" }: { device: Device; initialKind?:string }) {
-  const [from, setFrom] = useState(() => localDateTime(Date.now() - 86400000));
+  const lastSaved = device.last_location?.observed_at ?? device.telemetry?.location?.observed_at;
+  const initialFrom = Math.max(0, Math.min(Date.now(), initialKind === "locations" && lastSaved ? lastSaved * 1000 : Date.now()) - 86400000);
+  const [from, setFrom] = useState(() => localDateTime(initialFrom));
   const [to, setTo] = useState(() => localDateTime(Date.now() + 60000));
   const [kind, setKind] = useState(initialKind);
   const [source,setSource]=useState("all");
@@ -1196,7 +1202,7 @@ function HistoryView({ device, initialKind="locations" }: { device: Device; init
     () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
   );
   const [range, setRange] = useState(() => ({
-    from: Math.floor((Date.now() - 86400000) / 1000),
+    from: Math.floor(initialFrom / 1000),
     to: Math.floor(Date.now() / 1000) + 120,
     kind: initialKind,
     source: "all",
@@ -1213,8 +1219,10 @@ function HistoryView({ device, initialKind="locations" }: { device: Device; init
     [error, setError] = useState("");
   const [exportStarted, setExportStarted] = useState(false);
   const request = useRef<AbortController | null>(null);
-  const endpoint = (before?: number | null) =>
-    `/devices/${device.id}/history?${new URLSearchParams({ from: String(range.from), to: String(range.to), kind: range.kind, source: range.kind==="locations"?range.source:"all", limit: "200", ...(range.recurrence === "interval" ? { every: String(range.minutes * 60) } : range.recurrence === "daily" ? { daily: range.daily, timezone: range.timezone, tolerance: String(range.tolerance * 60) } : {}), ...(before ? { before: String(before) } : {}) })}`;
+  const followLatest = useRef(true);
+  const loadedTo = useRef(range.to);
+  const endpoint = (before?: number | null, until = loadedTo.current) =>
+    `/devices/${device.id}/history?${new URLSearchParams({ from: String(range.from), to: String(until), kind: range.kind, source: range.kind==="locations"?range.source:"all", limit: "200", ...(range.recurrence === "interval" ? { every: String(range.minutes * 60) } : range.recurrence === "daily" ? { daily: range.daily, timezone: range.timezone, tolerance: String(range.tolerance * 60) } : {}), ...(before ? { before: String(before) } : {}) })}`;
   useEffect(() => {
     const abort = new AbortController();
     request.current = abort;
@@ -1223,25 +1231,42 @@ function HistoryView({ device, initialKind="locations" }: { device: Device; init
     setRecords([]);
     setChosen(null);
     setNext(null);
-    api<HistoryPage>(endpoint(), { signal: abort.signal })
-      .then((data) => {
+    let loading = false;
+    async function refresh(initial = false) {
+      if (loading) return;
+      loading = true;
+      const until = followLatest.current ? Math.floor(Date.now() / 1000) + 120 : range.to;
+      try {
+        const data = await api<HistoryPage>(endpoint(null, until), { signal: abort.signal });
+        if (abort.signal.aborted) return;
+        loadedTo.current = until;
+        if (followLatest.current) setTo(localDateTime(until * 1000));
         setRecords(data.records);
         setNext(data.next_before);
-        setChosen(data.records[0] || null);
-      })
-      .catch((e) => {
-        if (!abort.signal.aborted) setError(e.message);
-      })
-      .finally(() => {
-        if (!abort.signal.aborted) setBusy(false);
-      });
-    return () => abort.abort();
+        setChosen(old => data.records.find(record => old && (range.kind === "state" ? record.id === old.id : record.observed_at === old.observed_at)) || data.records[0] || null);
+        setError("");
+      } catch (e) {
+        if (!abort.signal.aborted) setError((e as Error).message);
+      } finally {
+        loading = false;
+        if (initial && !abort.signal.aborted) setBusy(false);
+      }
+    }
+    void refresh(true);
+    const timer = window.setInterval(() => { if (followLatest.current) void refresh(); }, 15000);
+    return () => { window.clearInterval(timer); abort.abort(); request.current?.abort(); };
   }, [device.id, range]);
   async function more() {
-    const signal = request.current!.signal;
+    // Keep the selected time range and loaded pages stable while browsing older fixes.
+    followLatest.current = false;
+    request.current?.abort();
+    const abort = new AbortController();
+    request.current = abort;
+    const signal = abort.signal;
     setBusy(true);
     try {
       const data = await api<HistoryPage>(endpoint(next), { signal });
+      if (signal.aborted) return;
       setRecords((old) => [...old, ...data.records]);
       setNext(data.next_before);
     } catch (e) {
@@ -1272,9 +1297,18 @@ function HistoryView({ device, initialKind="locations" }: { device: Device; init
         </h2>
         <span className="subtle">UNTIL YOU ERASE IT</span>
       </div>
-      <HistoryImport key={device.id} deviceId={device.id} onImported={(from,to)=>{setRange({...range,kind:"locations",source:"all",recurrence:"all",from,to});window.dispatchEvent(new Event("bungee:refresh"));}}/>
+      <HistoryImport key={device.id} deviceId={device.id} onImported={(from,to)=>{followLatest.current=false;setRange({...range,kind:"locations",source:"all",recurrence:"all",from,to});window.dispatchEvent(new Event("bungee:refresh"));}}/>
+      <p className="fine">Saved records stay on this server while the phone is offline. The latest view refreshes as queued fixes arrive after reconnection.</p>
+      <button type="button" className="text-button" disabled={busy} onClick={() => {
+        followLatest.current = true;
+        const until = Math.floor(Date.now() / 1000) + 120;
+        setFrom(localDateTime(0)); setTo(localDateTime(until * 1000));
+        setKind(initialKind); setSource("all"); setRecurrence("all");
+        setRange({ ...range, from: 0, to: until, kind: initialKind, source: "all", recurrence: "all" });
+      }}>Show all saved history</button>
       <form
         className="history-filters"
+        onChange={() => { followLatest.current = false; }}
         onSubmit={(e) => {
           e.preventDefault();
           const start = Date.parse(from) / 1000,
@@ -1287,6 +1321,7 @@ function HistoryView({ device, initialKind="locations" }: { device: Device; init
             setError("Interval history allows up to 366 days and 10,000 time buckets. Choose a shorter range or wider interval.");
             return;
           }
+          followLatest.current = false;
           setRange({
             from: Math.floor(start),
             to: Math.floor(end),
@@ -1453,7 +1488,7 @@ function HistoryView({ device, initialKind="locations" }: { device: Device; init
         stay saved.
       </p>
       {busy && <p role="status">Loading saved history…</p>}
-      {!busy && !records.length && (
+      {!busy && !error && !records.length && (
         <p>
           No saved records in this time range. Offline phones upload queued GPS
           fixes when they reconnect.

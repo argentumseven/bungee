@@ -159,6 +159,21 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS recovery_photos_device_sequence ON recovery_photos(device_id,sequence);
         CREATE INDEX IF NOT EXISTS recovery_photos_device_received ON recovery_photos(device_id,received_at);")?;
     tx.execute_batch("CREATE TABLE IF NOT EXISTS erased_photos(device_id TEXT NOT NULL REFERENCES devices(id),photo_id TEXT NOT NULL,PRIMARY KEY(device_id,photo_id));")?;
+    if !columns.iter().any(|c| c == "sharing_epoch") {
+        tx.execute(
+            "ALTER TABLE devices ADD COLUMN sharing_epoch TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
+    tx.execute(
+        "UPDATE devices SET sharing_epoch=lower(hex(randomblob(32))) WHERE sharing_epoch=''",
+        [],
+    )?;
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS sharing_events(
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT, device_id TEXT NOT NULL REFERENCES devices(id),
+        event_id TEXT NOT NULL, reason TEXT NOT NULL, at INTEGER, recorded_at INTEGER NOT NULL, received_at INTEGER NOT NULL,
+        UNIQUE(device_id,event_id));
+        CREATE INDEX IF NOT EXISTS sharing_events_device_sequence ON sharing_events(device_id,sequence);")?;
     // Opaque generations never depend on handset clocks. Preserve them across restarts.
     tx.execute(
         "UPDATE devices SET gps_epoch=lower(hex(randomblob(32))) WHERE gps_epoch=''",

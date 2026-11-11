@@ -28,6 +28,6 @@ class ProfileCompanionPolicyTest {
             assertFalse(kind,ProfileCompanionPolicy.permits(true,kind))
             assertTrue(kind,ProfileCompanionPolicy.permits(false,kind))
         }
-        for(kind in listOf("message","clear_message","stop_all")) assertTrue(ProfileCompanionPolicy.permits(true,kind))
+        for(kind in listOf("message","clear_message","stop_all","take_picture")) assertTrue(ProfileCompanionPolicy.permits(true,kind))
     }
 }

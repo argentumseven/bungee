@@ -223,6 +223,7 @@ const CAPABILITIES: &[&str] = &[
     "ring",
     "ring_flash",
     "flash",
+    "take_picture",
     "stop_ringing",
     "stop_all",
     "message",
@@ -308,7 +309,7 @@ pub async fn enroll(
         ],
     )?;
     tx.execute(
-        "UPDATE devices SET public_key=?,capabilities=?,last_seen=?,gps_epoch=?,photo_epoch=? WHERE id=?",
+        "UPDATE devices SET public_key=?,capabilities=?,last_seen=?,gps_epoch=?,photo_epoch=?,sharing_epoch=CASE WHEN sharing_epoch='' THEN lower(hex(randomblob(32))) ELSE sharing_epoch END WHERE id=?",
         params![
             input.public_key,
             serde_json::to_string(&input.capabilities.iter().filter(|kind|kind.as_str()!="dns_check" && (!companion || crate::profiles::COMMANDS.contains(&kind.as_str()))).collect::<Vec<_>>()).unwrap(),
@@ -542,6 +543,7 @@ fn erase_history(
     }
     tx.execute("DELETE FROM location_history WHERE device_id=?", [id])?;
     if include_state {
+        crate::sharing::erase(&tx, id)?;
         crate::photos::erase_in(&tx, id)?;
         tx.execute("DELETE FROM state_history WHERE device_id=?", [id])?;
         tx.execute(
@@ -713,7 +715,7 @@ pub async fn poll(
     let db = app.db.lock().unwrap();
     crate::runtime::fence(&db, &id, &headers)?;
     if crate::profiles::companion(&db, &id)? {
-        db.execute("UPDATE commands SET status='rejected',result='Not available to a profile companion' WHERE device_id=? AND kind NOT IN ('message','clear_message','stop_all') AND status IN ('pending','delivered')", [&id])?;
+        db.execute("UPDATE commands SET status='rejected',result='Not available to a profile companion' WHERE device_id=? AND kind NOT IN ('message','clear_message','stop_all','take_picture') AND status IN ('pending','delivered')", [&id])?;
     }
     db.execute("UPDATE commands SET status='rejected',result='Disabled by reversibility policy' WHERE device_id=? AND kind='reboot' AND status IN ('pending','delivered')", [&id])?;
     let mut q=db.prepare("SELECT id,kind,payload,expires FROM commands WHERE device_id=? AND status IN ('pending','delivered') AND expires>? AND (?=0 OR kind='stop_all') ORDER BY (kind='stop_all') DESC,created LIMIT 10")?;
@@ -833,6 +835,7 @@ pub async fn revoke(
         tx.execute("UPDATE devices SET revoked=1,telemetry=NULL,last_location=NULL,wg_psk=NULL,management_report=NULL,capabilities='[]' WHERE id=?",[&member])?;
         for table in [
             "device_runtimes",
+            "sharing_events",
             "enrollments",
             "commands",
             "location_history",

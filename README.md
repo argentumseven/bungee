@@ -30,7 +30,7 @@ The Kotlin app connects through an app-contained WireGuard tunnel to a Rust serv
 | Offline GPS | Independent sampling, individually AES-GCM encrypted SQLite records, up to 10,080 unique unsent fixes, bounded uploads, deduplication, transactional legacy-queue migration and capacity-loss counts |
 | Poor connectivity | Network-aware exponential backoff/jitter, adaptive 1–100-point catch-up, command priority, encrypted receipt retries, late receipt reconciliation and separate contact/telemetry ages. [DDIL details](docs/DDIL.md) |
 | Last-known location | Retained through outages, missing fixes and server restarts; older backfills cannot replace a newer point |
-| Recovery commands | Fresh GPS, alarm/flash, messages, normal Android screen lock and Stop all actions; cancellation of current actions and queued offers; five-minute normal expiry, 24-hour stop expiry and phone-reported outcomes |
+| Recovery commands | Fresh GPS, alarm/flash, manual front-camera pictures (locally enabled theft photos), messages, normal Android screen lock and Stop all actions; cancellation of current actions and queued offers; five-minute normal expiry, 24-hour stop expiry and phone-reported outcomes |
 | Alarm | Bundled rising/falling siren, at most 30 seconds, phone alarm volume and interruption settings, local stop controls, two-second browser preview |
 | Messages | Up to 240 characters in Android recovery notifications; lock-screen and heads-up illustrations in the dashboard; normal credential entry remains accessible |
 | Lost mode | Saved state survives outages, one lock attempt per revision when permitted, contact notification and more frequent check-ins |
@@ -39,10 +39,11 @@ The Kotlin app connects through an app-contained WireGuard tunnel to a Rust serv
 | Photo gallery | Signed uploads, authenticated paginated gallery, capture/receipt times, local-test labels and separate photo erasure; old erased generations cannot upload again |
 | Phone consent | QR or pasted invitation, separate GPS/command consent, commands off by default, visible sharing notification, optional restart after first unlock, background-location grant for automatic GPS recovery, authenticated unpairing |
 | Local recovery | In-app offline **Pairing & recovery** panel independent of pairing keys, Compose and native transport; authenticated stop, saved stop across reboot/update, cleanup results, Android Settings links and explicit manual restart |
-| App privacy | Biometric/device-credential app lock, screen capture/OS backup disabled, Keystore signing key, AES-GCM local secret/queue storage; no Play services, analytics, crash-upload or push provider |
+| App privacy | Biometric/device-credential app lock, screen capture/OS backup disabled, Keystore signing key, AES-GCM local secret/queue storage; no Play services, analytics, third-party crash reporting or push provider |
 | Appearance | System/Light/Dark themes on web and Android, saved local choices, slate/charcoal/teal palettes and pink home/location icon |
 | VPN coexistence | Userspace WireGuard/TCP carries the fixed home API without OS routes, root or VpnService. Other VPNs can route or filter the outer UDP socket |
 | Device status | Desired/applied policy revision and errors, Android/security-patch version, screen-lock state, eligible failed-credential counts, lost mode and dated queue/camera reports |
+| Sharing history | Phone and web start/stop timeline with manual sources, crash/error/Android classifications, observation/receipt times and offline sync; [temporary Locate](docs/SHARING_HISTORY.md) works while automatic GPS sharing is off under existing recovery/location approval |
 | Recovery safeguards | Server/client reject persistent policy fields and remote reboot; device/profile ownership blocks operation; owner provisioning disabled; no app suspension, uninstall blocks, forced credentials, kiosk or recovery-settings restrictions |
 | Pairing | Phone-generated identity, one-use ten-minute invitation bound to its public key, safe unpaired-invitation reissue, P-256 proof/signatures, replay protection and unique random 256-bit WireGuard PSK |
 | Network setup | Operator-chosen numeric endpoint and UDP port; 51820 rejected; only `10.77.0.1/32` routed inside Bungee; no default internet route |
