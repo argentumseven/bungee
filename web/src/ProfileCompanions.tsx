@@ -4,6 +4,7 @@ import { api } from "./api";
 import { ConnectionBadge, DuplicateNotice } from "./PhoneStatus";
 import { RecoveryPhotos } from "./RecoveryPhotos";
 import { SharingHistory } from "./SharingHistory";
+import { installationCamera } from "./recoveryCamera";
 
 export type ProfileAgent = {
   id: string;
@@ -34,11 +35,14 @@ export function ProfileCompanions({
   deviceName,
   profiles,
   detail = false,
+  clockSkew = 0,
 }: {
   deviceId: string;
   deviceName: string;
   profiles: ProfileAgent[];
   detail?: boolean;
+  /** Server time minus this browser's time, in seconds. */
+  clockSkew?: number;
 }) {
   const [name, setName] = useState(""),
     [key, setKey] = useState("");
@@ -122,9 +126,11 @@ export function ProfileCompanions({
       <DuplicateNotice agents={profiles}/>
       {profiles.map((profile) => {
         const camera = profile.management?.camera;
+        const serverNow = Date.now() / 1000 + clockSkew;
         const recent =
           !!profile.last_contact &&
-          Date.now() / 1000 - profile.last_contact < 90;
+          serverNow - profile.last_contact < 90;
+        const picture = installationCamera(profile, serverNow);
         return (
           <article className="profile-agent" key={profile.id}>
             <div className="panel-heading">
@@ -135,7 +141,7 @@ export function ProfileCompanions({
             </div>
             {!profile.enrolled && !profile.revoked && <p className="fine">{profile.enrollment_state==="expired"?"Invitation expired":"Invitation pending"} · hidden from the phone navigation until officially paired.</p>}
             <p className="fine">
-              {profile.management?.foreground_user && recent && !!profile.management_report_at && Date.now()/1000-profile.management_report_at<90
+              {profile.management?.foreground_user && recent && !!profile.management_report_at && serverNow-profile.management_report_at<90
                 ? "Foreground user at last report. "
                 : ""}
               {camera?.status ||
@@ -150,6 +156,7 @@ export function ProfileCompanions({
             )}
             {profile.enrolled && !profile.revoked && (
               <>
+                {!picture.ready&&<p className="fine">Picture unavailable: {picture.detail}</p>}
                 {!profile.capabilities.includes("message")&&<p className="fine">Recovery messages are off in this profile. Approve them locally in its Bungee app.</p>}
                 <label htmlFor={`profile-message-${profile.id}`}>
                   Message for {profile.name}
@@ -167,7 +174,7 @@ export function ProfileCompanions({
                   <button
                     type="button"
                     className="secondary"
-                    disabled={busy || !profile.capabilities.includes("take_picture")}
+                    disabled={busy || !picture.ready}
                     onClick={() => void command(profile, "take_picture")}
                   >
                     Take picture in {profile.name}

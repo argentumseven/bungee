@@ -61,7 +61,7 @@ class ArmedCameraService : Service() {
                     observedFailures = failures
                     val boot = android.provider.Settings.Global.getInt(contentResolver, android.provider.Settings.Global.BOOT_COUNT)
                     withContext(Dispatchers.IO) {
-                        PrivacySends.fence.checked(stamp, { active === this@ArmedCameraService && enabled() }) {
+                        PrivacySends.fence.checked(stamp, { active === this@ArmedCameraService && consented() }) {
                             lease = CameraLease.obtain(identity.state("camera_lease"), boot, SystemClock.elapsedRealtime(), failures, visibleStart)
                             identity.resumePhotoSession(lease.id)
                             identity.saveState("camera_lease", lease.snapshot())
@@ -69,8 +69,8 @@ class ArmedCameraService : Service() {
                         }
                     }
                     prerequisites(this@ArmedCameraService, requireUnlocked = false)
-                    PrivacySends.fence.checked(stamp, { session == lease.id && enabled() }) {
-                        status.value = ArmedCameraStatus(true, "Ready · automatic photo after 3 new failed credential entries")
+                    PrivacySends.fence.checked(stamp, { session == lease.id && consented() }) {
+                        status.value = ArmedCameraStatus(true, READY)
                         refreshQueue(identity, lease.id)
                         nm.cancel(12); nm.notify(10, notification(ready = true))
                     }
@@ -80,9 +80,23 @@ class ArmedCameraService : Service() {
                         ContextCompat.startForegroundService(this@ArmedCameraService, Intent(this@ArmedCameraService, TelemetryService::class.java).setAction("AUTO_START"))
                     }
                     if (getSystemService(KeyguardManager::class.java).isDeviceLocked) failed(getSystemService(DevicePolicyManager::class.java).currentFailedPasswordAttempts)
+                    var pausedForConflict = false
                     while (isActive) {
                         prerequisites(this@ArmedCameraService, requireUnlocked = false)
-                        check(enabled()) { "Theft photos or household commands were disabled" }
+                        check(consented()) { "Theft photos or household commands were disabled" }
+                        // A rejected runtime lease is transient. Pause captures and resume by themselves;
+                        // tearing the service down would leave protection off until Bungee is reopened.
+                        if (RuntimeLease.conflict) {
+                            if (!pausedForConflict) {
+                                pausedForConflict = true
+                                status.value = status.value.copy(detail = PAUSED_FOR_CONFLICT)
+                            }
+                            delay(1000)
+                            continue
+                        } else if (pausedForConflict) {
+                            pausedForConflict = false
+                            status.value = status.value.copy(detail = READY)
+                        }
                         // Some OEMs delay the admin broadcast. Observe Android's
                         // own counter as well; never infer biometric failures.
                         val failuresNow = getSystemService(DevicePolicyManager::class.java).currentFailedPasswordAttempts
@@ -109,7 +123,9 @@ class ArmedCameraService : Service() {
         }
         return START_STICKY
     }
-    private fun enabled() = !RuntimeLease.conflict && LocalSafety.isCameraEnabled(this) && !LocalSafety.isStopped(this) && !ManagementAgent.blocksPersonalOperation(this) && identity.enrolled && identity.allowCommands
+    /** Local consent and pairing only. The runtime lease can be briefly rejected without withdrawing either. */
+    private fun consented() = LocalSafety.isCameraEnabled(this) && !LocalSafety.isStopped(this) && !ManagementAgent.blocksPersonalOperation(this) && identity.enrolled && identity.allowCommands
+    private fun enabled() = !RuntimeLease.conflict && consented()
     private fun notification(ready: Boolean): Notification {
         val stop = PendingIntent.getService(this, 10, Intent(this, ArmedCameraService::class.java).setAction("DISARM"), PendingIntent.FLAG_IMMUTABLE)
         val open = PendingIntent.getActivity(this, 11, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
@@ -125,10 +141,10 @@ class ArmedCameraService : Service() {
     }
     private fun saveGate() {
         val stamp = PrivacySends.fence.stamp()
-        PrivacySends.fence.checked(stamp, { session == lease.id && enabled() }) { identity.saveState("camera_lease", lease.snapshot()) }
+        PrivacySends.fence.checked(stamp, { session == lease.id && consented() }) { identity.saveState("camera_lease", lease.snapshot()) }
     }
     private fun failed(attempts: Int, trigger: RecoveryPhotoTrigger = RecoveryPhotoTrigger.FAILED_UNLOCK, requestAllowed: () -> Boolean = { true }): Deferred<String>? {
-        if (session == null || captureJob?.isActive == true) return null
+        if (session == null || captureJob?.isActive == true || RuntimeLease.conflict) return null // Resumes by itself when the lease is accepted again.
         val manual = trigger.manual
         val before = gate.snapshot().toString()
         val permitted = if (manual) gate.test(SystemClock.elapsedRealtime()) else gate.failed(attempts, SystemClock.elapsedRealtime())
@@ -189,6 +205,8 @@ class ArmedCameraService : Service() {
         super.onDestroy()
     }
     companion object {
+        const val READY = "Ready · automatic photo after 3 new failed credential entries"
+        const val PAUSED_FOR_CONFLICT = "Armed · paused while another instance of this profile holds the home connection; resumes automatically"
         val status = MutableStateFlow(ArmedCameraStatus())
         @Volatile private var active: ArmedCameraService? = null
         private val approvals = CameraStartApproval()

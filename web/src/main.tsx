@@ -52,7 +52,7 @@ import { AppearanceControl, useAppearance } from "./Appearance";
 import { RecoveryMessagePreview } from "./RecoveryMessagePreview";
 import { PasswordSettings } from "./PasswordSettings";
 import { RecoveryPhotos } from "./RecoveryPhotos";
-import { recoveryCamera } from "./recoveryCamera";
+import { recoveryCamera, reportedBackground } from "./recoveryCamera";
 import { SharingHistory } from "./SharingHistory";
 import { MapManager } from "./MapManager";
 import { AppUpdates } from "./AppUpdates";
@@ -159,6 +159,8 @@ function App() {
     [qr, setQr] = useState<{ bundle: string; src: string } | null>(null),
     [message, setMessage] = useState(""),
     [lastRefresh, setLastRefresh] = useState<number | null>(null);
+  // Phone report times are server times; compare them with the server's clock, not this browser's.
+  const [clockSkew, setClockSkew] = useState(0);
   const [clearTarget, setClearTarget] = useState<Device | null>(null);
   const [bindingTarget, setBindingTarget] = useState<Device | null>(null);
   const [purgedBinding,setPurgedBinding]=useState<Device|null>(null);
@@ -167,9 +169,10 @@ function App() {
     device = (page==="Tracking"?devices:active).find((d) => d.id === selected) || active[0] || (page==="Tracking"?devices[0]:undefined);
   const load = async () => {
     try {
-      const data = await api<{ devices: Device[]; commands: Command[] }>(
+      const data = await api<{ devices: Device[]; commands: Command[]; server_time?: number }>(
         "/devices",
       );
+      if (typeof data.server_time === "number") setClockSkew(data.server_time - Date.now() / 1000);
       setDevices(data.devices);
       setCommands(data.commands);
       setLastRefresh(Date.now());
@@ -178,7 +181,9 @@ function App() {
       setError((e as Error).message);
     }
   };
-  const picture = recoveryCamera(device);
+  const serverNow = () => Date.now() / 1000 + clockSkew;
+  const picture = recoveryCamera(device, serverNow());
+  const mainInBackground = !!device?.profiles_enabled && reportedBackground(device, serverNow());
   const recentCommands = commands.filter(c => !device || c.device_id === device.id || device.profiles?.some(p => p.id === c.device_id));
   useEffect(()=>{if(profileView && device && profileView!==device.id && !device.profiles?.some(p=>p.id===profileView))setProfileView("");},[device,profileView]);
   useEffect(() => {
@@ -276,7 +281,7 @@ function App() {
   }
   async function send(kind: string, text?: string) {
     if (!device) return;
-    const camera = kind === "take_picture" ? recoveryCamera(device) : undefined;
+    const camera = kind === "take_picture" ? recoveryCamera(device, serverNow()) : undefined;
     if (camera && !camera.target) { setError(camera.detail); return; }
     const target = camera?.target || device;
     setBusy(true);
@@ -576,7 +581,7 @@ function App() {
             <>
               {active.length>1 && <label className="device-picker">Phone<select value={device?.id||""} onChange={e=>setSelected(e.target.value)}>{active.map(d=><option key={d.id} value={d.id}>{d.name}</option>)}</select></label>}
               {device && <><PhoneHeader phone={device} networkLabel={connectionLabel(device)}><div className="phone-links"><button className="text-button" onClick={()=>setPage("Device care")}>{device.profiles_enabled?"Device care & profile setup":"Device care & theft-photo status"}</button><button className="text-button" onClick={()=>setPage("Tracking")}>Tracking &amp; history</button><button className="text-button" onClick={()=>{setRecordsDevice(device.id);setPage("Pairing & history");}}>Pairing &amp; history settings</button></div></PhoneHeader><ProfileTabs phone={device} selected={profileView} onSelect={setProfileView}/></>}
-              {device && profileView===device.id && device.profiles_enabled ? <DeviceCare key={`main-${device.id}`} device={device}/> : device?.profiles?.some(p=>p.id===profileView) ? <ProfileCompanions key={profileView} deviceId={device.id} deviceName={device.name} profiles={device.profiles.filter(p=>p.id===profileView)} detail/> : <>
+              {device && profileView===device.id && device.profiles_enabled ? <DeviceCare key={`main-${device.id}`} device={device}/> : device?.profiles?.some(p=>p.id===profileView) ? <ProfileCompanions key={profileView} deviceId={device.id} deviceName={device.name} profiles={device.profiles.filter(p=>p.id===profileView)} clockSkew={clockSkew} detail/> : <>
               <div className="dashboard-grid device-detail-grid">
                 <section className="panel location-panel">
                   <div className="panel-heading">
@@ -653,7 +658,11 @@ function App() {
                         desc: "Standard Android lock · unlock normally",
                         icon: LockKeyhole,
                       },
-                    ].map(({ kind, name, desc, icon: Icon }) => (
+                    ].map(({ kind, name, desc: baseDesc, icon: Icon }) => {
+                      const desc = mainInBackground && ["locate", "best_guess", "ring", "ring_flash", "flash", "lock"].includes(kind)
+                        ? `${baseDesc} · ${device?.main_profile_name || "Main profile"} is in the background; Android may block or mute this`
+                        : baseDesc;
+                      return (
                       <button
                         className="action"
                         key={kind}
@@ -673,7 +682,8 @@ function App() {
                         <small>{desc}</small>
                         <ArrowRight className="action-arrow" size={15} />
                       </button>
-                    ))}
+                      );
+                    })}
                   </div>
                   <p className="alarm-note">The updated phone app raises alarm volume temporarily and restores it afterward. Notification Stop requires unlock. Android interruption settings, system controls and hardware can still stop or suppress it.</p>
                   <details className="alarm-preview">

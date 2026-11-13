@@ -7,14 +7,16 @@ class DisclosureRequest(
     private val reserve: () -> Long,
     private val cancel: (Long) -> Unit
 ) {
-    fun <T> exchange(stamp: DisclosureFence.Stamp, allowed: () -> Boolean, remaining: () -> Long, send: (Long, Long) -> T): T {
+    /** [maxMillis] bounds one send; only the dedicated photo route may raise it above ten seconds. */
+    fun <T> exchange(stamp: DisclosureFence.Stamp, allowed: () -> Boolean, remaining: () -> Long, maxMillis: Long = DEFAULT_MAX_MILLIS, send: (Long, Long) -> T): T {
         var request = 0L
         val ticket = fence.reserve(stamp, allowed, { if (request != 0L) cancel(request) }, { request = reserve() })
         try {
-            val budget = remaining().coerceAtMost(10000)
+            val budget = remaining().coerceAtMost(maxMillis)
             check(budget > 0) { "Deadline passed before upload" }
             val result = send(request, budget)
             return fence.checked(stamp, allowed) { result }
         } finally { fence.release(ticket) }
     }
+    companion object { const val DEFAULT_MAX_MILLIS = 10_000L }
 }

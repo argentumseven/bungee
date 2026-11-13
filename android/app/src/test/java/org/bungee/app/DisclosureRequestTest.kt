@@ -53,4 +53,17 @@ class DisclosureRequestTest {
         assertThrows(IllegalStateException::class.java) { request.exchange(fence.stamp(), { true }, { 0 }) { _,_ -> fail("Expired upload") } }
         assertThrows(IllegalStateException::class.java) { request.exchange(fence.stamp(), { true }, { 10000 }) { _,_ -> fence.change { }; "old success" } }
     }
+    @Test fun ordinaryRequestsStayWithinTenSecondsButThePhotoRouteKeepsItsLongerBudget() {
+        val fence = DisclosureFence()
+        val request = DisclosureRequest(fence, { 1L }, {})
+        var ordinary = 0L
+        request.exchange(fence.stamp(), { true }, { 60_000 }) { _, budget -> ordinary = budget }
+        assertEquals(10_000L, ordinary)
+        var photo = 0L
+        request.exchange(fence.stamp(), { true }, { 60_000 }, maxMillis = HomeRequestBudget.PHOTO_MAX_MILLIS) { _, budget -> photo = budget }
+        assertEquals(HomeRequestBudget.PHOTO_MAX_MILLIS, photo)
+        var short = 0L
+        request.exchange(fence.stamp(), { true }, { 4_000 }, maxMillis = HomeRequestBudget.PHOTO_MAX_MILLIS) { _, budget -> short = budget }
+        assertEquals(4_000L, short) // The caller's remaining deadline still wins.
+    }
 }

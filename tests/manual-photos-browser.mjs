@@ -74,7 +74,9 @@ test("manual picture command requires a ready camera capability and displays its
   await sandbox.request("/v1/ack", { id: routed.id, status: "rejected", result: "This Android profile is inactive", attempted_at: Math.floor(Date.now() / 1000) });
   await refresh();
   await page.locator(".command-row").filter({ hasText: "Sandbox · take picture" }).filter({ hasText: "This Android profile is inactive" }).waitFor();
-  // Shared hardware commands retain their explicit main-installation destination.
+  // Shared hardware commands retain their explicit main-installation destination,
+  // but say so when that main user is not the one on screen.
+  await page.getByRole("button", { name: /Sound alarm.*in the background/ }).waitFor();
   await page.getByRole("button", { name: /Sound alarm/ }).click();
   await page.getByRole("status").filter({ hasText: "Command queued" }).waitFor();
   assert.deepEqual(f.sql("SELECT device_id,kind FROM commands WHERE status='pending'"), [[p.id, "ring"]]);
@@ -94,5 +96,13 @@ test("manual picture command requires a ready camera capability and displays its
   await page.getByRole("img", { name: "Manually requested picture", exact: true }).waitFor();
   const album = await (await f.admin(`/api/devices/${p.id}/photos`)).json();
   assert.ok(album.photos.some(row => row.id === sandboxPhoto.id && row.profile_name === "Sandbox" && row.source_device_id === sandbox.id));
+  // An explicit profile button follows the same readiness rules as the phone-level one.
+  await report(sandbox, { foreground_user: false, camera, profile_capabilities: ["take_picture"] });
+  await refresh();
+  await page.getByText(/Picture unavailable: This Android profile is not active/).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Take picture in Sandbox", exact: true }).isDisabled(), true);
+  await report(sandbox, { foreground_user: true, camera, profile_capabilities: ["take_picture"] });
+  await refresh();
+  await page.waitForFunction(() => ![...document.querySelectorAll("button")].find(b => b.textContent === "Take picture in Sandbox")?.disabled);
   assert.deepEqual(errors, []);
 });

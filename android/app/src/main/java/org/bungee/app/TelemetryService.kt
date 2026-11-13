@@ -158,6 +158,7 @@ class TelemetryService : Service() {
             val retry = DdilRetry()
             var nextTelemetry = 0L
             var nextPhotoAttempt = 0L
+            var advertised: List<String>? = null
             while (isActive) {
                 if (LocalSafety.isStopped(this@TelemetryService) || ManagementAgent.blocksPersonalOperation(this@TelemetryService)) {
                     if (!LocalSafety.isStopped(this@TelemetryService)) SharingHistory.ended(this@TelemetryService, SharingReason.MANAGEMENT_BLOCKED)
@@ -228,8 +229,13 @@ class TelemetryService : Service() {
                         val command=batch.getJSONObject(n)
                         if(command.getString("kind") in listOf("locate","best_guess")) executeTracked(api,command,deadline)
                     }
-                    if (!identity.profileCompanion && elapsed() < deadline && (elapsed() >= nextTelemetry || status.value.queuedFixes > 0)) {
+                    // The phone-level dashboard decides what to offer from these capabilities, so a change
+                    // (for example the camera becoming ready or this Android user going to the background)
+                    // is sent now rather than at the next minute-long telemetry interval.
+                    val capabilitiesNow = if (identity.profileCompanion) null else capabilities(this@TelemetryService, identity)
+                    if (!identity.profileCompanion && elapsed() < deadline && (capabilitiesNow != advertised || elapsed() >= nextTelemetry || status.value.queuedFixes > 0)) {
                         upload(api, limit = retry.batchSize)
+                        advertised = capabilitiesNow
                         nextTelemetry = elapsed() + if (identity.state("management").optBoolean("lost_mode_active")) 30_000 else 60_000
                     }
                     retry.succeeded(elapsed(), elapsed() - started)
@@ -320,7 +326,7 @@ class TelemetryService : Service() {
         val allowed = { PendingPhotos.session() == session && LocalSafety.isCameraEnabled(this) && identity.requestsAllowed() && identity.enrolled && identity.allowCommands && identity.photoEpoch == epoch && elapsed() < deadline }
         val result = withContext(Dispatchers.IO) {
             DisclosureRequest(PrivacySends.fence, { Transport.reserveRequest() }, { Transport.cancelRequest(it) })
-                .exchange(stamp, allowed, { minOf(HomeRequestBudget.PHOTO_MAX_MILLIS, deadline - elapsed()) }) { reservation, remaining ->
+                .exchange(stamp, allowed, { minOf(HomeRequestBudget.PHOTO_MAX_MILLIS, deadline - elapsed()) }, maxMillis = HomeRequestBudget.PHOTO_MAX_MILLIS) { reservation, remaining ->
                     api.request("/v1/photos", data, reservation = reservation, timeoutMillis = remaining, deadlineElapsed = deadline)
                 }
         }
@@ -434,7 +440,7 @@ class TelemetryService : Service() {
                             val fix = withTimeoutOrNull(available) { freshObservation(command = true, mode = if (kind == "best_guess") "best_guess" else "homing") } ?: error("No timely, authorized location fix available")
                             upload(api, fix, commandId = id, deadline = deadline, expires = expires)
                             SharingHistory.record(this, SharingReason.LOCATE_FINISHED)
-                            "Temporary GPS fix accepted by home; automatic sharing setting unchanged"
+                            "Temporary GPS fix accepted by home; automatic sharing setting unchanged" + backgroundNote()
                         } catch (e: Exception) {
                             SharingHistory.record(this, SharingReason.LOCATE_ERROR)
                             throw e
@@ -467,7 +473,7 @@ class TelemetryService : Service() {
                             } }
                             prepared = null // Playback/service cleanup now owns the resource.
                         } finally { runCatching { prepared?.release() } }
-                        "Alarm started for up to 30 seconds; previous alarm volume restored afterward"
+                        "Alarm started for up to 30 seconds; previous alarm volume restored afterward" + backgroundNote()
                     }
                     "stop_ringing" -> { identity.ifCommandsAllowed { stopRinging() }; "Sound stopped" }
                     "stop_all" -> {
@@ -489,7 +495,7 @@ class TelemetryService : Service() {
                         "Recovery notification posted"
                     }
                     "clear_message" -> identity.ifCommandsAllowed { identity.recoveryMessage = null; getSystemService(NotificationManager::class.java).cancel(2); "Message cleared" }
-                    "lock" -> { identity.ifCommandsAllowed { LocalSafety.ifAllowed(this) { getSystemService(DevicePolicyManager::class.java).lockNow() } }; "Device lock requested" }
+                    "lock" -> { identity.ifCommandsAllowed { LocalSafety.ifAllowed(this) { getSystemService(DevicePolicyManager::class.java).lockNow() } }; "Device lock requested" + backgroundNote() }
                     else -> error("Unknown command")
                 }
                 receipt.put("status", "executed").put("result", result)
@@ -501,6 +507,10 @@ class TelemetryService : Service() {
         withContext(Dispatchers.IO) { identity.saveResult(id, receipt, expires) }
         sendReceipt(api, receipt)
     }
+    /** Shared hardware actions run in this installation's Android user. Android can mute, block or
+     * not deliver them while another user is in the foreground, so do not report plain success. */
+    private fun backgroundNote() = if (ArmedCameraService.isForegroundUser(this)) "" else
+        ". This Android user was in the background; Android may have muted, blocked or not shown it to whoever holds the phone"
     private fun startRinging(prepared: MediaPlayer?, flash: Boolean) {
         stopRinging()
         prepared?.setOnErrorListener { _, _, _ -> stopRinging(); true }
