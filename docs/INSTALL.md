@@ -160,7 +160,7 @@ The daily host timer renews certificates locally even when automatic software up
 
 ## Update from GitHub
 
-To upgrade the running containers directly from an updated source checkout:
+To upgrade the running containers directly from an updated source checkout, use the account that owns the checkout. The `sudo git clone` example creates a root-owned checkout; enter `sudo -i` before this block in that case:
 
 ```sh
 cd /usr/local/src/bungee &&

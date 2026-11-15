@@ -64,7 +64,7 @@ Then install the [official APK](https://github.com/argentumseven/bungee/releases
 
 ## Update after GitHub changes
 
-Run this **on the server, from the source checkout**:
+Run this **on the server, from the source checkout**, using the account that owns that checkout. If you cloned with `sudo`, enter a root shell with `sudo -i` first:
 
 ```sh
 cd /usr/local/src/bungee &&
