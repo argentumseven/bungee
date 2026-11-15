@@ -89,7 +89,7 @@ The full [security design](docs/SECURITY.md) explains the trust model, network r
 
 ## More screenshots and documentation
 
-All [screenshots](docs/SCREENSHOTS.md) are captured from the running application with synthetic household data, test photos and demonstration maps. They show the web manager, including its mobile layout; notification previews illustrate Android presentation.
+All [screenshots](docs/SCREENSHOTS.md) are captured from the running application with synthetic household data and test photos. The lead image uses the real bundled world overview; other test maps are labelled demonstrations. They show the web manager, including its mobile layout; notification previews illustrate Android presentation.
 
 - [Installation and troubleshooting](docs/INSTALL.md) · [HTTPS certificates](docs/HTTPS.md)
 - [Phone and app updates](docs/MANAGEMENT.md) · [Android profiles](docs/PROFILE-COMPANIONS.md)

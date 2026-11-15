@@ -11,7 +11,7 @@ import {phone} from "./support/phone.mjs";
 test("the included overview renders with unreadable regional metadata and the download panel recovers after repair",async t=>{
  const data=await mkdtemp(join(tmpdir(),'bungee-map-permissions-browser-'));t.after(()=>rm(data,{recursive:true,force:true}));
  await copyFile('basemap/world.mbtiles',join(data,'map.mbtiles'));
- const f=await fixture(t,{geodata:data}),p=await phone(f);
+ const f=await fixture(t,{geodata:data}),p=await phone(f,{name:"Avery's Pixel"});
  await mkdir(join(f.dir,'maps'));await mkdir(join(f.dir,'map-control/status'),{recursive:true});await mkdir(join(f.dir,'map-control/requests'));
  const library=join(f.dir,'maps/library.json'),status=join(f.dir,'map-control/status/state.json');
  await writeFile(library,JSON.stringify({format:1,regions:[]}));
@@ -19,7 +19,7 @@ test("the included overview renders with unreadable regional metadata and the do
  await chmod(library,0o000);await chmod(status,0o000);
  assert.equal((await p.request('/v1/telemetry',{battery:90,charging:false,device_owner:false,capabilities:['locate'],gps_epoch:p.epoch,location:{latitude:33,longitude:-80,accuracy:10,observed_at:Math.floor(Date.now()/1000)}})).status,200);
  const browser=await chromium.launch({executablePath:process.env.CHROME_BIN||'/usr/bin/chromium',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});t.after(()=>browser.close());
- const context=await browser.newContext(),[name,value]=f.cookie.split('=');await context.addCookies([{name,value,url:f.origin}]);const page=await context.newPage();
+ const context=await browser.newContext({timezoneId:'America/New_York'}),[name,value]=f.cookie.split('=');await context.addCookies([{name,value,url:f.origin}]);const page=await context.newPage();
  const tile=page.waitForResponse(r=>/\/api\/maps\/\d+\/\d+\/\d+$/.test(r.url())&&r.status()===200);
  await page.goto(f.origin);await page.getByRole('button',{name:'Tracking',exact:true}).click();await tile;
  await page.locator('.leaflet-tile-loaded').first().waitFor();
@@ -31,6 +31,18 @@ test("the included overview renders with unreadable regional metadata and the do
  await chmod(library,0o644);await chmod(status,0o644);
  await manager.getByRole('button',{name:'Refresh map status'}).click();
  await manager.getByText('Pacific',{exact:true}).waitFor();assert.equal(await manager.getByRole('alert').count(),0);
+ // The README lead capture uses the real bundled map, with only phone data simulated.
+ const capabilities=['locate','best_guess','ring','ring_flash','flash','message','lock','stop_all','take_picture'];
+ assert.equal((await p.request('/v1/telemetry',{battery:86,charging:false,device_owner:false,capabilities,gps_epoch:p.epoch,location:{latitude:33,longitude:-80,accuracy:12,observed_at:Math.floor(Date.now()/1000)}})).status,200);
+ assert.equal((await p.request('/v1/sync',{report:{recovery_consent:true,foreground_user:true,camera:{armed:true,pending:0,status:'Ready',reported_at:Math.floor(Date.now()/1000)}}})).status,200);
+ await page.setViewportSize({width:1440,height:1050});await page.emulateMedia({colorScheme:'dark'});
+ await page.getByRole('button',{name:/^Devices/}).click();
+ await page.evaluate(()=>window.dispatchEvent(new Event('bungee:refresh')));
+ await page.getByRole('region',{name:'Overall phone status'}).getByText('86%',{exact:true}).waitFor();
+ await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');
+ await page.locator('.leaflet-tile-loaded').first().waitFor();await page.evaluate(()=>document.fonts.ready);
+ await page.waitForFunction(()=>[...document.querySelectorAll('.leaflet-tile')].length>0&&[...document.querySelectorAll('.leaflet-tile')].every(img=>img.complete&&img.naturalWidth>0));
+ await page.screenshot({path:'docs/screenshots/overview.png',fullPage:false,animations:'disabled'});
 });
 
 test("an old broad saved GPS fix remains visible after reconnect, including failed street tiles",async t=>{

@@ -348,7 +348,6 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await assertTheme("dark");
   });
   await screenshot("dashboard");
-  await page.screenshot({ path: "docs/screenshots/overview.png", fullPage: false, animations: "disabled" });
   await t.test("message previews stay local and show both Android notification placements", async () => {
     const commandsBefore = await page.evaluate(async () => (await (await fetch("/api/devices")).json()).commands.map((c) => c.id));
     await page.getByRole("button", { name: /Leave a message/ }).click();

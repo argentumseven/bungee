@@ -1,6 +1,6 @@
 # Screenshots
 
-These captures come from the running Bungee web manager built from the current **1.1.22** source and this documentation/update-help revision. The browser fixtures use fictional household names, signed simulated phones, synthetic locations/maps/GeoIP, disposable invitations and a synthetic camera-test image. They contain no real household records. Map fixtures demonstrate rendering and local delivery, not real geography or the production map catalogue.
+These captures come from the running Bungee web manager built from the current **1.1.22** source and this documentation/update-help revision. The browser fixtures use fictional household names, signed simulated phones, synthetic locations/GeoIP and either bundled or synthetic maps, disposable invitations and a synthetic camera-test image. They contain no real household records. The lead overview uses the actual bundled Natural Earth world map with a simulated GPS point; other map fixtures demonstrate rendering and local delivery, not real geography or the production map catalogue.
 
 Mobile captures show the **web manager at a 390-pixel viewport**, not the Android app. Notification previews are in-app illustrations. These screenshots do not establish physical Android camera, background-service or profile-switch behavior.
 
@@ -21,7 +21,7 @@ Use Node 24 and installed Chromium/Firefox (or set `CHROME_BIN`/`FIREFOX_BIN`). 
 
 ### Phone overview
 
-Desktop viewport of the main phone view.
+Desktop viewport with the real bundled Natural Earth world overview and a synthetic phone location. Street detail is explicitly not installed in this example.
 
 ![Phone overview in the Bungee web manager](screenshots/overview.png)
 
