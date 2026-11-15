@@ -7,7 +7,7 @@ import { fixture } from "./support/server.mjs";
 import { phone } from "./support/phone.mjs";
 
 test("manual picture command requires a ready camera capability and displays its labelled photo", async t => {
-  const f = await fixture(t), p = await phone(f, { profiles: true });
+  const f = await fixture(t), p = await phone(f, { profiles: true, name: "Example phone" });
   const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN || "/usr/bin/chromium", headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width: 1440, height: 1050 } });
@@ -29,7 +29,7 @@ test("manual picture command requires a ready camera capability and displays its
   await report(p, { foreground_user: true, camera });
   await page.reload();
   await page.getByRole("button", { name: /^Devices/ }).click();
-  await page.screenshot({ path: "work/manual-picture-desktop.png", fullPage: true });
+  await page.screenshot({ path: "docs/screenshots/manual-picture.png", fullPage: true });
   await button.click();
   await page.getByRole("status").filter({ hasText: "Picture requested in Owner" }).waitFor();
   const queued = f.sql("SELECT id,kind,device_id,status FROM commands");
@@ -47,7 +47,7 @@ test("manual picture command requires a ready camera capability and displays its
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.getByRole("button", { name: /^Devices/ }).click();
   await button.waitFor();
-  await page.screenshot({ path: "work/manual-picture-mobile.png", fullPage: true });
+  await page.screenshot({ path: "docs/screenshots/mobile-manual-picture.png", fullPage: true });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   const sandbox = await phone(f, { name: "Sandbox", primaryDeviceId: p.id, capabilities: ["take_picture"] });
   const refresh = async () => page.evaluate(() => window.dispatchEvent(new Event("bungee:refresh")));

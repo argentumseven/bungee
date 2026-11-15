@@ -77,5 +77,23 @@ class PublishingTests(unittest.TestCase):
                     'html_url':'https://example.test/release','assets':[{'name':n} for n in ('bungee.apk','bungee.apk.sha256','build.json')]}
         self.assertEqual(self.simulate(releases=[existing]), [])
 
+    def test_same_version_keeps_commit_assets_without_replacing_the_regular_release(self):
+        calls = self.simulate(releases=[{'tag_name':'android-'+'b'*12, 'draft':False, 'prerelease':False,
+                                        'name':'Android APK 1.1.4 · bbbbbbb'}])
+        self.assertEqual(calls[1][calls[1].index('--title')+1], 'Bungee 1.1.4 build aaaaaaa')
+        self.assertIn('--prerelease', calls[-1])
+        self.assertIn('--latest=false', calls[-1])
+
+    def test_a_newer_run_number_cannot_publish_an_older_app_version(self):
+        self.assertEqual(self.simulate(releases=[{'tag_name':'other', 'draft':False, 'prerelease':False,
+                                                 'name':'Bungee 1.1.5', 'body':'<!-- android-source-run: 6 -->'}]), [])
+
+    def test_release_version_order_is_numeric_and_drafts_do_not_own_a_version(self):
+        self.assertEqual(publish.publication_kind('1.1.5-alpha.1', [], 'candidate'), 'snapshot')
+        self.assertEqual(publish.publication_kind('1.1.10', [{'name':'Bungee 1.1.9'}], 'candidate'), 'release')
+        for flag in ('draft', 'prerelease'):
+            self.assertEqual(publish.publication_kind('1.1.4', [{'name':'Bungee 1.1.4',flag:True}], 'candidate'), 'release')
+        self.assertEqual(publish.publication_kind('1.1.4', [{'name':'Bungee 1.1.4','tag_name':'candidate'}], 'candidate'), 'release')
+
 
 if __name__ == '__main__': unittest.main()

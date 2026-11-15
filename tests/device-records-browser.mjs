@@ -16,7 +16,7 @@ test('pairing and history actions are visible, target the correct phone and dist
  const card=name=>page.getByRole('region',{name:`Pairing and history for ${name}`});
  await card('Second phone').getByRole('button',{name:'Revoke & erase data',exact:true}).waitFor();
  assert.equal(await card('Second phone').locator('details').count(),0);
- await page.locator('#records-phone').selectOption(second.id);await page.screenshot({path:'work/device-records-desktop.png',fullPage:true});
+ await page.locator('#records-phone').selectOption(second.id);await page.screenshot({path:'docs/screenshots/pairing-history.png',fullPage:true});
  await card('Second phone').getByRole('button',{name:'Revoke & erase data',exact:true}).click();const dialog=page.getByRole('dialog');
  await dialog.getByRole('heading',{name:'Revoke access and erase saved data?'}).waitFor();await dialog.getByText('Second phone',{exact:true}).waitFor();await dialog.getByText('Recovery photos',{exact:true}).waitFor();
  await dialog.getByRole('button',{name:'Cancel',exact:true}).click();assert.equal(f.sql('SELECT revoked FROM devices WHERE id=?',[second.id])[0][0],0);
@@ -27,5 +27,5 @@ test('pairing and history actions are visible, target the correct phone and dist
  await page.locator('#records-phone').selectOption(second.id);await card('Second phone').getByRole('button',{name:'Revoke & erase data',exact:true}).click();await dialog.getByRole('button',{name:'Revoke & erase data',exact:true}).click();await page.getByRole('status').filter({hasText:'Device revoked.'}).waitFor();
  assert.equal(f.sql('SELECT COUNT(*) FROM location_history WHERE device_id=?',[second.id])[0][0],0);assert.equal(f.sql('SELECT COUNT(*) FROM location_history WHERE device_id=?',[first.id])[0][0],1);
  await card('Second phone').getByRole('button',{name:'Remove inactive pairing',exact:true}).waitFor();assert.equal(await card('Second phone').getByRole('button',{name:'Delete phone record & history',exact:true}).isDisabled(),true);
- await page.setViewportSize({width:390,height:844});await page.screenshot({path:'work/device-records-mobile.png',fullPage:true});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);assert.deepEqual(errors,[]);
+ await page.setViewportSize({width:390,height:844});await page.screenshot({path:'docs/screenshots/mobile-pairing-history.png',fullPage:true});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);assert.deepEqual(errors,[]);
 });

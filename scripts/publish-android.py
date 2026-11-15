@@ -31,6 +31,25 @@ def source_number(release):
     return int(match[1]) if match and not release.get('draft') else -1
 
 
+def published_version(release):
+    if release.get('draft') or release.get('prerelease'):
+        return None
+    match = re.search(r'Android app version: \*\*([0-9]+\.[0-9]+\.[0-9]+)\*\*', release.get('body') or '')
+    if not match:
+        match = re.match(r'(?:Android APK |Bungee v?)([0-9]+\.[0-9]+\.[0-9]+)(?:\b|$)', release.get('name') or '')
+    return tuple(map(int, match[1].split('.'))) if match else None
+
+
+def publication_kind(version, releases, tag):
+    """Keep commit-addressed APKs for matching servers without extra stable releases."""
+    candidate = tuple(map(int, version.split('-', 1)[0].split('.')))
+    published = [value for release in releases if release.get('tag_name') != tag
+                 and (value := published_version(release)) is not None]
+    if any(value > candidate for value in published):
+        return 'older'
+    return 'snapshot' if '-' in version or candidate in published else 'release'
+
+
 def verify_checksum(directory):
     apk = directory / 'bungee.apk'
     expected = (directory / 'bungee.apk.sha256').read_text().split()
@@ -78,6 +97,12 @@ def main():
     manifest = api(repo, f'contents/release.json?ref={sha}')
     app_release = json.loads(base64.b64decode(manifest['content']))
     version = app_release['version']
+    kind = publication_kind(version, releases, tag)
+    if kind == 'older':
+        print('A newer app version is already released; refusing to publish an older version.')
+        return
+    snapshot = kind == 'snapshot'
+    title = f'Bungee {version}' + (f' build {sha[:7]}' if snapshot else '')
     with tempfile.TemporaryDirectory(prefix='bungee-publish-') as temporary:
         directory = Path(temporary)
         gh('run', 'download', str(run['id']), '--repo', repo, '--name', 'bungee-android-release', '--dir', str(directory))
@@ -97,7 +122,20 @@ Android app version: **{version}** · source: [{sha[:12]}](https://github.com/{r
 
 This APK is signed with Bungee’s persistent official release key. **GitHub and manager Settings → Phone app updates distribute the same APK**, with the same checksum and certificate. The server verifies and serves it unchanged.
 
-This standalone development APK includes the current main-branch phone features. Its Android build, unit tests and lint passed in [the source build]({run['html_url']}). This release does not claim that unrelated server jobs passed or that physical-device testing is complete.
+{'This is a source-build snapshot retained for servers built from this exact commit. It does not replace the latest regular release.' if snapshot else 'This is the official app release for this version.'} Android, signing, server/web and container checks passed in [the source build]({run['html_url']}). Automated checks do not establish physical-device behavior or an independent security audit.
+
+## Install or update
+
+Follow the [home-server installation guide](https://github.com/{repo}/blob/{sha}/docs/INSTALL.md) for dependencies, router ports and HTTPS trust. Update the server first, then install its matching APK. From your source checkout on the server:
+
+```sh
+cd /usr/local/src/bungee &&
+git pull --ff-only origin main &&
+sudo python3 scripts/bungee-host.py rebuild &&
+sudo python3 /opt/bungee/bungee-host.py status
+```
+
+Change paths if you installed elsewhere. A Git pull alone does not update running containers. Rebuild preserves pairing/history and uses an encrypted snapshot and health-checked rollback. See the [changelog](https://github.com/{repo}/blob/{sha}/CHANGELOG.md) and [security design](https://github.com/{repo}/blob/{sha}/docs/SECURITY.md).
 
 Routine official updates preserve pairing, settings and queued data; Android asks for installation confirmation. Android debugging is disabled. Historical GitHub builds used disposable keys, so those installations cannot switch identities in place without the original private key. Existing household-signed phones retain compatible server updates. Do not uninstall for routine upgrades.
 
@@ -106,16 +144,16 @@ Routine official updates preserve pairing, settings and queued data; Android ask
 <!-- android-source-run: {run['run_number']} -->
 ''')
         if existing:
-            gh('release', 'edit', tag, '--repo', repo, '--draft=true', '--notes-file', str(notes))
+            gh('release', 'edit', tag, '--repo', repo, '--draft=true', '--title', title, '--notes-file', str(notes))
         else:
             # GITHUB_TOKEN can create tags for its own source commit. Backfills
             # must use an existing source tag and must not ask the release API
             # to create a tag at an older workflow revision.
             target = ('--target', sha) if os.environ.get('GITHUB_SHA') == sha else ('--verify-tag',)
-            gh('release', 'create', tag, '--repo', repo, *target, '--title', f'Android APK {version} · {sha[:7]}', '--draft', '--notes-file', str(notes))
+            gh('release', 'create', tag, '--repo', repo, *target, '--title', title, '--draft', '--notes-file', str(notes))
         gh('release', 'upload', tag, *[str(directory / name) for name in assets], '--repo', repo, '--clobber')
-        gh('release', 'edit', tag, '--repo', repo, '--draft=false', '--latest')
-        url = f'https://github.com/{repo}/releases/latest/download/bungee.apk'
+        gh('release', 'edit', tag, '--repo', repo, '--draft=false', '--prerelease' if snapshot else '--prerelease=false', '--latest=false' if snapshot else '--latest')
+        url = f'https://github.com/{repo}/releases/download/{tag}/bungee.apk'
         print('Published APK:', url)
         if os.environ.get('GITHUB_STEP_SUMMARY'):
             with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:

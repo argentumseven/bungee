@@ -1,0 +1,51 @@
+name: Preview or apply release cleanup
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Apply the reviewed cleanup plan after backing up both APK releases
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths: [.github/release-cleanup.json]
+permissions:
+  contents: read
+jobs:
+  cleanup:
+    if: github.repository == 'argentumseven/bungee' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: bungee-android-releases
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Preview and verify complete APK backups
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/cleanup-releases.py --backup-dir release-backup
+      - name: Save the backup before changing GitHub
+        uses: actions/upload-artifact@v5
+        with:
+          name: release-cleanup-backup-${{ github.run_id }}
+          path: release-backup/
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Read the committed apply preference
+        id: plan
+        run: |
+          python3 - <<'PY'
+          import json, os
+          apply = json.load(open('.github/release-cleanup.json')).get('apply') is True
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('apply=' + str(apply).lower() + '\n')
+          PY
+      - name: Apply the reviewed correction
+        if: (github.event_name == 'workflow_dispatch' && inputs.apply) || (github.event_name == 'push' && steps.plan.outputs.apply == 'true')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/cleanup-releases.py --backup-dir release-backup --apply
