@@ -49,7 +49,13 @@ time.sleep(60)
             parent.kill();parent.wait(timeout=5)
             for _ in range(100):
                 stat=Path(f'/proc/{child}/stat')
-                if not stat.exists() or stat.read_text().split()[2]=='Z':break
+                try:
+                    state = stat.read_text().split()[2]
+                except (FileNotFoundError, ProcessLookupError):
+                    # The child disappearing during the read is success, not a test failure.
+                    break
+                if state == 'Z':
+                    break
                 time.sleep(.01)
             else:self.fail('Child helper survived its parent')
         finally:
