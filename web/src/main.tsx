@@ -56,6 +56,7 @@ import { recoveryCamera, reportedBackground } from "./recoveryCamera";
 import { SharingHistory } from "./SharingHistory";
 import { MapManager } from "./MapManager";
 import { AppUpdates } from "./AppUpdates";
+import { ServerUpdates } from "./ServerUpdates";
 import { HistoryImport } from "./HistoryImport";
 
 type Location = {
@@ -859,6 +860,7 @@ function App() {
           </>}
           {page === "Settings" && (
             <div className="settings-grid">
+              <ServerUpdates/>
               <AppUpdates/>
               <MapManager/>
               <PasswordSettings onChanged={() => {

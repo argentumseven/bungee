@@ -206,7 +206,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await page.getByRole("button", { name: "Add a device" }).click();
     await page
       .getByLabel("Device name", { exact: true })
-      .fill("Browser test phone");
+      .fill("Avery's Pixel");
     await page
       .getByLabel("Phone’s WireGuard public key", { exact: true })
       .fill(randomBytes(32).toString("base64"));
@@ -328,9 +328,9 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       },
     });
     await page.getByRole("button", { name: "Close dialog" }).click();
-    await page.locator(".nav-phones").getByRole("button", { name: "Browser test phone", exact:true }).waitFor();
+    await page.locator(".nav-phones").getByRole("button", { name: "Avery's Pixel", exact:true }).waitFor();
   });
-  await page.locator(".nav-phones").getByRole("button",{name:"Browser test phone",exact:true}).click();
+  await page.locator(".nav-phones").getByRole("button",{name:"Avery's Pixel",exact:true}).click();
   await page.evaluate(() => scrollTo(0, 0));
   await page
     .getByRole("img", { name: "Last-known GPS and approximate IP location" })
@@ -348,6 +348,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await assertTheme("dark");
   });
   await screenshot("dashboard");
+  await page.screenshot({ path: "docs/screenshots/overview.png", fullPage: false, animations: "disabled" });
   await t.test("message previews stay local and show both Android notification placements", async () => {
     const commandsBefore = await page.evaluate(async () => (await (await fetch("/api/devices")).json()).commands.map((c) => c.id));
     await page.getByRole("button", { name: /Leave a message/ }).click();
@@ -462,7 +463,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
       await page.evaluate(() => scrollTo(0, 0));
       await screenshot("mobile-device-care");
       await page.setViewportSize({ width: 1440, height: 1050 });
-      await page.locator(".nav-phones").getByRole("button",{name:"Browser test phone",exact:true}).click();
+      await page.locator(".nav-phones").getByRole("button",{name:"Avery's Pixel",exact:true}).click();
       assert.equal(
         await page
           .getByRole("button", { name: "Secure reboot", exact: true })
@@ -495,7 +496,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await gallery.getByText("No saved photos in this view.",{exact:true}).waitFor();
     assert.equal(await gallery.locator("img").count(),0);
     await page.setViewportSize({width:1440,height:1050});
-    await page.locator(".nav-phones").getByRole("button",{name:"Browser test phone",exact:true}).click();
+    await page.locator(".nav-phones").getByRole("button",{name:"Avery's Pixel",exact:true}).click();
   });
   await t.test(
     "offered commands are not labeled as confirmed delivery",
@@ -528,11 +529,22 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await page.getByRole("button", { name: "Activity", exact: true }).click();
     await page.getByText("enrollment · created", { exact: true }).waitFor();
     await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const updates = page.getByRole("region", { name: "Server updates" });
+    await updates.getByRole("heading", { name: "Update this server" }).waitFor();
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await updates.getByRole("button", { name: "Copy update command" }).click();
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "cd /usr/local/src/bungee &&\ngit pull --ff-only origin main &&\nsudo python3 scripts/bungee-host.py rebuild &&\nsudo python3 /opt/bungee/bungee-host.py status");
+    await page.evaluate(() => document.fonts.ready);
+    await updates.screenshot({ path: "docs/screenshots/server-updates.png", animations: "disabled" });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await updates.screenshot({ path: "docs/screenshots/mobile-server-updates.png", animations: "disabled" });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.setViewportSize({ width: 1440, height: 1050 });
     await page
       .getByRole("heading", { name: "Device consent & management" })
       .waitFor();
     await page.getByRole("button",{name:"Open pairing & history",exact:true}).click();
-    await page.getByRole("region",{name:"Pairing and history for Browser test phone"}).waitFor();
+    await page.getByRole("region",{name:"Pairing and history for Avery's Pixel"}).waitFor();
   });
   await t.test(
     "history supports time slices, selecting a point, state logs and private CSV export",
@@ -660,9 +672,9 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
           .count(),
         1,
       );
-      await page.locator(".nav-phones").getByRole("button",{name:"Browser test phone",exact:true}).click();
+      await page.locator(".nav-phones").getByRole("button",{name:"Avery's Pixel",exact:true}).click();
       await page.getByText("Waiting for a location", { exact: true }).waitFor();
-      await page.locator(".nav-phones").getByRole("button", { name: "Browser test phone", exact:true }).waitFor();
+      await page.locator(".nav-phones").getByRole("button", { name: "Avery's Pixel", exact:true }).waitFor();
     },
   );
   await t.test("an expired invitation can be reissued from device settings",async()=>{
@@ -712,7 +724,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await page.evaluate(async id => { await fetch(`/api/devices/${id}`,{method:"DELETE"}); }, next.device_id);
   });
   await t.test("mobile layout fits a 390-pixel viewport", async () => {
-    await page.locator(".nav-phones").getByRole("button",{name:"Browser test phone",exact:true}).click();
+    await page.locator(".nav-phones").getByRole("button",{name:"Avery's Pixel",exact:true}).click();
     await page.setViewportSize({ width: 390, height: 844 });
     await page.evaluate(() => scrollTo(0, 0));
 
@@ -738,7 +750,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
         .getByRole("heading", { name: "Sign in to Bungee" })
         .waitFor({ timeout: 10000 });
       assert.equal(
-        await page.getByText("Browser test phone", { exact: true }).count(),
+        await page.getByText("Avery's Pixel", { exact: true }).count(),
         0,
       );
       await page.getByLabel("Server administrator password").fill(password);

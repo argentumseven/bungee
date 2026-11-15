@@ -25,12 +25,12 @@ test("sharing timeline separates manual actions from crashes/errors and retains 
   assert.equal(await timeline.locator(".sharing-event-error").count(), 1);
   await timeline.getByText(/Stop time unknown · detected on phone/).waitFor();
   assert.equal(await timeline.locator(".sharing-event-crash").getByText("Manual", { exact: true }).count(), 0);
-  await timeline.screenshot({ path: "work/sharing-history-desktop.png" });
+  await timeline.screenshot({ path: "docs/screenshots/sharing-history.png" });
   f.sql("UPDATE devices SET last_contact=? WHERE id=?", [now - 86400, p.id]);
   await timeline.getByRole("button", { name: "Refresh sharing history", exact: true }).click();
   assert.equal(f.sql("SELECT COUNT(*) FROM sharing_events WHERE device_id=?", [p.id])[0][0], 5, "loss of contact must not invent a manual stop");
   await page.setViewportSize({ width: 390, height: 844 });
-  await timeline.screenshot({ path: "work/sharing-history-mobile.png" });
+  await timeline.screenshot({ path: "docs/screenshots/mobile-sharing-history.png" });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   assert.deepEqual(errors, []);
 });

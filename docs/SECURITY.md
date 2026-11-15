@@ -23,11 +23,42 @@ flowchart LR
 
 The phone's address belongs to its app-contained userspace TCP/IP stack. The outer UDP flow enters the host's Docker port publication, crosses the bridge/veth into `eth0`, and reaches kernel WireGuard. After decapsulation, `wg0` delivers the inner TCP connection locally to `10.77.0.1:8081` through INPUT. It does not traverse the namespace's FORWARD chain or another container network. The phone peer has `AllowedIPs=10.77.0.1/32`; the server peer has `AllowedIPs=P/32`.
 
+## Allowed communications
+
+These are different trust boundaries. The runtime namespace firewall is **not** a host-wide internet restriction, and it is **not** a sandbox that makes the Rust process unable to read its own stored data or keys.
+
+| Component | Can communicate with | Cannot do through the supported path |
+| --- | --- | --- |
+| Android Bungee transport | The configured numeric home endpoint over UDP; its internal HTTP dialer only connects to TCP `10.77.0.1:8081`. Paired requests carry telemetry, queued photos, commands/receipts and APK chunks. | Install a default internet route, use a DNS override, forward other apps' traffic, dial arbitrary tunnel destinations, or reach the administrator API. Android's OS/other apps retain their independent network behavior. |
+| Phone overlay on server `wg0` | The local device API at TCP `10.77.0.1:8081`. WireGuard source/key binding and application identity/signature checks both apply. | Dashboard HTTPS, SSH, another phone, host/LAN routing, or namespace `eth0` management. Other `wg0` INPUT is dropped before connection-tracking accepts. |
+| Administrator browser | The configured private HTTPS origin, including same-origin map tiles, assets, exports, photographs and APK downloads. | Use the phone tunnel as an administrator route. Browser source restrictions, session authentication, CSRF/origin checks and CSP remain separate checks. |
+| Runtime gateway + Rust namespace | Admitted incoming phone UDP/management HTTPS, their replies, namespace loopback and necessary IPv6 control traffic. | Start new application TCP/UDP connections to internet/LAN services. OUTPUT/FORWARD default to DROP; Docker's resolver is blocked. There are no runtime public DNS, map, analytics, crash-report or push-provider exceptions. |
+| Host software/APK workers | GitHub release/source endpoints and redirected asset hosts; GHCR/container registries for published images. Source builds additionally use base-image and dependency registries. | Inherit the runtime egress guarantee. The host has normal networking and is trusted; its permitted downloads are not an OS-wide destination allowlist. |
+| Host map worker | Protomaps build metadata/archives and the pinned, checksummed extraction tool from GitHub; bundled baseline datasets are local. | Accept arbitrary administrator-supplied download URLs or shell commands through the map-job API. Planning/downloading happens on the host; viewing a map uses local server files. |
+| Host certificate maintenance | Local OpenSSL, local CA and encrypted certificate storage in the guided setup. | Contact an ACME CA or DNS provider automatically. An operator-managed external certificate client has its own networking and credentials. |
+
+WireGuard UDP encapsulation and replies to admitted flows must leave the runtime namespace for the service to work. “Egress denied” means new application connections are denied; it does not mean zero outbound packets. Commands use the phone's existing request/response path, not an outbound server connection to a carrier address.
+
+The host and container namespace also have different forwarding scopes. Docker publishes the selected host ports through its bridge/NAT path. Inside the shared Bungee namespace, FORWARD remains DROP. Verify router, host/provider firewall and Docker source-address behavior together; Bungee does not configure the entire home network or host SSH policy.
+
+### Why the boundaries exist
+
+- **A fixed device destination** keeps the phone tunnel from becoming a general VPN/proxy. The numeric endpoint avoids a runtime endpoint-DNS dependency; the tradeoff is manual handling when the endpoint IP changes. Rejecting the standard WireGuard port is a project policy, not additional cryptographic strength.
+- **Separate phone and management entry points** keep a paired phone's tunnel credentials from granting dashboard access. Source-prefix checks supplement the administrator password; they do not replace it. A separate management VPN is needed for remote administration.
+- **Default-deny runtime egress** removes normal provider fallbacks and reduces network paths available to a compromised runtime. It does not prevent all abuse of allowed response channels, protect against a compromised host/kernel, or make the two containers independent networks.
+- **Host-owned updates and downloads** keep the Docker socket, publisher private key, host unlock key and certificate authority key out of the app container. The host workers still run trusted code with powerful access. Checksums/digests detect corrupted or mismatched artifacts; they do not make a compromised publisher trustworthy.
+- **Local consent and bounded typed actions** let an owner stop sharing offline and prevent a web command from granting itself new Android permissions. A compromised administrator can still read server records and issue actions already approved on the phone.
+- **Encrypted storage and cold backups** avoid plaintext data images and inconsistent live database copies. A host-stored boot key permits unattended restarts, so full-host compromise remains outside that protection. Erasure is logical; existing backups and transmitted records are separate copies.
+
+For HTTPS certificate formats, public/private issuers, TLS compatibility and external renewal limits, see [HTTPS and certificates](HTTPS.md). TLS 1.3 hybrid key exchange is enforced by Rust; certificate, phone and APK signatures remain classical. Administrator-to-server HTTPS and phone-to-server WireGuard protect their respective paths. The server decrypts and stores the records; these mechanisms do not hide them from its administrator.
+
 ## Backend placement
 
 The gateway and server are separate containers sharing one network namespace. Its WireGuard device is a kernel network object; the gateway manager configures it. One Rust process serves administrator HTTPS and the device HTTP API, with shared application state and local SQLite/WAL file I/O. Peer configuration uses shared files and `wg syncconf`. Administrator TLS uses only the host's internal management IP and namespace `eth0`: INPUT admits configured internal source prefixes and Rust constrains the TLS socket with `SO_BINDTODEVICE=eth0`. Every other `wg0` INPUT path is dropped before the ESTABLISHED/RELATED accept rule; phone-overlay sources are also rejected independently in Rust. Administrator CIDRs cannot overlap the phone subnet. Phones cannot reach administration by targeting either `wg0` or the namespace's `eth0` IP.
 
 Namespace forwarding and new application egress stay disabled. Host Docker forwarding/NAT is a separate scope. See the [current topology reference](NETWORK-TOPOLOGY.md).
+
+The gateway is more privileged than Rust: it needs NET_ADMIN to create WireGuard and install these rules. A compromised gateway process with that capability can alter the namespace firewall. Default-deny egress constrains the ordinary application path; it is not a containment guarantee against the component that administers the network policy.
 
 ## Storage, keys and backups
 
@@ -39,7 +70,7 @@ Host storage sits outside the containers' shared network namespace. The unlock k
 
 The cold snapshot also includes the CA and leaf keys. The filesystem and archive encryption use different keys. A host-stored unlock key enables unattended startup; it does not protect against a running host/root compromise or a full-host copy that also contains the key.
 
-The CA private key stays host-only; Rust receives only a read-only leaf certificate/key mount. See [INSTALL.md](INSTALL.md) for key storage, certificate renewal, encrypted swap and recovery, and [DEPLOYMENT.md](DEPLOYMENT.md) for private home resolver routing from a VPS.
+The CA private key stays host-only; Rust receives only a read-only leaf certificate/key mount. See [INSTALL.md](INSTALL.md) for key storage, certificate renewal, encrypted swap and recovery, and [DEPLOYMENT.md](DEPLOYMENT.md) for private management routing from a VPS.
 
 ## Enrollment protocol
 
@@ -91,14 +122,14 @@ Commands are typed data, never executable scripts. Local consent and Android per
 
 ## Dashboard and storage controls
 
-- Random bootstrap password in a mode-0600 file, with Argon2id verification. No hard-coded credentials.
+- An administrator chooses a password of at least 16 characters during installation. Only its salted Argon2id verifier is stored. Local password reset invalidates browser sessions; there is no generated default password.
 - Eight-hour random sessions, hashed at rest; HttpOnly/SameSite=Strict cookies and Secure cookies for HTTPS. Sessions are invalidated on process restart.
 - Exact `Origin` verification on mutations, no CORS access, same-origin CSP, framing disabled, no referrers, no caching, HTTPS HSTS.
 - Login/enrollment/device request rate limits, 32-KiB ordinary request bodies and a separate 2-MiB photo route with two concurrent-body slots, typed parsing, input bounds, parameterized SQL, finite coordinate validation.
 - Private state directory, encrypted Android secret storage, Android screenshots/backups disabled. App lock protects the UI; background sharing intentionally continues without a biometric prompt for every packet.
 - Latest device state and last-known location persist through outages and server restarts until explicit erasure or device revocation. Location is stored separately from the latest check-in, with its original observation timestamp. Null or older fixes do not erase or replace it. A separate indexed history stores each unique GPS observation indefinitely, including older backfilled points. Check-in battery/charging/management snapshots are stored by receipt time. History queries require administrator authentication and bounded, paginated ranges. Command/session/invitation cleanup has separate expiration rules.
 - Administrator-authenticated, same-origin location erasure keeps enrollment and battery state. A random GPS generation rotates in the erase transaction; old-generation GPS cannot restore history or the checkpoint, even with future timestamps. New observations can be stored while location sharing remains enabled. Device revocation explicitly erases current telemetry, all location/check-in history, managed policy/reports, commands, and the preshared key. Deletion is logical and does not erase old filesystem blocks or backups.
-- No arbitrary code execution, remote wipe, remote camera activation, or silent enrollment endpoint.
+- Commands cannot execute arbitrary scripts, wipe a device, grant camera permission, arm theft photos or enroll a phone silently. A manual picture request requires the target profile's existing local camera approval and readiness.
 
 ## Locally armed recovery photos
 

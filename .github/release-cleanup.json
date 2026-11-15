@@ -1,0 +1,20 @@
+{
+  "repository": "argentumseven/bungee",
+  "apply": false,
+  "keep": {
+    "id": 444812620,
+    "tag": "android-dde1a89945a2",
+    "commit": "dde1a89945a2db7d29f902c48a65edad67391f1b",
+    "version": "1.1.22",
+    "android_version_code": 38,
+    "source_run": 153
+  },
+  "retire": {
+    "id": 444806816,
+    "tag": "android-ed781239af27",
+    "commit": "ed781239af2773739ebd916494ffbd841b4345fe",
+    "version": "1.1.21",
+    "android_version_code": 37
+  },
+  "notes_file": "docs/releases/1.1.22.md"
+}

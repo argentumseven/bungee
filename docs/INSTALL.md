@@ -2,40 +2,64 @@
 
 Use a Linux host you administer, with systemd, kernel WireGuard, Docker Compose 2.24+, IPv4/IPv6 iptables/conntrack, Python 3, OpenSSL, `cryptsetup` and its systemd boot service/generator, `e2fsprogs`, `util-linux`, and `age`. On Debian 13+, install the host tools with `sudo apt-get install cryptsetup systemd-cryptsetup e2fsprogs util-linux age openssl python3`. On other distributions, install the package providing `systemd-cryptsetup@.service` and `systemd-cryptsetup-generator` as well as the listed tools. Docker and Compose must already work locally. The installer refuses remote Docker contexts and unencrypted swap. Disable swap or configure encrypted swap first. Keep a provider console or local console available for recovery.
 
-## Uninstall the server/host
+## Home-server quick start
 
-Run from this checkout on the server (use `--root` for a custom installation):
+Use a dedicated Linux host or VM with a reachable LAN address. The examples below use Debian 13; adapt package names on other distributions. Keep local/VM console access during installation and the first reboot. The installer creates host mount and systemd configuration, so this is more than importing a Compose stack into a NAS UI.
 
-```sh
-bash scripts/uninstall.sh --plan
-sudo bash scripts/uninstall.sh
-# Permanently delete the local data, snapshots, certificates and keys as well:
-sudo bash scripts/uninstall.sh --purge
-```
+1. **Prepare the host.** Install Docker Engine and the Compose plugin using [Docker's distribution-specific instructions](https://docs.docker.com/engine/install/). Compose must be 2.24 or newer. On Debian 13 install the remaining host tools:
 
-The default keeps `/var/lib/bungee/storage.luks` and `/etc/bungee/` for recovery,
-but unmounts/closes storage and removes its automatic boot configuration. Keep
-the image, storage key and backup identity together in a protected backup. This
-is an offline archive, not a one-command reinstall; the installer will refuse to
-overwrite it. Export needed records before uninstalling.
+   ```sh
+   sudo apt-get update
+   sudo apt-get install git ca-certificates python3 openssl cryptsetup systemd-cryptsetup e2fsprogs util-linux age kmod
+   sudo modprobe wireguard
+   sudo docker info
+   sudo docker compose version
+   swapon --show
+   df -h /var/lib
+   ```
 
-Uninstall disables Bungee's timer/recovery service, stops and removes its Compose
-containers/network, removes its systemd units, its exact crypttab/fstab entries,
-and its Docker storage dependency. It does not restart Docker, prune images,
-delete unrelated files, change host SSH/firewall settings, remove phone apps,
-erase external backups or remove manually imported CA trust. Remove that trust
-from each client separately if desired. `--purge` deletes files, and does not
-promise forensic erasure of storage or copies.
+   The host must support kernel WireGuard and container IPv4/IPv6 iptables/conntrack rules. LXC/unprivileged containers often lack the required kernel/network privileges; use a VM or host with those capabilities. Configure encrypted swap or disable it using your distribution's procedure before installation; the installer refuses plaintext swap. There is no published minimum-RAM benchmark. Leave memory and disk headroom for Rust/Android-tool image builds and map extraction; do not size the host only for the running server.
 
-Use `--yes` for unattended execution after reviewing `--plan`; interactive purge
-requires typing `PURGE`. Preview contacts no services and makes no writes; the
-live operation additionally checks the installation and host configuration.
-An active updater holds a lock and causes uninstall to refuse; let it finish,
-then retry. Cleanup stops on failure and retains keys if storage cannot be
-detached. If a failure occurs after detachment, inspect the reported step and
-remaining boot configuration locally before rebooting; cleanup is not a rollback.
-Older installs can run this checkout's helper even if their installed helper
-does not yet include `uninstall`.
+2. **Reserve a LAN IP and plan storage.** Give the server a DHCP reservation or static address, for example `192.168.1.10`. The default encrypted image allocates 32 GiB up front under `/var/lib/bungee`; image/build cache needs additional host space. Maps, retained history, photos and the three rollback snapshots also need capacity. Capacity is not automatically expanded and primary history is not automatically expired.
+
+3. **Choose the two addresses and ports.** For example, choose WireGuard UDP `49271`, LAN HTTPS TCP `8443`, management address `192.168.1.10`, and administrator sources `192.168.1.0/24` (or narrower host addresses). The phone endpoint is your reachable public numeric IP, not the server's LAN IP when the phone is away. In the detailed JSON example, `203.0.113.12` is a documentation placeholder and must be replaced. The dashboard name/IP is separate from the phone endpoint.
+
+4. **Clone and preview.** The plan prompts for configuration, makes no changes and contacts no services:
+
+   ```sh
+   sudo git clone https://github.com/argentumseven/bungee.git /usr/local/src/bungee
+   cd /usr/local/src/bungee
+   bash scripts/install.sh --plan
+   sudo bash scripts/install.sh
+   ```
+
+   Use the same answers in the live wizard. Choose a password of at least 16 characters. Review the encrypted-storage capacity and optional map selection before accepting. An existing installation must use `rebuild`, not `install`.
+
+5. **Allow the intended network paths.** Apply the router/host rules below. The installer configures its container namespace, not your router, provider firewall or SSH daemon.
+
+6. **Trust HTTPS and sign in.** Verify the printed CA fingerprint at the server console, import only `/opt/bungee/root.crt` into the administrator's trust store, then open the printed URL (for example `https://192.168.1.10:8443`). If you chose a hostname, its DNS or hosts-file entry must resolve to the management address. Use that exact origin; a different hostname/port is not an interchangeable login URL. See [certificate options](HTTPS.md).
+
+7. **Pair and check a phone.** Install the official APK, create an invitation in the dashboard using the phone's public key, and scan it on the phone. Approve only the features you want, then start sharing. Verify last contact and a GPS observation. Turn Wi-Fi off briefly and verify contact over cellular to test the public UDP path; a successful LAN check alone does not prove port forwarding works. Reconnect and confirm saved history remains. Test alarms/photos on a phone you control before depending on them.
+
+8. **Check operation and recovery.** Run `sudo python3 /opt/bungee/bungee-host.py status`, save the printed URL, and back up the storage/backup keys as described below. Test the first reboot while console access is available. A missing encrypted mount prevents Docker from starting, including unrelated Docker workloads on this host; understand that dependency before choosing a shared host.
+
+### Router, host firewall and ports
+
+These are example ports, not required defaults. Pick an unused WireGuard UDP port other than `51820`; the dashboard can use another HTTPS port.
+
+| Path | Example rule | Exposure |
+| --- | --- | --- |
+| Away-from-home phones | Router WAN **UDP 49271 → 192.168.1.10 UDP 49271**; allow the same UDP port in the host/provider firewall | The one public Bungee entry point. Keep external and internal ports equal in this setup. Use UDP, not TCP. |
+| Administrator browser | Permit **TCP 8443** to `192.168.1.10` from the chosen LAN/management source prefixes | LAN/private management only. No WAN forwarding. For access away from home, use a separate management VPN/private route. |
+| Internal device API | `10.77.0.1:8081`, inside the phone WireGuard overlay | Never publish or router-forward TCP 8081. Phones cannot reach the dashboard through this overlay. |
+| TLS issuance | No port 80 listener or public certificate challenge in the guided setup | No WAN TCP 80/443 rule is needed. Local certificates renew without an external CA. |
+| SSH/Docker | Your existing restricted management policy | Bungee does not expose, secure or reconfigure these host services for you. Never expose a Docker API for Bungee. |
+
+For two layers of NAT, forwarding may be required at both routers. Under CGNAT, forwarding on your own router cannot create an ISP-side public listener: obtain a reachable address from your ISP or provide a separate reachable host/network. With IPv6, use a numeric global address reachable by the phone and an explicit firewall ingress rule; IPv4 NAT instructions do not apply. The endpoint format brackets IPv6. Router hairpin NAT can affect a phone testing the public address from home Wi-Fi.
+
+Public dynamic IP changes are not automatically discovered; DNS endpoint names and automatic rendezvous are not implemented. Plan how you will update/re-pair phones if the endpoint changes. HTTPS may use an internal DNS name independently. Avoid a management LAN/VPN range overlapping `10.77.0.0/24`; broad `10.0.0.0/8` administrator rules are refused.
+
+Docker port publication is part of the host network path. Do not assume a front-end firewall such as UFW automatically filters all published Docker ports: check Docker's firewall guidance and verify the actual allowed and denied source paths. Bungee adds source restrictions in both the shared namespace firewall and Rust, but that does not replace the rest of the host firewall.
 
 ## New installation
 
@@ -110,6 +134,8 @@ All persistent application state, WireGuard/peer secrets, CA/leaf keys, local co
 
 ## Trust the dashboard
 
+See [HTTPS and certificate options](HTTPS.md) for local trust, operator-supplied PEM certificates, renewal ownership and browser compatibility.
+
 The host generates a private local CA and 90-day leaf certificate without contacting a certificate provider. The public root is `/opt/bungee/root.crt`. Verify its printed SHA-256 fingerprint through the local console or an authenticated channel, then explicitly trust it in the administrator browser/profile. The CA private key remains host-only; Rust receives a read-only leaf directory. Never export private keys or bypass TLS verification.
 
 Use a current browser supporting TLS 1.3 X25519MLKEM768. Classical-only key exchange and TLS 1.2 fail. Sign in to the exact configured HTTPS origin with the password you chose during installation. There is no generated default or password-retrieval file.
@@ -130,12 +156,16 @@ verifier commits. Your old password continues working until changed. Old encrypt
 snapshots can still contain the previous plaintext credential; migration does not
 rewrite backups or promise forensic erasure. Rotate any exposed old password.
 
+The daily host timer renews certificates locally even when automatic software updates are disabled. Rust reloads valid certificate replacements every minute. Renewal retains the CA identity; CA expiry/compromise needs a planned replacement and renewed trust on administrator devices.
+
+## Update from GitHub
+
 To upgrade the running containers directly from an updated source checkout:
 
 ```sh
-cd /usr/local/src/bungee
-git pull --ff-only origin main
-sudo python3 scripts/bungee-host.py rebuild
+cd /usr/local/src/bungee &&
+git pull --ff-only origin main &&
+sudo python3 scripts/bungee-host.py rebuild &&
 sudo python3 /opt/bungee/bungee-host.py status
 ```
 
@@ -144,7 +174,7 @@ before downtime, takes an encrypted cold snapshot, and uses the normal health
 checks and rollback flow before reopening admission. It also refreshes the
 installed host helper. Run it from the source checkout, not `/opt/bungee`.
 
-The daily host timer renews certificates locally even when automatic software updates are disabled. Rust reloads valid certificate replacements every minute. Renewal retains the CA identity; CA expiry/compromise needs a planned replacement and renewed trust on administrator devices.
+A source update and a published container-channel update are different paths. `update --manual` checks the published stable/preview bundle; it does not build the latest GitHub main branch. Use the command above for the source workflow. The same command is available in web **Settings → Update this server**. After a version change, install the matching APK from **Settings → Phone app updates** or GitHub Releases.
 
 ## Operations and reboot
 
@@ -181,7 +211,7 @@ The guided host uses storage contract 2. Current contract-2 installations update
 
 ## Offline maps and GeoIP
 
-Fresh guided installs seed a 7.7 MB Natural Earth world overview and bundled DB-IP Lite City data (IPv4/IPv6), then acquire a local US street-map extract. The storage prompt defaults to 32 GiB. Street-map acquisition checks the size of US tiles at zoom 15, then zoom 14 if needed; it refuses extracts above 25 GB or available encrypted capacity. The world overview stays usable if a download fails. No map provider is contacted while tracking a phone.
+Fresh guided installs seed a 7.7 MB Natural Earth world overview and bundled DB-IP Lite City data (IPv4/IPv6), then offer a regional street-map selection. The storage prompt defaults to 32 GiB. Street-map acquisition checks the size of US tiles at zoom 15, then zoom 14 if needed; it refuses extracts above 25 GB or available encrypted capacity. The world overview stays usable if a download fails. No map provider is contacted while tracking a phone.
 
 For an existing installation, first update its runtime/helper from the current checkout:
 
@@ -209,3 +239,38 @@ Local raster PNG/JPEG MBTiles, vector MVT PMTiles v3 and City MMDB files are acc
 DNS functionality was removed in 1.1.17. Existing installations discard its old answers; see [upgrade cleanup](DNS-REMOVAL.md) if a phone used the retired relay.
 
 Official APK downloads in GitHub Releases and manager Settings → Phone app updates are identical. Household hosts verify and cache the APK without re-signing it. Existing household-signed phones keep compatible in-app updates; new installations use the shared official identity. Release maintainers configure the persistent key once using [the signing setup helper](MANAGEMENT.md#maintainer-setup-for-the-shared-release-key).
+
+## Uninstall the server/host
+
+Run from this checkout on the server (use `--root` for a custom installation):
+
+```sh
+bash scripts/uninstall.sh --plan
+sudo bash scripts/uninstall.sh
+# Permanently delete the local data, snapshots, certificates and keys as well:
+sudo bash scripts/uninstall.sh --purge
+```
+
+The default keeps `/var/lib/bungee/storage.luks` and `/etc/bungee/` for recovery,
+but unmounts/closes storage and removes its automatic boot configuration. Keep
+the image, storage key and backup identity together in a protected backup. This
+is an offline archive, not a one-command reinstall; the installer will refuse to
+overwrite it. Export needed records before uninstalling.
+
+Uninstall disables Bungee's timer/recovery service, stops and removes its Compose
+containers/network, removes its systemd units, its exact crypttab/fstab entries,
+and its Docker storage dependency. It does not restart Docker, prune images,
+delete unrelated files, change host SSH/firewall settings, remove phone apps,
+erase external backups or remove manually imported CA trust. Remove that trust
+from each client separately if desired. `--purge` deletes files, and does not
+promise forensic erasure of storage or copies.
+
+Use `--yes` for unattended execution after reviewing `--plan`; interactive purge
+requires typing `PURGE`. Preview contacts no services and makes no writes; the
+live operation additionally checks the installation and host configuration.
+An active updater holds a lock and causes uninstall to refuse; let it finish,
+then retry. Cleanup stops on failure and retains keys if storage cannot be
+detached. If a failure occurs after detachment, inspect the reported step and
+remaining boot configuration locally before rebooting; cleanup is not a rollback.
+Older installs can run this checkout's helper even if their installed helper
+does not yet include `uninstall`.

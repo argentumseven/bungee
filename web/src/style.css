@@ -2184,6 +2184,9 @@ select {
 .saved-gps-marker.uncertain {background:#e8b76b;box-shadow:0 0 0 2px #885b19;border-style:dashed}
 
 .settings-card .wrap { overflow-wrap:anywhere; }
+.server-updates pre { padding: 14px; border: 1px solid var(--border); border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.server-updates pre code { font-size: 12px; }
+.server-updates .secondary { display: inline-flex; align-items: center; gap: 8px; min-height: 42px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--soft); color: var(--text); font-size: 12px; cursor: pointer; }
 .history-import input { max-width:100%; }
 
 /* Offline map library */
