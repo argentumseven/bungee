@@ -21,6 +21,6 @@ Low-battery and missed-check-in alerts can use existing reports without an exter
 
 Additional map formats must keep location requests on the home server. Any control affecting OS settings needs a documented recovery path that still works if Bungee or the server fails. Wipe, credential reset, hidden launchers, kiosk mode, owner provisioning and persistent restrictions remain excluded.
 
-## Review records
+## Verification
 
-The October reviews and their corrections are retained in [the first review](REVIEW-2026-10.md), [second review](REVIEW-2026-10-SECOND.md) and [adversarial review](REVIEW-2026-10-ADVERSARIAL.md). Current test results are in [VALIDATION.md](VALIDATION.md).
+Current results and outstanding physical-device checks are in [Validation](VALIDATION.md).

@@ -129,7 +129,7 @@ These fixture/load results apply to their test inputs and host. They do not esta
 
 The first 1.1.2 API run exposed a test-clock race: a precomputed future timestamp at now+121 could fall within the unchanged 120-second allowance before handling. A signed diagnostic reproduced it after a 1.25-second delay. The invalid fixture now uses now+300 and the full suite passes; server validation was unchanged.
 
-Historical findings and detailed fixes are retained in [the first review](REVIEW-2026-10.md), [second review](REVIEW-2026-10-SECOND.md) and [adversarial review](REVIEW-2026-10-ADVERSARIAL.md).
+Earlier review details remain in repository history; the current verification record is maintained here.
 
 ## Uncompleted device and deployment checks
 
@@ -246,7 +246,7 @@ An optional public DoT listener uses separate conventional TLS and random per-ph
 
 Android controller tests cover exact restoration of prior settings, write-ahead undo persistence, failure fallback to Automatic, explicit retry, manual Android changes, no-grant/no-approval/no-endpoint behavior, failed storage/removal, interrupted mutation and process restart. The native transport regression exercises the signed-control route through the actual app-contained stack. Android debug build, lint and unit tests and Go race tests are required. No Android VPN service or device-owner DNS policy was added.
 
-The deployed Debian host, public DNS/TCP-853 reachability, public certificate issuance, physical Android Private DNS validation/ADB writes, and battery/process restrictions have not been tested in this workspace. A public hostname/certificate is still required for activation. The watchdog works only while running; blind uninstall/force-stop cannot execute restoration. See [DNS removal migration](DNS-REMOVAL.md).
+The deployed Debian host, public DNS/TCP-853 reachability, public certificate issuance, physical Android Private DNS validation/ADB writes, and battery/process restrictions have not been tested in this workspace. A public hostname/certificate is still required for activation. The watchdog works only while running; blind uninstall/force-stop cannot execute restoration. See [legacy DNS restoration](SAFETY.md#upgrade-cleanup-for-retired-dns).
 
 The same release moves phone lifecycle actions into **Pairing & history**, exposes disconnect/erase as separate actions, fixes the revoke label to include all deleted records, and keeps confirmation targets stable. Browser fixtures exercise cancellation, a second-phone revoke, history retention on disconnect, and mobile layout. Optional resume/camera-attention boot alerts were removed; required foreground notifications remain silent. Android build/lint and existing boot-gate tests cover compilation and restart-state logic; physical notification behavior remains unverified.
 

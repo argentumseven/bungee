@@ -183,10 +183,6 @@ Map requests are authenticated and same-origin; only local raster MBTiles/City M
 
 Requests remain signed, timestamped and nonce-protected within a two-minute replay window. Retries use new request nonces; expired commands are never newly delivered. A signed late receipt may report a previously delivered attempt within its original deadline; terminal outcomes cannot be overwritten, and arrival time remains separate. This is phone-reported evidence, not exactly-once execution/attestation. Backoff closes Bungee's peer and cancels its request contexts; no alternate provider, radio setting or routing exception is introduced. See [DDIL.md](DDIL.md) for bounded queues, clock assumptions and erasure limits.
 
-## Review records
-
-The [first review](REVIEW-2026-10.md), [second review](REVIEW-2026-10-SECOND.md) and [adversarial review](REVIEW-2026-10-ADVERSARIAL.md) record historical findings, fixes and regression checks. Current enrollment, erasure, cancellation and resource limits are described above and in the linked guides. Independent release provenance and physical GrapheneOS acceptance remain open.
-
 ## Removal and ownership failures
 
 [REMOVAL_AUDIT.md](REMOVAL_AUDIT.md) records the role guards, asynchronous administration removal, pairing cancellation and recovery limits. Android Settings disables force-stop while administration remains active. Deactivate ordinary administration first; owner roles have separate OS removal rules.
@@ -199,7 +195,7 @@ Stop-all cancels earlier outstanding commands and lost mode in one server transa
 
 ## Restore-only upgrade cleanup
 
-DNS routing, logs, diagnostics and relay services were removed in 1.1.17. An upgrade-only Android migration restores the previous resolver setting if the retired controller still owns it, without contacting the server or enabling DNS control. It retains the undo record on failure. The old protected permission declaration remains only to preserve existing grants through restoration. [Recovery instructions](DNS-REMOVAL.md) cover manual restoration and revoking that grant.
+DNS routing, logs, diagnostics and relay services were removed in 1.1.17. An upgrade-only Android migration restores the previous resolver setting if the retired controller still owns it, without contacting the server or enabling DNS control. It retains the undo record on failure. The old protected permission declaration remains only to preserve existing grants through restoration. [Legacy restoration instructions](SAFETY.md#upgrade-cleanup-for-retired-dns) cover manual restoration and revoking that grant.
 
 ## One official APK identity
 

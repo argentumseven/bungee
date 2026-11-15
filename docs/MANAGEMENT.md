@@ -22,7 +22,7 @@ The app-contained WireGuard/gVisor transport carries only Bungee's home API and 
 
 [Android profile companions](PROFILE-COMPANIONS.md) link secondary-user installations under one phone. Phone telemetry and shared actions stay with the main installation; companions handle only their profile's messages, locally armed photos and readiness.
 
-DNS routing, logs and relay services were removed in 1.1.17. [Upgrade cleanup](DNS-REMOVAL.md) restores settings changed by the previous version without retaining any DNS control or relay functionality.
+DNS routing, logs and relay services were removed in 1.1.17. [Legacy local restoration](SAFETY.md#upgrade-cleanup-for-retired-dns) restores settings changed by the previous version without retaining any DNS control or relay functionality.
 
 ## Legacy device-owner enrollment
 

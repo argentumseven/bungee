@@ -84,4 +84,4 @@ Local OpenStreetMap/GeoIP datasets and import/recovery/licensing instructions ar
 
 For protocol upgrades, update the server before the phone app. See [DDIL.md](DDIL.md) for backoff, queue metrics, authenticated-contact versus telemetry time, clock requirements and delayed command-receipt reconciliation. No additional port or provider is required.
 
-DNS routing and relay support were removed in 1.1.17. See [upgrade cleanup](DNS-REMOVAL.md) for phones that used the retired feature.
+DNS routing and relay support were removed in 1.1.17. For older phones that used the feature, see [local restoration](SAFETY.md#upgrade-cleanup-for-retired-dns).
