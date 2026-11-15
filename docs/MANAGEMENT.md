@@ -22,8 +22,6 @@ The app-contained WireGuard/gVisor transport carries only Bungee's home API and 
 
 [Android profile companions](PROFILE-COMPANIONS.md) link secondary-user installations under one phone. Phone telemetry and shared actions stay with the main installation; companions handle only their profile's messages, locally armed photos and readiness.
 
-DNS routing, logs and relay services were removed in 1.1.17. [Legacy local restoration](SAFETY.md#upgrade-cleanup-for-retired-dns) restores settings changed by the previous version without retaining any DNS control or relay functionality.
-
 ## Legacy device-owner enrollment
 
 Do not create an owner with ADB or OS provisioning. If you independently tested an older version as owner, preserve its original signer and data. Uninstall/clearing data/different-signature replacement can strand the management path. Explicit management repair removes known restrictions and asks Android to release Bungee's own device-owner role only after successful cleanup. It verifies the result, cannot guarantee OS acceptance, and never resets the phone or deletes profiles. See [legacy boundaries](SAFETY.md#earlier-preview-device-owner-state).

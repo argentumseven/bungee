@@ -58,7 +58,7 @@ Publish a complete matching certificate/key pair atomically. Rust validates repl
 
 The server requires **TLS 1.3 with X25519MLKEM768 hybrid key exchange**; it intentionally has no TLS 1.2 or classical-only key-exchange fallback. A trusted certificate alone cannot make an incompatible browser connect. Use a current browser offering that group and check local enterprise/browser policy if negotiation fails. Automated checks exercise current Chromium; all browser/platform combinations are not guaranteed.
 
-Certificate signatures, Android request signatures and APK signatures remain classical. Hybrid key exchange is not a claim that the entire product is quantum-proof.
+Certificate signatures, Android request signatures and APK signatures remain classical. Hybrid key exchange is not a claim that the entire product is quantum-proof. [The security design explains why full post-quantum enrollment and signing are not implemented](SECURITY.md#post-quantum-protection-and-limits).
 
 Rust terminates TLS itself and uses the actual socket source for administrator restrictions. Forwarded headers do not authorize a browser. A TLS-terminating reverse proxy changes both the encrypted endpoint and the observed source; Bungee does not provide a supported generic reverse-proxy recipe. Merely pointing a domain at the public server is not a reason to WAN-publish management. Keep HTTPS on the configured LAN/private management path and use a separate management VPN for remote administration.
 

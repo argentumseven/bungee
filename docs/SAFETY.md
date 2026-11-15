@@ -20,6 +20,10 @@ The server refuses reboot commands regardless of advertised legacy capability or
 
 There is no remote wipe, reset-on-failed-unlocks, PIN/password reset, lock-task/kiosk mode, disabling of a launcher/keyboard/Settings, USB/ADB shutdown policy, installation restriction, account lock, destruction of the phone’s encryption keys, boot/firmware modification or factory-reset command. There is no automatic response that erases phone data. The app never blocks Safe Mode or Settings factory reset. It does not hide its launcher or recovery entry.
 
+**Why remote wipe is excluded:** Deleting a phone's data or destroying its encryption keys is irreversible. A compromised dashboard account, an incorrectly targeted phone/profile, a delayed command delivered after connectivity returns, or an interrupted/ambiguous execution could cause data loss that Bungee's normal stop and retry mechanisms cannot undo. A safe implementation would need an end-to-end authorization and confirmation policy, explicit expiry/cancellation semantics, device/profile targeting, documented behavior during outages, and physical-device tests of every failure and recovery path. Those protections are not established. Remote wipe **might** be reconsidered after the complete workflow can be vetted and tested, or it may never be included. Its absence is a deliberate safety boundary, not a promise that a lost phone can be erased remotely.
+
+**Encrypt phone storage and use a strong screen lock regardless of Bungee.** Modern Android devices use file-based encryption; credential-encrypted app data is unavailable after a reboot until the user first unlocks the device. A strong PIN or passphrase and working OS encryption are general security best practices and useful protection for a lost or stolen phone. They do not erase the device or guarantee confidentiality if it was already unlocked or compromised. Bungee relies on Android's storage protections and separately encrypts its local keys/GPS backlog; it cannot replace, configure, or attest the phone's OS encryption. See [Android's Direct Boot and credential-encrypted storage](https://developer.android.com/privacy-and-security/direct-boot).
+
 ## Network and offline behavior
 
 Only app-contained WireGuard carries Bungee's fixed home API. No Android VPN routes, system DNS setting, always-on package, VPN lockdown or default internet route is installed. A missing server or broken tunnel leaves other applications on their existing connection. Another VPN may carry/filter the outer UDP socket; Bungee does not override that VPN's policy.
@@ -128,9 +132,9 @@ Household commands, including remote fresh-location requests, are off until sepa
 
 Stop sharing persists the independent local stop. The stopped screen says **Open local recovery to resume**: authenticate there, allow a manual restart, then explicitly start sharing. No server response can clear this stop. GPS/command withdrawal and local stop invalidate earlier capture/send stamps and cancel active reservations; bytes already sent may still reach home. A local-safety write failure keeps a process veto and surfaces Android force-stop guidance. Persistent storage failure still prevents guarantees after process death. GPS erasure uses a transactional server generation rather than a handset timestamp cutoff. See [the validation record](VALIDATION.md) for the precise limits and required physical tests.
 
-## Removal audit
+## Removal and ownership
 
-[REMOVAL_AUDIT.md](REMOVAL_AUDIT.md) records ownership, asynchronous deactivation, pairing cancellation, service/permission failures and OS removal paths. A foreground-service task-manager Stop ends current execution; use Bungee local stop for a saved opt-out across boot/update. Android can require ordinary administration deactivation before offering force-stop or uninstall.
+Bungee's local recovery cancels pairing and active work, closes existing connections and checks ordinary administration deactivation rather than assuming the first removal request succeeded. Android device/profile ownership has different OS removal rules and is unsupported. A foreground-service task-manager Stop ends current execution; use Bungee local stop for a saved opt-out across boot/update. Android can require ordinary administration deactivation before offering force-stop or uninstall.
 
 
 ## Upgrade cleanup for retired DNS

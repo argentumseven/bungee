@@ -22,9 +22,9 @@ Use a dedicated Linux host or VM with a reachable LAN address. The examples belo
 
 2. **Reserve a LAN IP and plan storage.** Give the server a DHCP reservation or static address, for example `192.168.1.10`. The default encrypted image allocates 32 GiB up front under `/var/lib/bungee`; image/build cache needs additional host space. Maps, retained history, photos and the three rollback snapshots also need capacity. Capacity is not automatically expanded and primary history is not automatically expired.
 
-3. **Choose the two addresses and ports.** For example, choose WireGuard UDP `49271`, LAN HTTPS TCP `8443`, management address `192.168.1.10`, and administrator sources `192.168.1.0/24` (or narrower host addresses). The phone endpoint is your reachable public numeric IP, not the server's LAN IP when the phone is away. In the detailed JSON example, `203.0.113.12` is a documentation placeholder and must be replaced. The dashboard name/IP is separate from the phone endpoint.
+3. **Choose phone and management connectivity separately.** For example, use WireGuard UDP `49271` for phones and LAN HTTPS TCP `8443` for administrators. `endpoint_ip` is the numeric address phones can reach from outside (often the public address of your router); `bind_ip` is a local IP on the host for dashboard HTTPS (such as `192.168.1.10`); `web_host` is the name/IP you enter in the browser, which must resolve to the management listener. Restrict browser clients with `admin_subnets`. See [configuration fields](#answersjson-fields-explained) for a complete example.
 
-4. **Clone and preview.** The plan prompts for configuration, makes no changes and contacts no services:
+4. **Clone and preview.** Without an `answers.json` file, the installer prompts for settings interactively. `--plan` asks the same configuration questions and prints the proposed configuration without making changes or contacting services:
 
    ```sh
    sudo git clone https://github.com/argentumseven/bungee.git /usr/local/src/bungee
@@ -33,13 +33,13 @@ Use a dedicated Linux host or VM with a reachable LAN address. The examples belo
    sudo bash scripts/install.sh
    ```
 
-   Use the same answers in the live wizard. Choose a password of at least 16 characters. Review the encrypted-storage capacity and optional map selection before accepting. An existing installation must use `rebuild`, not `install`.
+   The live command repeats the wizard and requires typing `INSTALL` to confirm. After the runtime images build, choose and confirm an administrator password of at least 16 characters. Review encrypted-storage capacity and optional map selection first. `answers.json` is **not required**; the file is for scripted or repeatable setups. An existing installation must use `rebuild`, not `install`.
 
 5. **Allow the intended network paths.** Apply the router/host rules below. The installer configures its container namespace, not your router, provider firewall or SSH daemon.
 
 6. **Trust HTTPS and sign in.** Verify the printed CA fingerprint at the server console, import only `/opt/bungee/root.crt` into the administrator's trust store, then open the printed URL (for example `https://192.168.1.10:8443`). If you chose a hostname, its DNS or hosts-file entry must resolve to the management address. Use that exact origin; a different hostname/port is not an interchangeable login URL. See [certificate options](HTTPS.md).
 
-7. **Pair and check a phone.** Install the official APK, create an invitation in the dashboard using the phone's public key, and scan it on the phone. Approve only the features you want, then start sharing. Verify last contact and a GPS observation. Turn Wi-Fi off briefly and verify contact over cellular to test the public UDP path; a successful LAN check alone does not prove port forwarding works. Reconnect and confirm saved history remains. Test alarms/photos on a phone you control before depending on them.
+7. **Pair and check a phone.** Install the official APK, create an invitation in the dashboard using the phone's public key, and scan it on the phone. Follow [Phone permissions and optional access](PERMISSIONS.md): grant precise location to record GPS, and approve household commands, camera or removable administration only if needed. Start sharing and verify last contact and an actual dated GPS observation. Turn Wi-Fi off briefly and verify contact over cellular to test the public UDP path; a successful LAN check alone does not prove port forwarding works. Reconnect and confirm saved history remains. Test alarms/photos on a phone you control before depending on them.
 
 8. **Check operation and recovery.** Run `sudo python3 /opt/bungee/bungee-host.py status`, save the printed URL, and back up the storage/backup keys as described below. Test the first reboot while console access is available. A missing encrypted mount prevents Docker from starting, including unrelated Docker workloads on this host; understand that dependency before choosing a shared host.
 
@@ -63,13 +63,15 @@ Docker port publication is part of the host network path. Do not assume a front-
 
 ## New installation
 
-From this checkout run:
+From this checkout, run either `sudo bash scripts/install.sh` or the equivalent:
 
 ```sh
 sudo python3 scripts/bungee-host.py install
 ```
 
-Choose an internal management bind IP and HTTPS port, explicit internal administrator prefixes, a separate reachable numeric phone endpoint/custom WireGuard UDP port, encrypted storage capacity, and update preference. Port 51820 and allow-everyone administrator prefixes are rejected. No reverse proxy or load balancer is required: Rust serves HTTPS directly.
+With **no `--config` argument**, the installer runs a question-by-question wizard: WireGuard and HTTPS ports, reachable phone IP, internal HTTPS bind IP, browser hostname/IP, administrator source networks, LUKS capacity, regional map choices, release channel and automatic server-update preference. It prints the resulting configuration and waits for you to type `INSTALL` before any live installation. An invalid answer is requested again. `bash scripts/install.sh --plan` runs the interactive questions and displays the configuration **without** installation (and without an administrator-password prompt). The plan does not save the answers: the subsequent live wizard asks again.
+
+Choose an internal management bind IP and HTTPS port, explicit internal administrator source prefixes, a separate reachable numeric phone endpoint/custom WireGuard UDP port, encrypted storage capacity, and update preference. WireGuard port 51820, wildcard management binds and allow-everyone administrator prefixes are rejected. No reverse proxy or load balancer is required: Rust serves HTTPS directly.
 
 After building the images, the installer asks you to choose and confirm an
 administrator password of at least 16 characters. Entry is hidden and supports
@@ -81,27 +83,52 @@ variables, or installation output. For unattended installation, combine
 `--config answers.json --password-stdin` with a dedicated secret-manager pipe;
 do not put the password in the shell command itself. `--plan` never asks for it.
 
-For unattended setup, pass `--config answers.json`. Preview without root, Docker, file writes or network access:
+For repeatable or unattended setup, save the configuration fields in a JSON file and pass `--config answers.json`. That **skips the configuration wizard and its `INSTALL` confirmation**; without `--password-stdin`, the live install still prompts privately for the administrator password. Use a dedicated secret-manager pipe with `--password-stdin` for a fully noninteractive install. Preview a JSON configuration without root, Docker, file writes or network access:
 
 ```sh
 python3 scripts/bungee-host.py install --plan --config answers.json
 ```
 
-Example answers (replace documentation addresses):
+Example `answers.json` (replace the documentation IPs and the local hostname with your actual network):
 
 ```json
 {
   "wg_port": 49271,
   "web_port": 8443,
   "endpoint_ip": "203.0.113.12",
-  "web_host": "192.168.1.10",
+  "web_host": "bungee.home.arpa",
   "bind_ip": "192.168.1.10",
-  "admin_subnets": ["192.168.1.0/24"],
+  "admin_subnets": ["192.168.1.0/24", "192.168.50.0/24"],
   "storage_size_gib": 32,
   "auto_updates": true,
   "channel": "stable"
 }
 ```
+
+### `answers.json` fields explained
+
+| Field | Meaning |
+| --- | --- |
+| `wg_port` | Publicly reachable **UDP** port for the Bungee WireGuard gateway. Example `49271`. Forward the same UDP port from your router to the host, if needed. `51820` is rejected by this installer. |
+| `endpoint_ip` | **Phone destination**: a numeric public/reachable IPv4 or IPv6 address. A phone away from home connects here on `wg_port`. This is often the router's public IP, with UDP forwarding to the server. It is **not** the dashboard URL, and changing public IPs are not tracked automatically. `203.0.113.12` is a reserved documentation address, not a usable endpoint. |
+| `bind_ip` | **HTTPS listening address on the Linux host**: an IP actually assigned to its internal management interface, for example `192.168.1.10`. Docker publishes the HTTPS port on this address. Use `127.0.0.1` only for local/SSH-forwarded administration. It is **not** the phone's WireGuard destination and must not be a public-facing wildcard. |
+| `web_host` | **Dashboard identity for browsers**: the IP or DNS name without `https://` or a port, e.g. `bungee.home.arpa`. The installer uses it in the browser origin and HTTPS certificate. Your browser must resolve it to `bind_ip` and reach `web_port`. It can simply equal `bind_ip` (e.g. `192.168.1.10`) if you do not have internal DNS; it does **not** create DNS records or choose which interface listens. |
+| `web_port` | HTTPS **TCP** port used by administrators, e.g. `8443`. Browsers use `https://bungee.home.arpa:8443`. Do not forward this port from the public internet. |
+| `admin_subnets` | **Administrator client source allowlist**, not the server's own address, DNS settings, or a list of networks to create. Specify 1–32 IP addresses/CIDR prefixes, e.g. `192.168.1.0/24` for a trusted LAN **and** `192.168.50.0/24` for a routed management VLAN/VPN. Both must have a real private route to `bind_ip`; merely listing a subnet does not establish routing or firewall rules. These prefixes are enforced by the gateway and Rust in addition to the dashboard password. Do not allow broad/untrusted networks or overlap phone overlay `10.77.0.0/24`. Use `/32` for one IPv4 administrator. |
+| `storage_size_gib` | Size of the new allocated encrypted storage image, in GiB. `32` is the example/default, not an auto-growing disk. Account for maps, data and cold backups. |
+| `channel` | Published server bundle channel: `stable` or `preview`. `stable` rejects prereleases; `preview` accepts release candidates meeting the compatibility rules. |
+| `auto_updates` | `true`: permit the host's scheduled server image update checks and eligible transactional upgrades. `false`: skip automatic **software** upgrades while retaining timer-driven certificate maintenance and recovery; manual update checks remain possible. It does not automatically update Android apps or the Linux OS. |
+
+Both `bind_ip` and `web_host` may have the same numeric LAN address. The example uses a different hostname to show their separate roles. Only allow the second administrator subnet if you actually route and trust it; an allowlist is not a VPN, router rule, or authentication substitute.
+
+### What `auto_updates` actually does
+
+The installer enables a **host systemd timer** (`bungee-update.timer`). It checks after boot (15 minutes) and on a daily schedule with up to one hour of randomized delay. On each run, it recovers interrupted update state and renews locally issued HTTPS certificates. If `auto_updates` is `true`, it also checks the selected **published** `stable` or `preview` server container bundle. This is **not** a `git pull` of `main`.
+
+Eligible updates must have a valid release manifest, the current host API/data contract, immutable server and gateway image digests, and the **same major/minor version line** as the installation; the updater refuses downgrades and stale or already-failed bundles. When a new eligible image bundle exists, the host downloads both images before downtime, closes phone admission, stops the services, creates an authenticated **age-encrypted cold snapshot**, tests the replacement, and either accepts it or restores the previous state. Brief server downtime is expected during a successful switch. The three newest complete rollback snapshots are kept; primary history is not automatically deleted.
+
+Set `auto_updates` to `false` to keep **software changes manual**, without disabling the timer that handles certificate renewal and interrupted-update recovery. `sudo python3 /opt/bungee/bungee-host.py update --manual` checks the published channel even with automatic updates disabled, under the **same** compatibility rules. Updating from GitHub `main` instead uses the separate [source rebuild workflow](#update-from-github). The host's phone-APK preparation service may stage a verified matching APK, but Android updates are **not silently installed**: the owner downloads/installs them separately and Android asks for confirmation. The host timer does not install host OS updates, update your router, or enable unattended phone permissions.
+
 
 The installer builds two runtime images, checks kernel WireGuard support, creates a **new** allocated LUKS2 image at `/var/lib/bungee/storage.luks`, and mounts it at `/opt/bungee` (or `--root`). It never formats an existing device/image or overwrites an installation. Storage capacity is allocated up front; retain enough room inside it for live data and cold snapshots. Growing storage requires a planned host maintenance operation; the application never automatically deletes primary history to free space.
 
@@ -203,10 +230,6 @@ Encrypted archives are under `/opt/bungee/backups/<generation>/*.tar.age`; the s
 
 A host-stored key enables unattended boot. It protects a stolen data image/archive without its key; it does **not** protect against root compromise, a provider reading guest memory, or a full-host snapshot that contains the host key. Use a provider/hypervisor you trust, a patched minimal OS, SSH keys, restricted SSH/admin sources and encrypted host/backup media. Avoid hibernation and plaintext crash/memory dumps. Provider disk encryption alone does not hide data from that provider.
 
-## Legacy plaintext-storage installations
-
-The guided host uses storage contract 2. Current contract-2 installations update with the rebuild command above. Older plaintext-volume deployments need migration. The old host helper refuses incompatible releases; there is no silent conversion of its plaintext volumes. Preserve data and follow [the migration procedure](MIGRATION-1.1.4.md). Do not run an old Compose file against new paths, copy live SQLite files, or delete old volumes before encrypted recovery has been verified.
-
 `compose.yaml` and `.env.example` describe the two-container runtime for an **already provisioned** encrypted installation. Use the installer to create keys, certificates, directories and boot ordering; `docker compose up` alone does not provide these host safeguards.
 
 ## Offline maps and GeoIP
@@ -235,8 +258,6 @@ python3 /opt/bungee/bungee-host.py datasets --maps /path/map.pmtiles --geoip /pa
 ```
 
 Local raster PNG/JPEG MBTiles, vector MVT PMTiles v3 and City MMDB files are accepted. Data is validated offline before downtime and mounted read-only. Rollback keeps the previous dataset generation. See [GEOGRAPHY.md](GEOGRAPHY.md) for provenance, bounds and licensing.
-
-DNS functionality was removed in 1.1.17. Existing installations discard its old answers; see [local restoration](SAFETY.md#upgrade-cleanup-for-retired-dns) if a phone used the retired relay.
 
 Official APK downloads in GitHub Releases and manager Settings → Phone app updates are identical. Household hosts verify and cache the APK without re-signing it. Existing household-signed phones keep compatible in-app updates; new installations use the shared official identity. Release maintainers configure the persistent key once using [the signing setup helper](MANAGEMENT.md#maintainer-setup-for-the-shared-release-key).
 
