@@ -297,7 +297,7 @@ async fn monitor_file_descriptors() {
             continue;
         };
         let used = directory.filter_map(Result::ok).count() as u64;
-        let soft = limit.rlim_cur as u64;
+        let soft = limit.rlim_cur;
         if soft == 0 || soft == u64::MAX {
             continue;
         }
