@@ -283,7 +283,10 @@ async fn monitor_file_descriptors() {
     let mut warned = false;
     loop {
         timer.tick().await;
-        let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
         // SAFETY: limit is a valid writable rlimit for the current process.
         if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
             tracing::warn!("Unable to read the process file descriptor limit");
@@ -301,7 +304,12 @@ async fn monitor_file_descriptors() {
         let percent = used.saturating_mul(100) / soft;
         if percent >= 75 {
             if !warned {
-                tracing::warn!(used, soft_limit = soft, percent, "File descriptor usage is high");
+                tracing::warn!(
+                    used,
+                    soft_limit = soft,
+                    percent,
+                    "File descriptor usage is high"
+                );
                 warned = true;
             }
         } else {
@@ -310,8 +318,12 @@ async fn monitor_file_descriptors() {
         if percent >= 90 {
             critical_checks = critical_checks.saturating_add(1);
             if critical_checks >= 3 {
-                tracing::error!(used, soft_limit = soft, percent,
-                    "File descriptor exhaustion imminent after repeated checks; exiting for supervised restart");
+                tracing::error!(
+                    used,
+                    soft_limit = soft,
+                    percent,
+                    "File descriptor exhaustion imminent after repeated checks; exiting for supervised restart"
+                );
                 std::process::exit(75);
             }
         } else {
