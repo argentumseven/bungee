@@ -106,6 +106,10 @@
         "core": {
           "soft": 0,
           "hard": 0
+        },
+        "nofile": {
+          "soft": 8192,
+          "hard": 8192
         }
       },
       "image": "bungee-server:dev",
