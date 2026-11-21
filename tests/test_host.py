@@ -98,6 +98,8 @@ class SetupTests(unittest.TestCase):
         self.assertTrue(tls['source'].endswith('/tls-data/issued'))
         self.assertFalse(tls['bind']['create_host_path'])
         self.assertNotIn('ports', c['services']['server'])
+        self.assertEqual(c['services']['server']['ulimits']['nofile'], {'soft': 8192, 'hard': 8192})
+        self.assertNotIn('nofile', c['services']['gateway']['ulimits'])
     def test_plan_needs_no_docker_root_or_external_services_and_writes_nothing(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / 'untouched'
