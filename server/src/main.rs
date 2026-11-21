@@ -121,6 +121,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         wg_endpoint,
         geography: Arc::new(geography::Geography::load()?),
     };
+    // Detect sustained descriptor exhaustion before requests and TLS reloads fail.
+    // The deployment uses Docker's restart policy for last-resort recovery.
+    #[cfg(target_os = "linux")]
+    tokio::spawn(monitor_file_descriptors());
     // Expire sessions across restarts, including snapshots of the development machine.
     app.db.lock().unwrap().execute("DELETE FROM sessions", [])?;
     let housekeeping = app.clone();
@@ -270,6 +274,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     tokio::try_join!(admin_server, device_server)?;
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+async fn monitor_file_descriptors() {
+    let mut timer = tokio::time::interval(std::time::Duration::from_secs(15));
+    let mut critical_checks = 0u8;
+    let mut warned = false;
+    loop {
+        timer.tick().await;
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: limit is a valid writable rlimit for the current process.
+        if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
+            tracing::warn!("Unable to read the process file descriptor limit");
+            continue;
+        }
+        let Ok(directory) = fs::read_dir("/proc/self/fd") else {
+            tracing::warn!("Unable to read process file descriptor usage");
+            continue;
+        };
+        let used = directory.filter_map(Result::ok).count() as u64;
+        let soft = limit.rlim_cur;
+        if soft == 0 || soft == u64::MAX {
+            continue;
+        }
+        let percent = used.saturating_mul(100) / soft;
+        if percent >= 75 {
+            if !warned {
+                tracing::warn!(
+                    used,
+                    soft_limit = soft,
+                    percent,
+                    "File descriptor usage is high"
+                );
+                warned = true;
+            }
+        } else {
+            warned = false;
+        }
+        if percent >= 90 {
+            critical_checks = critical_checks.saturating_add(1);
+            if critical_checks >= 3 {
+                tracing::error!(
+                    used,
+                    soft_limit = soft,
+                    percent,
+                    "File descriptor exhaustion imminent after repeated checks; exiting for supervised restart"
+                );
+                std::process::exit(75);
+            }
+        } else {
+            critical_checks = 0;
+        }
+    }
 }
 
 async fn shutdown() {
