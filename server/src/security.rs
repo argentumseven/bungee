@@ -475,6 +475,67 @@ pub fn private_write(path: &Path, data: &[u8]) -> io::Result<()> {
 mod tests {
     use super::*;
     #[test]
+    fn explicit_browser_alias_requires_matching_request_authority() {
+        let primary = "https://10.10.201.27:8443";
+        let aliases = parse_additional_origins(
+            primary,
+            "https://bungee.example.org:8443",
+        ).unwrap();
+        assert_eq!(aliases, vec!["https://bungee.example.org:8443"]);
+        let request = |origin: &str, host: &str| {
+            axum::http::Request::builder()
+                .method(Method::POST)
+                .uri("/api/session")
+                .header(header::HOST, host)
+                .header(header::ORIGIN, origin)
+                .body(axum::body::Body::empty())
+                .unwrap()
+        };
+        assert!(browser_mutation_origin_allowed(
+            &request(primary, "10.10.201.27:8443"), primary, &aliases));
+        assert!(browser_mutation_origin_allowed(
+            &request(&aliases[0], "bungee.example.org:8443"), primary, &aliases));
+        assert!(!browser_mutation_origin_allowed(
+            &request(&aliases[0], "10.10.201.27:8443"), primary, &aliases));
+        assert!(!browser_mutation_origin_allowed(
+            &request(primary, "bungee.example.org:8443"), primary, &aliases));
+        assert!(!browser_mutation_origin_allowed(
+            &request("https://evil.example.org:8443", "evil.example.org:8443"), primary, &aliases));
+        assert!(!browser_mutation_origin_allowed(
+            &request(&aliases[0], "bungee.example.org:8444"), primary, &aliases));
+        assert!(!browser_mutation_origin_allowed(
+            &request("http://bungee.example.org:8443", "bungee.example.org:8443"), primary, &aliases));
+        assert!(!browser_mutation_origin_allowed(
+            &request("https://bungee.example.org:8443/", "bungee.example.org:8443"), primary, &aliases));
+        assert!(!browser_mutation_origin_allowed(
+            &axum::http::Request::builder().method(Method::POST)
+                .uri("/api/session").header(header::HOST, "bungee.example.org:8443")
+                .body(axum::body::Body::empty()).unwrap(), primary, &aliases));
+        let http2 = axum::http::Request::builder()
+            .method(Method::POST)
+            .uri("https://bungee.example.org:8443/api/session")
+            .header(header::ORIGIN, &aliases[0])
+            .body(axum::body::Body::empty()).unwrap();
+        assert!(browser_mutation_origin_allowed(&http2, primary, &aliases));
+    }
+
+    #[test]
+    fn browser_alias_configuration_rejects_unexpected_origin_changes() {
+        let primary = "https://10.10.201.27:8443";
+        for value in [
+            "https://10.10.201.27:8443",
+            "http://bungee.example.org:8443",
+            "https://bungee.example.org:443",
+            "https://bungee.example.org:8443/path",
+            "https://bungee.example.org:8443 https://bungee.example.org:8443",
+            "https://one.test:8443 https://two.test:8443 https://three.test:8443 https://four.test:8443 https://five.test:8443",
+        ] {
+            assert!(parse_additional_origins(primary, value).is_err(), "{value}");
+        }
+        assert!(parse_additional_origins(primary, "").unwrap().is_empty());
+    }
+
+    #[test]
     fn admin_bind_is_numeric_and_nonzero() {
         for address in [
             "127.0.0.1:8080",
