@@ -30,14 +30,15 @@ def ensure(directory, hostname, aliases=()):
             raise ValueError('Invalid certificate host name')
         try:
             address = ipaddress.ip_address(name)
+        except ValueError:
+            if (not re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?', name)
+                    or all(c in '0123456789.' for c in name)
+                    or any(not label or len(label) > 63 or label.startswith('-')
+                           or label.endswith('-') for label in name.split('.'))):
+                raise ValueError('Invalid certificate DNS name')
+        else:
             if address.is_unspecified or address.is_multicast:
                 raise ValueError('Invalid certificate IP address')
-        except ValueError:
-            if not re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?', name) or any(
-                not label or len(label) > 63 or label.startswith('-') or label.endswith('-')
-                for label in name.split('.')
-            ):
-                raise ValueError('Invalid certificate DNS name')
     stamp = '\\n'.join(names)
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
