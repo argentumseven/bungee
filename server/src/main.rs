@@ -34,6 +34,7 @@ use tower_http::services::{ServeDir, ServeFile};
 pub struct App {
     db: Arc<Mutex<rusqlite::Connection>>,
     origin: String,
+    additional_origins: Vec<String>,
     secure_cookie: bool,
     admin_networks: Vec<ipnet::IpNet>,
     limiter: Arc<Mutex<security::RateLimits>>,
@@ -69,6 +70,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     security::private_dir(&dir)?;
     let origin = env::var("BUNGEE_PUBLIC_ORIGIN").unwrap_or("http://127.0.0.1:8080".into());
     let secure_cookie = origin.starts_with("https://");
+    let additional_origins = security::parse_additional_origins(
+        &origin,
+        &env::var("BUNGEE_ADDITIONAL_ORIGINS").unwrap_or_default(),
+    )?;
     let device_bind =
         security::device_bind(&env::var("BUNGEE_DEVICE_BIND").unwrap_or("127.0.0.1:8081".into()))?;
     let admin_bind =
@@ -114,6 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = App {
         db: Arc::new(Mutex::new(db)),
         origin,
+        additional_origins,
         secure_cookie,
         admin_networks,
         limiter: Arc::new(Mutex::new(security::RateLimits::default())),
