@@ -11,10 +11,10 @@ async function port() { const s=createServer();await new Promise(r=>s.listen(0,'
 const dir=await mkdtemp(join(tmpdir(),'bungee-rust-tls-'));
 let server, logs='';
 try {
-  execFileSync('python3',['-c',"import sys;sys.path.insert(0,'scripts');import tls_config;tls_config.ensure(sys.argv[1],'127.0.0.1')",join(dir,'tls')]);
+  execFileSync('python3',['-c',"import sys;sys.path.insert(0,'scripts');import tls_config;tls_config.ensure(sys.argv[1],'127.0.0.1',['bungee.example.org'])",join(dir,'tls')]);
   const ca=await readFile(join(dir,'tls/root.crt'),'utf8');
   const p=await port(), dp=await port();
-  const env={...process.env,BUNGEE_STATE_DIR:join(dir,'state'),BUNGEE_PUBLIC_ORIGIN:`https://127.0.0.1:${p}`,BUNGEE_ADMIN_BIND:`127.0.0.1:${p}`,BUNGEE_ADMIN_SUBNETS:'127.0.0.1/32',BUNGEE_DEVICE_BIND:`127.0.0.1:${dp}`,BUNGEE_TLS_CERT_FILE:join(dir,'tls/issued/current/server.crt'),BUNGEE_TLS_KEY_FILE:join(dir,'tls/issued/current/server.key'),BUNGEE_TRUST_LOOPBACK_PROXY:'false'};
+  const env={...process.env,BUNGEE_STATE_DIR:join(dir,'state'),BUNGEE_PUBLIC_ORIGIN:`https://127.0.0.1:${p}`,BUNGEE_ADDITIONAL_ORIGINS:`https://bungee.example.org:${p}`,BUNGEE_ADMIN_BIND:`127.0.0.1:${p}`,BUNGEE_ADMIN_SUBNETS:'127.0.0.1/32',BUNGEE_DEVICE_BIND:`127.0.0.1:${dp}`,BUNGEE_TLS_CERT_FILE:join(dir,'tls/issued/current/server.crt'),BUNGEE_TLS_KEY_FILE:join(dir,'tls/issued/current/server.key'),BUNGEE_TRUST_LOOPBACK_PROXY:'false'};
   execFileSync(resolve('server/target/debug/bungee-server'), ['--set-admin-password'], {env, input:'test-only-tls-password-not-a-secret'});
   server=spawn(resolve('server/target/debug/bungee-server'),[],{env,stdio:['ignore','pipe','pipe']});
   server.stdout.on('data',b=>logs+=b);server.stderr.on('data',b=>logs+=b);
@@ -32,6 +32,23 @@ try {
   assert.ok((await handshake('X25519','TLSv1.2','TLSv1.2')).error,'TLS 1.2 must fail');
   assert.equal(await request('127.0.0.2',{'X-Bungee-Admin-IP':'127.0.0.1','X-Forwarded-For':'127.0.0.1'}),403);
   assert.equal(await request(),401);
+  // Both names must work over real trusted hybrid TLS. A request from one
+  // authorized origin to the other authority must still fail the CSRF guard.
+  const login=(origin,host,servername)=>new Promise((resolve,reject)=>{
+    const body=JSON.stringify({password:'test-only-tls-password-not-a-secret'});
+    const req=https.request({
+      host:'127.0.0.1',port:p,path:'/api/session',method:'POST',servername,
+      ca,rejectUnauthorized:true,minVersion:'TLSv1.3',ecdhCurve:'X25519MLKEM768',
+      headers:{Host:host,Origin:origin,'Content-Type':'application/json','Content-Length':Buffer.byteLength(body)}
+    },res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});
+    req.on('error',reject);req.setTimeout(3000,()=>req.destroy(Error('login timeout')));req.end(body);
+  });
+  const canonical=`https://127.0.0.1:${p}`, alias=`https://bungee.example.org:${p}`;
+  assert.equal(await login(canonical,`127.0.0.1:${p}`,undefined),200,'original IP login must work');
+  assert.equal(await login(alias,`bungee.example.org:${p}`,'bungee.example.org'),200,'DNS alias login must work');
+  assert.equal(await login(alias,`127.0.0.1:${p}`,undefined),403,'cross-alias intent must fail');
+  assert.equal(await login(canonical,`bungee.example.org:${p}`,'bungee.example.org'),403,'reverse cross-alias intent must fail');
+  assert.equal(await login(`https://other.example.org:${p}`,`bungee.example.org:${p}`,'bungee.example.org'),403,'unknown origin must fail');
   // A client without the local CA cannot authenticate the server.
   await assert.rejects(new Promise((res,rej)=>{const r=https.get({host:'127.0.0.1',port:p},res);r.on('error',rej);}));
   console.log('PASS: direct Rust trusted hybrid HTTPS; classical/TLS1.2/untrusted CA rejected; source restrictions resist forged proxy headers.');
