@@ -321,15 +321,11 @@ fn browser_mutation_origin_allowed(req: &Request, primary: &str, aliases: &[Stri
         return false;
     }
     let uri_host = req.uri().authority().map(|v| v.as_str());
-    if let Some(value) = host {
-        if !value.eq_ignore_ascii_case(authority) {
-            return false;
-        }
+    if host.is_some_and(|value| !value.eq_ignore_ascii_case(authority)) {
+        return false;
     }
-    if let Some(value) = uri_host {
-        if !value.eq_ignore_ascii_case(authority) {
-            return false;
-        }
+    if uri_host.is_some_and(|value| !value.eq_ignore_ascii_case(authority)) {
+        return false;
     }
     host.is_some() || uri_host.is_some()
 }
