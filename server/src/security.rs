@@ -514,7 +514,7 @@ mod tests {
         let http2 = axum::http::Request::builder()
             .method(Method::POST)
             .uri("https://bungee.example.org:8443/api/session")
-            .header(header::ORIGIN, &aliases[0])
+            .header(header::ORIGIN, aliases[0].as_str())
             .body(axum::body::Body::empty()).unwrap();
         assert!(browser_mutation_origin_allowed(&http2, primary, &aliases));
     }
