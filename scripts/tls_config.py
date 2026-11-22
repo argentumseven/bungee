@@ -79,7 +79,7 @@ def ensure(directory, hostname, aliases=()):
             except ValueError:
                 san.append('DNS:' + name)
         extensions = leaf / 'extensions'
-        extensions.write_text('basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\nsubjectAltName=' + san + '\n')
+        extensions.write_text('basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\nsubjectAltName=' + ','.join(san) + '\n')
         run(['openssl', 'req', '-new', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-subj', '/CN=Bungee administrator', '-keyout', leaf / 'server.key', '-out', leaf / 'server.csr'])
         run(['openssl', 'x509', '-req', '-in', leaf / 'server.csr', '-CA', root_cert, '-CAkey', root_key, '-set_serial', str(secrets.randbits(159) or 1), '-days', '90', '-sha256', '-extfile', extensions, '-out', leaf / 'server.crt'])
         (leaf / 'hostname').write_text(stamp)
