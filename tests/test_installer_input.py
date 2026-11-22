@@ -53,7 +53,7 @@ class InputTests(unittest.TestCase):
         self.assertNotIn('é', output)
 
     def test_invalid_answer_only_repeats_that_field(self):
-        answers = ['10000', '8443', '203.0.113.5', '10.10.201.27', '10.10.201.27', '10.10.10.0/24', 'oops', '20', 'stable', 'yes']
+        answers = ['10000', '8443', '203.0.113.5', '10.10.201.27', '10.10.201.27', 'none', '10.10.10.0/24', 'oops', '20', 'stable', 'yes']
         with patch.object(host, 'ask', side_effect=answers) as ask, patch.object(host,'choose_maps',return_value=[]):
             config = host.guided()
         prompts = [call.args[0] for call in ask.call_args_list]
@@ -61,6 +61,7 @@ class InputTests(unittest.TestCase):
         self.assertEqual(sum('storage capacity' in p for p in prompts), 2)
         self.assertEqual(config['storage_size_gib'], 20)
         self.assertEqual(config['web_host'], '10.10.201.27')
+        self.assertEqual(config['web_aliases'], [])
 
     def test_password_confirmation_retries_without_restarting_configuration(self):
         with patch.object(host, 'read_secret', side_effect=['a sufficiently long password', 'mismatch', 'a different long password', 'a different long password']):
