@@ -253,6 +253,83 @@ pub fn require_admin_db(db: &rusqlite::Connection, headers: &HeaderMap) -> ApiRe
     if exists { Ok(()) } else { Err(denied()) }
 }
 
+/// Explicit administrative aliases share the same scheme and port as the
+/// canonical origin. Malformed values must fail startup, not widen access.
+pub fn parse_additional_origins(primary: &str, raw: &str) -> Result<Vec<String>, &'static str> {
+    let (scheme, authority) = primary
+        .split_once("://")
+        .ok_or("Invalid canonical browser origin")?;
+    if scheme != "http" && scheme != "https" {
+        return Err("Invalid canonical browser origin scheme");
+    }
+    let base: axum::http::uri::Authority = authority
+        .parse()
+        .map_err(|_| "Invalid canonical browser authority")?;
+    let port = base
+        .port_u16()
+        .unwrap_or(if scheme == "https" { 443 } else { 80 });
+    let mut result = Vec::new();
+    for value in raw.split_ascii_whitespace() {
+        if result.len() >= 4 || value == primary || result.iter().any(|x| x == value) {
+            return Err("Browser aliases must be distinct and limited to four");
+        }
+        let prefix = if scheme == "https" {
+            "https://"
+        } else {
+            "http://"
+        };
+        let name = value
+            .strip_prefix(prefix)
+            .ok_or("Browser alias scheme differs")?;
+        let parsed: axum::http::uri::Authority = name
+            .parse()
+            .map_err(|_| "Invalid browser alias authority")?;
+        if parsed
+            .port_u16()
+            .unwrap_or(if scheme == "https" { 443 } else { 80 })
+            != port
+            || parsed.as_str() != name
+            || parsed.host().is_empty()
+            || name.contains('@')
+        {
+            return Err("Invalid browser alias hostname or port");
+        }
+        result.push(value.to_string());
+    }
+    Ok(result)
+}
+
+/// Do not accept the Origin of one authorized hostname when the actual Host
+/// (or HTTP/2 :authority) is another. This prevents cross-alias CSRF.
+fn browser_mutation_origin_allowed(req: &Request, primary: &str, aliases: &[String]) -> bool {
+    let mut origins = req.headers().get_all(header::ORIGIN).iter();
+    let Some(origin) = origins.next().and_then(|v| v.to_str().ok()) else {
+        return false;
+    };
+    if origins.next().is_some() {
+        return false;
+    }
+    if origin != primary && !aliases.iter().any(|v| v == origin) {
+        return false;
+    }
+    let Some((_, authority)) = origin.split_once("://") else {
+        return false;
+    };
+    let mut hosts = req.headers().get_all(header::HOST).iter();
+    let host = hosts.next().and_then(|v| v.to_str().ok());
+    if hosts.next().is_some() {
+        return false;
+    }
+    let uri_host = req.uri().authority().map(|v| v.as_str());
+    if host.is_some_and(|value| !value.eq_ignore_ascii_case(authority)) {
+        return false;
+    }
+    if uri_host.is_some_and(|value| !value.eq_ignore_ascii_case(authority)) {
+        return false;
+    }
+    host.is_some() || uri_host.is_some()
+}
+
 pub async fn browser_guard(State(app): State<App>, req: Request, next: Next) -> Response {
     let Some(peer) = req
         .extensions()
@@ -269,13 +346,10 @@ pub async fn browser_guard(State(app): State<App>, req: Request, next: Next) -> 
     {
         return Error(StatusCode::FORBIDDEN, "Administrator source rejected").into_response();
     }
-    // Cookie-authenticated mutations require an exact same-origin Origin header, including login.
+    // Mutations require same-origin intent for the exact requested authority,
+    // whether the browser used the original IP or an explicitly configured DNS alias.
     if !matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS)
-        && req
-            .headers()
-            .get(header::ORIGIN)
-            .and_then(|h| h.to_str().ok())
-            != Some(app.origin.as_str())
+        && !browser_mutation_origin_allowed(&req, &app.origin, &app.additional_origins)
     {
         return Error(StatusCode::FORBIDDEN, "Origin rejected").into_response();
     }
@@ -421,6 +495,98 @@ pub fn private_write(path: &Path, data: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn explicit_browser_alias_requires_matching_request_authority() {
+        let primary = "https://10.10.201.27:8443";
+        let aliases = parse_additional_origins(primary, "https://bungee.example.org:8443").unwrap();
+        assert_eq!(aliases, vec!["https://bungee.example.org:8443"]);
+        let request = |origin: &str, host: &str| {
+            axum::http::Request::builder()
+                .method(Method::POST)
+                .uri("/api/session")
+                .header(header::HOST, host)
+                .header(header::ORIGIN, origin)
+                .body(axum::body::Body::empty())
+                .unwrap()
+        };
+        assert!(browser_mutation_origin_allowed(
+            &request(primary, "10.10.201.27:8443"),
+            primary,
+            &aliases
+        ));
+        assert!(browser_mutation_origin_allowed(
+            &request(&aliases[0], "bungee.example.org:8443"),
+            primary,
+            &aliases
+        ));
+        assert!(!browser_mutation_origin_allowed(
+            &request(&aliases[0], "10.10.201.27:8443"),
+            primary,
+            &aliases
+        ));
+        assert!(!browser_mutation_origin_allowed(
+            &request(primary, "bungee.example.org:8443"),
+            primary,
+            &aliases
+        ));
+        assert!(!browser_mutation_origin_allowed(
+            &request("https://evil.example.org:8443", "evil.example.org:8443"),
+            primary,
+            &aliases
+        ));
+        assert!(!browser_mutation_origin_allowed(
+            &request(&aliases[0], "bungee.example.org:8444"),
+            primary,
+            &aliases
+        ));
+        assert!(!browser_mutation_origin_allowed(
+            &request("http://bungee.example.org:8443", "bungee.example.org:8443"),
+            primary,
+            &aliases
+        ));
+        assert!(!browser_mutation_origin_allowed(
+            &request(
+                "https://bungee.example.org:8443/",
+                "bungee.example.org:8443"
+            ),
+            primary,
+            &aliases
+        ));
+        assert!(!browser_mutation_origin_allowed(
+            &axum::http::Request::builder()
+                .method(Method::POST)
+                .uri("/api/session")
+                .header(header::HOST, "bungee.example.org:8443")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+            primary,
+            &aliases
+        ));
+        let http2 = axum::http::Request::builder()
+            .method(Method::POST)
+            .uri("https://bungee.example.org:8443/api/session")
+            .header(header::ORIGIN, aliases[0].as_str())
+            .body(axum::body::Body::empty())
+            .unwrap();
+        assert!(browser_mutation_origin_allowed(&http2, primary, &aliases));
+    }
+
+    #[test]
+    fn browser_alias_configuration_rejects_unexpected_origin_changes() {
+        let primary = "https://10.10.201.27:8443";
+        for value in [
+            "https://10.10.201.27:8443",
+            "http://bungee.example.org:8443",
+            "https://bungee.example.org:443",
+            "https://bungee.example.org:8443/path",
+            "https://bungee.example.org:8443 https://bungee.example.org:8443",
+            "https://one.test:8443 https://two.test:8443 https://three.test:8443 https://four.test:8443 https://five.test:8443",
+        ] {
+            assert!(parse_additional_origins(primary, value).is_err(), "{value}");
+        }
+        assert!(parse_additional_origins(primary, "").unwrap().is_empty());
+    }
+
     #[test]
     fn admin_bind_is_numeric_and_nonzero() {
         for address in [

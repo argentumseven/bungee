@@ -181,7 +181,7 @@ def compose(config, images, root):
             volumes=[bind('gateway-private', '/private'), bind('gateway-peers', '/peers'), {'type': 'bind', 'source': str(root / 'control'), 'target': '/control', 'read_only': True, 'bind': {'create_host_path': False}}],
             healthcheck={'test': ['CMD', 'wg', 'show', 'wg0'], 'interval': '10s', 'timeout': '3s', 'retries': 5}),
         'server': service(images['server'], ulimits={'core': {'soft': 0, 'hard': 0}, 'nofile': {'soft': 8192, 'hard': 8192}}, network_mode='service:gateway', depends_on={'gateway': {'condition': 'service_healthy'}},
-            environment={**PRIVATE_ENV, 'BUNGEE_PUBLIC_ORIGIN': network.origin(c), 'BUNGEE_ADMIN_BIND': '0.0.0.0:8443', 'BUNGEE_ADMIN_INTERFACE': 'eth0', 'BUNGEE_ADMIN_SUBNETS': ' '.join(c['admin_subnets']), 'BUNGEE_DEVICE_BIND': '10.77.0.1:8081', 'BUNGEE_WG_ENDPOINT': f"{network.bracket(c['endpoint_ip'])}:{c['wg_port']}", 'BUNGEE_TLS_CERT_FILE': '/tls/current/server.crt', 'BUNGEE_TLS_KEY_FILE': '/tls/current/server.key'},
+            environment={**PRIVATE_ENV, 'BUNGEE_PUBLIC_ORIGIN': network.origin(c), 'BUNGEE_ADDITIONAL_ORIGINS': ' '.join(network.origins(c)[1:]), 'BUNGEE_ADMIN_BIND': '0.0.0.0:8443', 'BUNGEE_ADMIN_INTERFACE': 'eth0', 'BUNGEE_ADMIN_SUBNETS': ' '.join(c['admin_subnets']), 'BUNGEE_DEVICE_BIND': '10.77.0.1:8081', 'BUNGEE_WG_ENDPOINT': f"{network.bracket(c['endpoint_ip'])}:{c['wg_port']}", 'BUNGEE_TLS_CERT_FILE': '/tls/current/server.crt', 'BUNGEE_TLS_KEY_FILE': '/tls/current/server.key'},
             tmpfs=['/tmp:size=16m'], volumes=[bind('server-data', '/state'), bind('gateway-peers', '/state/wireguard'), bind('tls-data/issued', '/tls', True), {'type': 'bind', 'source': str(dataset), 'target': '/datasets', 'read_only': True, 'bind': {'create_host_path': False}}, *[{'type':'bind','source':str(root/source),'target':target,'read_only':readonly,'bind':{'create_host_path':False}} for source,target,readonly in [('app-updates','/app-updates',True),('maps','/maps',True),('map-control/status','/map-control/status',True),('map-control/requests','/map-control/requests',False)]]])
     }}
     return result
@@ -444,7 +444,7 @@ class Host:
             if (backup / 'complete.json').is_file(): shutil.rmtree(backup)
     def renew_tls(self, config=None):
         config = config or read(self.root / 'generations' / self.current() / 'config.json')
-        tls_config.ensure(self.root / 'volumes/tls-data', config['web_host'])
+        tls_config.ensure(self.root / 'volumes/tls-data', config['web_host'], config.get('web_aliases', []))
         for path in (self.root / 'volumes/tls-data/issued').rglob('*'):
             if not path.is_symlink(): os.chown(path, 10001, 10001)
         os.chown(self.root / 'volumes/tls-data/issued', 10001, 10001)
@@ -598,13 +598,14 @@ def guided(existing=None):
     endpoint = field('Numeric home-server address reachable by phones', c.get('endpoint_ip'), lambda value: network.address(value, endpoint=True))
     bind = field('Internal management bind IP; 127.0.0.1 means local/SSH access only', c.get('bind_ip', '127.0.0.1'), network.management_address)
     host = field('Dashboard address used in your browser (no port)', c.get('web_host', bind), network.hostname)
+    aliases = field('Additional browser hostnames/IPs (comma-separated, or none)', ','.join(c.get('web_aliases', [])) or 'none', lambda value: network.web_aliases([] if value.lower() == 'none' else [x.strip() for x in value.split(',')], host))
     print('Use only your internal management IPs/prefixes. They must not overlap the phone C2 subnet.')
     nets = field('Allowed internal administrator networks', ' '.join(c['admin_subnets']) if c.get('admin_subnets') else None, network.admin_networks)
     size = field('Encrypted storage capacity in GiB (new installations)', c.get('storage_size_gib', 32), storage_size)
     maps = choose_maps(c.get('map_regions',[]))
     channel = field('Update channel: stable or preview', c.get('channel', 'stable'), choice('stable', 'preview'))
     auto = field('Check daily for tested images in that channel? yes/no', 'yes' if c.get('auto_updates', True) else 'no', choice('yes', 'no'))
-    return network.validate({**({'geodata': c['geodata']} if c.get('geodata') else {}), 'wg_port': wg, 'web_port': web, 'endpoint_ip': endpoint, 'bind_ip': bind, 'web_host': host, 'admin_subnets': nets, 'channel': channel, 'auto_updates': auto == 'yes', 'storage_size_gib': size,'map_regions':maps})
+    return network.validate({**({'geodata': c['geodata']} if c.get('geodata') else {}), 'wg_port': wg, 'web_port': web, 'endpoint_ip': endpoint, 'bind_ip': bind, 'web_host': host, 'web_aliases': aliases, 'admin_subnets': nets, 'channel': channel, 'auto_updates': auto == 'yes', 'storage_size_gib': size,'map_regions':maps})
 
 
 def preflight(root, installing=False, config=None):
@@ -973,7 +974,7 @@ if __name__ == '__main__':
         if args.command in ('install', 'configure'):
             existing = read(root / 'generations' / host.current() / 'config.json') if args.command == 'configure' else None
             CONFIG = network.validate(read(args.config)) if args.config else guided(existing)
-            print(json.dumps({**CONFIG, 'dashboard_url': network.origin(CONFIG)}, indent=2))
+            print(json.dumps({**CONFIG, 'dashboard_url': network.origin(CONFIG), 'dashboard_urls': network.origins(CONFIG)}, indent=2))
             if args.plan: sys.exit(0)
             if not args.config and ask('Apply this configuration? Type INSTALL' if args.command == 'install' else 'Apply this configuration? Type APPLY') != ('INSTALL' if args.command == 'install' else 'APPLY'):
                 sys.exit('No changes made')

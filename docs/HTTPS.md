@@ -4,7 +4,7 @@
 
 ## Guided installation: a local CA
 
-The supported guided installer creates its own local CA on encrypted storage and issues a 90-day dashboard certificate for the exact configured `web_host` (DNS name or IP address). It prints the HTTPS URL and the root certificate's SHA-256 fingerprint. The public certificate is `/opt/bungee/root.crt`; verify its fingerprint through the server console or another authenticated channel before importing it into the administrator device/browser's trusted authorities.
+The supported guided installer creates its own local CA on encrypted storage and issues a 90-day dashboard certificate covering `web_host` and up to four explicitly configured `web_aliases` (DNS names or IP addresses). Existing IP-only configurations remain valid. It prints the HTTPS URL and the root certificate's SHA-256 fingerprint. The public certificate is `/opt/bungee/root.crt`; verify its fingerprint through the server console or another authenticated channel before importing it into the administrator device/browser's trusted authorities.
 
 For example, to inspect the fingerprint locally:
 
@@ -14,7 +14,7 @@ openssl x509 -in /opt/bungee/root.crt -noout -fingerprint -sha256
 
 Trust-store installation differs by OS and browser; Firefox may use its own certificate store. Import the public root only. Keep the CA key private; do not send `root.key`, `server.key`, the storage unlock key or a backup identity to an administrator browser. Do not use a permanent browser exception or disable verification as a substitute for establishing trust.
 
-The daily host timer renews the leaf locally when fewer than 30 days remain, or the configured name changes. Rust checks for certificate replacements every 60 seconds. The CA identity is retained, so normal leaf renewal does not require importing a new root. Keep the timer enabled even if automatic software updates are off. CA expiry or compromise requires a planned replacement and renewed client trust.
+The daily host timer renews the leaf locally when fewer than 30 days remain, or any configured browser name changes. Rust checks for certificate replacements every 60 seconds. The CA identity is retained, so normal leaf renewal does not require importing a new root. Keep the timer enabled even if automatic software updates are off. CA expiry or compromise requires a planned replacement and renewed client trust.
 
 Only the issued leaf directory is mounted read-only into Rust; the CA private key stays on the host. Issuance/renewal makes no ACME request and needs no public port 80 or 443. The administrator's HTTPS port can be 8443 or another selected port, restricted to the management network.
 
@@ -67,7 +67,7 @@ Rust terminates TLS itself and uses the actual socket source for administrator r
 | Symptom | Check |
 | --- | --- |
 | Untrusted issuer | Correct public root imported into the browser's actual trust store; verify the fingerprint first. |
-| Name mismatch | Open the exact configured hostname/IP. The certificate SAN, `web_host` and public origin must agree. |
+| Name mismatch | Use `web_host` or a configured `web_aliases` entry. All names must be in the certificate SAN; unlisted names are rejected for browser mutations. |
 | Connection refused/timed out | Management bind address, routing and source allowlists; test from the intended administrator network. |
 | TLS handshake failure | Browser supports TLS 1.3 and X25519MLKEM768; intermediaries are not stripping that capability. |
 | Replacement not loaded | Container paths, UID permissions, matching certificate/key, complete chain and server logs. Wait for the next 60-second reload. |

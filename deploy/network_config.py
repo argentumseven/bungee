@@ -78,8 +78,25 @@ def bracket(ip):
 
 
 
+def web_aliases(value, primary):
+    """Additional, explicitly approved dashboard hosts; never a wildcard."""
+    if not isinstance(value, list) or len(value) > 4:
+        raise ValueError("Use up to four additional dashboard DNS/IP names")
+    names = [hostname(item) for item in value]
+    if len(set(names)) != len(names) or primary in names:
+        raise ValueError("Dashboard aliases must be distinct from each other and the primary name")
+    return names
+
+
+def origins(config):
+    c = validate(config)
+    port_suffix = f":{c['web_port']}" if c['web_port'] != 443 else ''
+    return ['https://' + bracket(name) + port_suffix
+            for name in [c['web_host'], *c['web_aliases']]]
+
+
 def validate(config):
-    if not isinstance(config, dict) or set(config) - {'geodata', 'dns_upstream_ip', 'dns_upstream_port', 'storage_size_gib', 'map_regions', 'private_dns_host'} != {'wg_port', 'web_port', 'endpoint_ip', 'web_host', 'bind_ip', 'admin_subnets', 'auto_updates', 'channel'}:
+    if not isinstance(config, dict) or set(config) - {'geodata', 'dns_upstream_ip', 'dns_upstream_port', 'storage_size_gib', 'map_regions', 'private_dns_host', 'web_aliases'} != {'wg_port', 'web_port', 'endpoint_ip', 'web_host', 'bind_ip', 'admin_subnets', 'auto_updates', 'channel'}:
         raise ValueError("Configuration has missing or unknown fields")
     # Accepted only to migrate previous installations; removed from saved answers.
     result = {k: v for k, v in config.items() if k not in ("dns_upstream_ip", "dns_upstream_port", "private_dns_host")}
@@ -96,6 +113,7 @@ def validate(config):
     result['endpoint_ip'] = address(config['endpoint_ip'], endpoint=True)
     result['bind_ip'] = management_address(config['bind_ip'])
     result['web_host'] = hostname(config['web_host'])
+    result['web_aliases'] = web_aliases(config.get('web_aliases', []), result['web_host'])
     result['admin_subnets'] = admin_networks(config['admin_subnets'])
     if type(config['auto_updates']) is not bool or config['channel'] not in ('stable', 'preview'):
         raise ValueError("Choose stable or preview updates and a boolean auto_updates value")
@@ -103,7 +121,7 @@ def validate(config):
 
 
 def origin(config):
-    return 'https://' + bracket(config['web_host']) + (f":{config['web_port']}" if config['web_port'] != 443 else '')
+    return origins(config)[0]
 
 
 if __name__ == '__main__':

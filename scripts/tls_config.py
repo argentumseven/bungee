@@ -1,5 +1,6 @@
 """Generate/renew a local CA-signed certificate on encrypted host storage."""
 import ipaddress
+import re
 import os
 from pathlib import Path
 import secrets
@@ -18,7 +19,27 @@ def sync_dir(path):
     finally: os.close(fd)
 
 
-def ensure(directory, hostname):
+def ensure(directory, hostname, aliases=()):
+    # Validate before touching CA or leaf material; do not allow OpenSSL
+    # extension injection or unbounded SAN growth.
+    names = [hostname, *aliases]
+    if not 1 <= len(names) <= 5 or len(set(names)) != len(names):
+        raise ValueError('Expected one primary name and up to four distinct aliases')
+    for name in names:
+        if not isinstance(name, str) or len(name) > 253:
+            raise ValueError('Invalid certificate host name')
+        try:
+            address = ipaddress.ip_address(name)
+        except ValueError:
+            if (not re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?', name)
+                    or all(c in '0123456789.' for c in name)
+                    or any(not label or len(label) > 63 or label.startswith('-')
+                           or label.endswith('-') for label in name.split('.'))):
+                raise ValueError('Invalid certificate DNS name')
+        else:
+            if address.is_unspecified or address.is_multicast:
+                raise ValueError('Invalid certificate IP address')
+    stamp = '\\n'.join(names)
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     # Public CA material can be exported. Every private key remains under this mount.
@@ -45,19 +66,24 @@ def ensure(directory, hostname):
     (issued / 'root.crt').chmod(0o644)
     current = issued / 'current'
     # Renew for changed names or fewer than 30 days remaining. No network/ACME.
-    if current.exists() and (current / 'hostname').read_text() == hostname:
+    if current.exists() and (current / 'hostname').read_text() == stamp:
         if subprocess.run(['openssl', 'x509', '-checkend', str(30*86400), '-noout', '-in', str(current / 'server.crt')], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE).returncode == 0:
             return False
     token = 'leaf-' + secrets.token_hex(8)
     leaf = issued / token; leaf.mkdir(mode=0o700)
     try:
-        try: ipaddress.ip_address(hostname); san = 'IP:' + hostname
-        except ValueError: san = 'DNS:' + hostname
+        san = []
+        for name in names:
+            try:
+                ipaddress.ip_address(name)
+                san.append('IP:' + name)
+            except ValueError:
+                san.append('DNS:' + name)
         extensions = leaf / 'extensions'
-        extensions.write_text('basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\nsubjectAltName=' + san + '\n')
+        extensions.write_text('basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\nsubjectAltName=' + ','.join(san) + '\n')
         run(['openssl', 'req', '-new', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-subj', '/CN=Bungee administrator', '-keyout', leaf / 'server.key', '-out', leaf / 'server.csr'])
         run(['openssl', 'x509', '-req', '-in', leaf / 'server.csr', '-CA', root_cert, '-CAkey', root_key, '-set_serial', str(secrets.randbits(159) or 1), '-days', '90', '-sha256', '-extfile', extensions, '-out', leaf / 'server.crt'])
-        (leaf / 'hostname').write_text(hostname)
+        (leaf / 'hostname').write_text(stamp)
         (leaf / 'server.csr').unlink(); extensions.unlink()
         for file in leaf.iterdir(): file.chmod(0o600)
         # Only the leaf key is exposed to Rust; the CA private key stays host-only.

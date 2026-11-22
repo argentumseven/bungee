@@ -896,6 +896,7 @@ mod privacy_tests {
         let app = App {
             db: Arc::new(Mutex::new(db)),
             origin: String::new(),
+            additional_origins: Vec::new(),
             secure_cookie: false,
             admin_networks: vec!["127.0.0.0/8".parse().unwrap()],
             limiter: Arc::new(Mutex::new(RateLimits::default())),
