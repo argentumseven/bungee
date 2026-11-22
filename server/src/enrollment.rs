@@ -560,6 +560,7 @@ mod tests {
                 store::open(&directory.join("bungee.sqlite3")).unwrap(),
             )),
             origin: "http://127.0.0.1:8080".into(),
+            additional_origins: Vec::new(),
             secure_cookie: false,
             admin_networks: vec!["127.0.0.0/8".parse().unwrap()],
             limiter: Arc::new(Mutex::new(RateLimits::default())),
