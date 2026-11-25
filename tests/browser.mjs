@@ -526,7 +526,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
   );
   await t.test("activity and settings show real state", async () => {
     await page.getByRole("button", { name: "Activity", exact: true }).click();
-    await page.getByText("enrollment · created", { exact: true }).waitFor();
+    await page.getByText("Invitation created", { exact: true }).waitFor();
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const updates = page.getByRole("region", { name: "Server updates" });
     await updates.getByRole("heading", { name: "Update this server" }).waitFor();

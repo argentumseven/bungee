@@ -20,14 +20,7 @@ object ConnectionHealth {
     @Synchronized fun report(context: Context): JSONObject {
         val cm=context.getSystemService(ConnectivityManager::class.java)
         val caps=runCatching { cm.getNetworkCapabilities(cm.activeNetwork) }.getOrNull()
-        val kind=when {
-            caps==null -> "offline"
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "vpn"
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
-            else -> "other"
-        }
+        val kind=kindOf(caps)
         val vpn=runCatching { cm.allNetworks.any { cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN)==true } }.getOrNull()
         val signal=caps?.signalStrength?.takeIf { it in -150..0 } ?: runCatching {
             if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)==true)
@@ -40,4 +33,17 @@ object ConnectionHealth {
             .put("last_rtt_ms",last ?: JSONObject.NULL).put("mean_rtt_ms",mean.toLong()).put("jitter_ms",jitter.toLong())
     }
     fun systemVpn(context: Context): Any = report(context).get("system_vpn")
+    private fun kindOf(caps: NetworkCapabilities?) = when {
+        caps==null -> "offline"
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "vpn"
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+        else -> "other"
+    }
+    /** Transport of the default network only; no counters, signal or address. */
+    fun kind(context: Context): String {
+        val cm=context.getSystemService(ConnectivityManager::class.java)
+        return kindOf(runCatching { cm.getNetworkCapabilities(cm.activeNetwork) }.getOrNull())
+    }
 }

@@ -8,7 +8,7 @@ The app uses no shell/ADB bridge, Shizuku, root or privileged installation. Pair
 
 | Operation | Official app / management API behavior |
 | --- | --- |
-| Observe the airplane-mode setting | An ordinary app can read `Settings.Global.AIRPLANE_MODE_ON`. Observation does not grant control and is not proof of internet access or the state of every radio. |
+| Observe the airplane-mode setting | An ordinary app can read `Settings.Global.AIRPLANE_MODE_ON` and receive the airplane-mode broadcast while running. Observation does not grant control, does not say who or what changed the setting, and is not proof of internet access or the state of every radio. Since 1.1.23 Bungee records each change as a [device-state event](SHARING_HISTORY.md#device-state-events) with the circumstances it can see. |
 | Open airplane-mode settings | An ordinary app can open the system settings UI. The user changes the setting; this is not unattended scheduling. |
 | Prevent airplane mode through eligible management authority | `UserManager.DISALLOW_AIRPLANE_MODE` can prohibit enabling it. Applying the restriction also turns airplane mode off if it is on. This is a persistent restriction, not a temporary reporting window. |
 | Remove that management restriction | Clearing it permits user changes again. The implementation does **not** restore the earlier airplane-mode-on state. |
@@ -18,6 +18,10 @@ The app uses no shell/ADB bridge, Shizuku, root or privileged installation. Pair
 `MANAGE_DEVICE_POLICY_AIRPLANE_MODE` also exists. Its name can be misleading for this use case: it is an `internal|role` permission associated with policy management, including the restriction above. Its existence does not grant the direct networking permission or add an API to restore airplane mode on a timer.
 
 `WRITE_SECURE_SETTINGS` is a different permission. Writing a database flag alone is not the supported airplane-mode transition: the checked connectivity implementation updates the setting and sends the protected `ACTION_AIRPLANE_MODE_CHANGED` broadcast. A settings-write recipe is not evidence that a normal app can reliably perform the complete radio transition.
+
+## Observing airplane mode and Location
+
+Bungee only observes. While its service runs it is told when airplane mode, Android's master **Location** switch, the GPS provider or its own location permission changes, and checks the same state about once a minute. If a setting changed while the app was not running, the next start records the difference with an unknown time. Each event stores the circumstances Android shows: whether the phone was locked, whether the screen was on, whether airplane mode or Location was also off, whether Bungee sharing was running and whether the network had gone. **It cannot tell who changed a setting, which control was used or why.** Do not read a locked phone as a thief or an unlocked phone as its owner. Location cannot be switched back on remotely either: the same system-only permissions apply. The dashboard can send a recovery message asking whoever holds the phone to turn it on, and the phone offers a notification and button that open Android's location settings.
 
 ## Why Bungee leaves this unavailable
 

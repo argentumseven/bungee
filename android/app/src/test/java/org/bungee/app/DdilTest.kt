@@ -13,9 +13,11 @@ class DdilTest {
             retry.attempted(now); retry.failed(now)
             assertEquals(delay, retry.nextAttempt-now); now=retry.nextAttempt
         }
-        assertEquals(1,retry.batchSize)
-        retry.succeeded(now,1000)
+        assertEquals("a failed connection says nothing about batch size",25,retry.batchSize)
+        retry.succeeded(now)
         assertEquals(0,retry.failures); assertEquals(15_000L,retry.nextAttempt-now)
+        retry.succeeded(now,more=true)
+        assertEquals("saved GPS remains and the link is healthy: come back soon",2_000L,retry.nextAttempt-now)
     }
     @Test fun authenticationFailureHasLongCooldownAndNetworkFlappingCannotCauseAnImmediateLoop() {
         val retry=DdilRetry { 0.0 }
@@ -29,8 +31,24 @@ class DdilTest {
     }
     @Test fun bandwidthChangesStayBounded() {
         val retry=DdilRetry { 1.0 }
-        repeat(100) { retry.succeeded(0,100) }; assertEquals(100,retry.batchSize)
+        repeat(100) { retry.uploaded(100) }; assertEquals(100,retry.batchSize)
+        repeat(100) { retry.uploadFailed() }; assertEquals(1,retry.batchSize)
         repeat(100) { retry.failed(0) }; assertEquals(1,retry.batchSize)
+        retry.uploaded(100); assertEquals(26,retry.batchSize)
+        retry.uploaded(3_000); assertEquals("a middling request leaves the size alone",26,retry.batchSize)
+        retry.uploaded(6_000); assertEquals(13,retry.batchSize)
+        repeat(10) { retry.uploaded(100) }; assertEquals(100,retry.batchSize)
+    }
+    @Test fun aLongBacklogDrainsInSeveralBatchesPerCycleButNeverCrowdsOutCommands() {
+        // 7 days of one fix a minute at 100 per batch is about 101 batches: well under three cycles.
+        assertTrue(DdilDrain.shouldContinue(100,9_900,800,1_000,1,60_000))
+        assertFalse("nothing was sent, so repeating cannot help",DdilDrain.shouldContinue(0,9_900,800,1_000,1,60_000))
+        assertFalse("nothing is left",DdilDrain.shouldContinue(100,0,800,1_000,1,60_000))
+        assertFalse("a slow batch means a struggling link",DdilDrain.shouldContinue(100,9_900,3_001,1_000,1,60_000))
+        assertFalse("per-cycle time budget",DdilDrain.shouldContinue(100,9_900,800,20_000,5,60_000))
+        assertFalse("per-cycle batch budget",DdilDrain.shouldContinue(100,9_900,800,5_000,DdilDrain.MAX_BATCHES,60_000))
+        assertFalse("an in-flight request must still fit the cycle deadline",DdilDrain.shouldContinue(100,9_900,800,1_000,1,11_999))
+        assertTrue(DdilDrain.comeBackSoon(100,50,900)); assertFalse(DdilDrain.comeBackSoon(100,50,4_000)); assertFalse(DdilDrain.comeBackSoon(0,50,900))
     }
     @Test fun commandClockUsesElapsedTimeAndConservativeLatencyWithoutChangingDeviceTime() {
         val clock=HomeClock()

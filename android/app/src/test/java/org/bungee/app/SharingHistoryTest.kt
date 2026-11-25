@@ -74,4 +74,40 @@ class SharingHistoryTest {
         assertFalse(TemporaryLocatePolicy.allowed(false, true, true, true, false))
         assertTrue(TemporaryLocatePolicy.allowed(true, false, false, true, true))
     }
+    @Test fun acknowledgedEventsAreOnlyAShortRecentListAndNeverCrowdOutUnsentOnes() {
+        val state = JSONObject()
+        repeat(40) { SharingEventJournal.append(state, SharingEvent.create(SharingReason.AIRPLANE_MODE_ON, 1000L + it)) }
+        val ids = SharingEventJournal.events(state).map { it.id }
+        SharingEventJournal.acknowledge(state, ids.take(30).toSet())
+        val rows = SharingEventJournal.events(state)
+        assertEquals(SharingEventJournal.KEEP_ACKNOWLEDGED + 10, rows.size)
+        assertEquals(10, rows.count { it.pending })
+        // The newest acknowledged events survive, the oldest do not.
+        assertEquals(ids.subList(18, 40), rows.map { it.id })
+    }
+    @Test fun aFullQueueMakesRoomFromAcknowledgedEventsBeforeDroppingUnsentOnes() {
+        val state = JSONObject()
+        repeat(SharingEventJournal.CAPACITY) { SharingEventJournal.append(state, SharingEvent.create(SharingReason.USER_START, 1000L + it)) }
+        val oldest = SharingEventJournal.events(state)[5]
+        SharingEventJournal.acknowledge(state, setOf(SharingEventJournal.events(state)[5].id))
+        SharingEventJournal.append(state, SharingEvent.create(SharingReason.AIRPLANE_MODE_ON, 5000))
+        assertEquals(0L, state.optLong("dropped"))
+        assertFalse(SharingEventJournal.events(state).any { it.id == oldest.id })
+        SharingEventJournal.append(state, SharingEvent.create(SharingReason.AIRPLANE_MODE_OFF, 5001))
+        assertEquals("only now is an unsent event lost, and counted", 1L, state.getLong("dropped"))
+    }
+    @Test fun deviceStateDetailSurvivesStorageAndOnlyUploadsWhatTheServerAccepts() {
+        val detail = JSONObject().put("source", "live").put("airplane", true).put("locked", true).put("network", "none")
+        val event = SharingEvent.create(SharingReason.AIRPLANE_MODE_ON, 100, 100, detail)
+        val state = SharingEventJournal.append(JSONObject(), event)
+        val restored = JSONObject(state.toString())
+        assertEquals(detail.toString(), SharingEventJournal.events(restored).single().detail.toString())
+        val upload = SharingEventJournal.pending(restored).getJSONObject(0)
+        assertEquals(setOf("id", "reason", "at", "recorded_at", "detail"), upload.keys().asSequence().toSet())
+        assertEquals("airplane_mode_on", upload.getString("reason")); assertTrue(upload.getJSONObject("detail").getBoolean("airplane"))
+        // Older events keep their exact previous shape.
+        assertEquals(setOf("id", "reason", "at", "recorded_at"), SharingEvent.create(SharingReason.USER_START, 100).json().keys().asSequence().toSet())
+        assertTrue(SharingReason.AIRPLANE_MODE_ON.deviceState && SharingReason.GPS_FIX_RESTORED.deviceState && !SharingReason.USER_START.deviceState && !SharingReason.LOCATE_ERROR.deviceState)
+        assertEquals("system", SharingReason.LOCATION_SERVICES_OFF.category)
+    }
 }

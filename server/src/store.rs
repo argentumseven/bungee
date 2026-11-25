@@ -174,6 +174,28 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
         event_id TEXT NOT NULL, reason TEXT NOT NULL, at INTEGER, recorded_at INTEGER NOT NULL, received_at INTEGER NOT NULL,
         UNIQUE(device_id,event_id));
         CREATE INDEX IF NOT EXISTS sharing_events_device_sequence ON sharing_events(device_id,sequence);")?;
+    let event_columns = tx
+        .prepare("PRAGMA table_info(sharing_events)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    if !event_columns.iter().any(|c| c == "detail") {
+        tx.execute("ALTER TABLE sharing_events ADD COLUMN detail TEXT", [])?;
+    }
+    if !columns.iter().any(|c| c == "activity_floor") {
+        tx.execute(
+            "ALTER TABLE devices ADD COLUMN activity_floor INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    // Chronological activity browsing and bounded self-trimming. Phone events sort by when
+    // they happened (or were detected), not when a reconnecting phone delivered them.
+    tx.execute_batch(
+        "CREATE INDEX IF NOT EXISTS audit_time ON audit(at,id);
+        CREATE INDEX IF NOT EXISTS sharing_events_time ON sharing_events(COALESCE(at,recorded_at),sequence);
+        CREATE TABLE IF NOT EXISTS retention_settings(
+          id INTEGER PRIMARY KEY CHECK(id=1), gps_days INTEGER NOT NULL DEFAULT 0, activity_days INTEGER NOT NULL DEFAULT 0);
+        INSERT OR IGNORE INTO retention_settings(id,gps_days,activity_days) VALUES(1,0,0);",
+    )?;
     // Opaque generations never depend on handset clocks. Preserve them across restarts.
     tx.execute(
         "UPDATE devices SET gps_epoch=lower(hex(randomblob(32))) WHERE gps_epoch=''",
@@ -250,8 +272,8 @@ pub fn audit(
     )?;
     // Retain a bounded audit trail; never include coordinates or credentials in the audit.
     db.execute(
-        "DELETE FROM audit WHERE id < (SELECT COALESCE(MAX(id),0)-10000 FROM audit)",
-        [],
+        "DELETE FROM audit WHERE id < (SELECT COALESCE(MAX(id),0)-? FROM audit)",
+        [crate::activity::AUDIT_MAX_ROWS],
     )?;
     Ok(())
 }

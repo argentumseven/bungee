@@ -25,7 +25,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.coroutines.resume
 
-data class SharingStatus(val running: Boolean = false, val connected: Boolean = false, val text: String = "Sharing is stopped", val lastSent: Long? = null, val queuedFixes: Int = 0, val droppedFixes: Long = 0, val nextRetryAt: Long? = null, val gpsAccess: String = "paused")
+data class SharingStatus(val running: Boolean = false, val connected: Boolean = false, val text: String = "Sharing is stopped", val lastSent: Long? = null, val queuedFixes: Int = 0, val droppedFixes: Long = 0, val nextRetryAt: Long? = null, val gpsAccess: String = "paused", val airplane: Boolean = false)
 
 class TelemetryService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main + CoroutineExceptionHandler { _, _ ->
@@ -44,6 +44,23 @@ class TelemetryService : Service() {
     @Volatile private var network: Network? = null
     private var watchingNetwork = false
     private var watchingUnlock = false
+    private var watchingDeviceState = false
+    private var watchingTick = false
+    private var locationAlertShown = false
+    private val sampleTick = Channel<Unit>(Channel.CONFLATED)
+    private val tickIntent by lazy { PendingIntent.getBroadcast(this, 7, Intent(ACTION_SAMPLE_TICK).setPackage(packageName), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT) }
+    /** Alarm wake-ups end a sampling pause. Handler timers stop counting while the CPU sleeps, which is exactly
+     * what happens with no radio traffic (airplane mode, no signal) and the screen off. */
+    private val tickReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) { sampleTick.trySend(Unit) }
+    }
+    private val deviceStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            // Never let a diagnostic failure take down the service, and never block the main thread on storage.
+            scope.launch(Dispatchers.IO) { recordDeviceState(live = true, sharing = status.value.running); withContext(Dispatchers.Main) { runCatching { updateLocationStatus() } } }
+        }
+    }
+    private class AttemptTrace { @Volatile var listened = false }
     private val unlockReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action == Intent.ACTION_USER_PRESENT) CameraBootRecovery.resumePending(this@TelemetryService)
@@ -52,7 +69,48 @@ class TelemetryService : Service() {
     private var locationForeground = false
     private fun canSample(command: Boolean = false) = TemporaryLocatePolicy.allowed(identity.allowLocate, command, identity.allowCommands, hasLocation(this), locationForeground) && !ManagementAgent.blocksPersonalOperation(this)
     private fun updateLocationStatus() {
-        status.value = status.value.copy(gpsAccess = LocationAccess.describe(hasLocation(this), hasBackgroundLocation(this), identity.allowLocate, locationForeground))
+        val device = DeviceStateMonitor.snapshot(this)
+        val servicesOff = device.locationServices == false
+        status.value = status.value.copy(gpsAccess = LocationAccess.describe(hasLocation(this), hasBackgroundLocation(this), identity.allowLocate, locationForeground, !servicesOff), airplane = device.airplane == true)
+        syncLocationAlert(servicesOff)
+    }
+    /** Android does not let any app switch Location on, so the one useful thing is a one-tap path to the setting. */
+    private fun syncLocationAlert(servicesOff: Boolean) {
+        val needed = servicesOff && !identity.profileCompanion && identity.allowLocate && hasLocation(this)
+        val manager = getSystemService(NotificationManager::class.java)
+        if (needed && !locationAlertShown) {
+            locationAlertShown = true
+            val open = PendingIntent.getActivity(this, 4, Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), PendingIntent.FLAG_IMMUTABLE)
+            runCatching { manager.notify(3, NotificationCompat.Builder(this, "location-alert").setSmallIcon(R.drawable.ic_bungee)
+                .setContentTitle("Location services are off").setContentText("Bungee cannot collect GPS fixes. Tap to open Android location settings.")
+                .setStyle(NotificationCompat.BigTextStyle().bigText("Bungee cannot collect GPS fixes while Android location services are off. Tap to open Android location settings and turn Location on. Fixes already saved are kept."))
+                .setAutoCancel(true).setOnlyAlertOnce(true).setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setContentIntent(open).build()) }
+        } else if (!needed && locationAlertShown) {
+            locationAlertShown = false
+            runCatching { manager.cancel(3) }
+        }
+    }
+    /** Records changes in airplane mode, location services and permissions. Blocking; call off the main thread. */
+    private fun recordDeviceState(live: Boolean, sharing: Boolean) {
+        if (!::identity.isInitialized || identity.profileCompanion) return
+        runCatching { DeviceStateMonitor.check(this, live, sharing) }
+    }
+    /** A gap is reported once when it is noticed and once when it ends, with the circumstances Android shows. */
+    private fun recordGpsGap(restored: Boolean, wall: Long, gapSeconds: Long?) {
+        runCatching {
+            val detail = DeviceStateChanges.context(DeviceStateMonitor.snapshot(this), live = true, since = null, sharing = true)
+            if (restored) { gapSeconds?.let { detail.put("minutes", (it / 60).coerceAtMost(5_256_000)) } }
+            else { detail.put("failures", gpsHealth.failures.coerceAtMost(1_000_000)); gpsHealth.gapSeconds(wall)?.let { detail.put("minutes", (it / 60).coerceAtMost(5_256_000)) } }
+            SharingHistory.recordDevice(this, if (restored) SharingReason.GPS_FIX_RESTORED else SharingReason.GPS_NO_FIX, wall, detail)
+        }
+    }
+    /** Waits for [target] (elapsed realtime). An inexact idle-capable alarm wakes the CPU if it slept through the timer. */
+    private suspend fun sleepUntil(target: Long) {
+        val alarms = getSystemService(AlarmManager::class.java)
+        runCatching { alarms.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, target, tickIntent) }
+        try {
+            while (elapsed() < target) withTimeoutOrNull((target - elapsed()).coerceIn(1L, 30_000L)) { sampleTick.receive() }
+        } finally { runCatching { alarms.cancel(tickIntent) } }
     }
     private val tunnelOwner = Any()
     private val networkChanged = Channel<Unit>(Channel.CONFLATED)
@@ -79,8 +137,19 @@ class TelemetryService : Service() {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel("sharing", "Private household connection", NotificationManager.IMPORTANCE_LOW))
         nm.createNotificationChannel(NotificationChannel("recovery", "Phone recovery messages", NotificationManager.IMPORTANCE_HIGH).apply { lockscreenVisibility = Notification.VISIBILITY_PUBLIC })
+        nm.createNotificationChannel(NotificationChannel("location-alert", "Location services alerts", NotificationManager.IMPORTANCE_HIGH))
         watchingUnlock = runCatching {
             ContextCompat.registerReceiver(this, unlockReceiver, IntentFilter(Intent.ACTION_USER_PRESENT), ContextCompat.RECEIVER_NOT_EXPORTED)
+            true
+        }.getOrDefault(false)
+        watchingDeviceState = runCatching {
+            ContextCompat.registerReceiver(this, deviceStateReceiver, IntentFilter().apply {
+                addAction(Intent.ACTION_AIRPLANE_MODE_CHANGED); addAction(LocationManager.MODE_CHANGED_ACTION); addAction(LocationManager.PROVIDERS_CHANGED_ACTION)
+            }, ContextCompat.RECEIVER_NOT_EXPORTED)
+            true
+        }.getOrDefault(false)
+        watchingTick = runCatching {
+            ContextCompat.registerReceiver(this, tickReceiver, IntentFilter(ACTION_SAMPLE_TICK), ContextCompat.RECEIVER_NOT_EXPORTED)
             true
         }.getOrDefault(false)
         CameraBootRecovery.resumePending(this)
@@ -123,6 +192,8 @@ class TelemetryService : Service() {
             else -> SharingReason.SYSTEM_RESTART
         })
         status.value = status.value.copy(running = true, connected = false, text = "Connecting to your household", nextRetryAt = null)
+        // Anything that changed while Bungee was not running is recorded now, without a claimed time.
+        scope.launch(Dispatchers.IO) { recordDeviceState(live = false, sharing = true) }
         // A GPS wait or photo upload must not hold up an emergency stop.
         scope.launch {
             val urgent = HomeApi(identity)
@@ -143,14 +214,26 @@ class TelemetryService : Service() {
         sampler = if (identity.profileCompanion) null else scope.launch {
             while (isActive && !LocalSafety.isStopped(this@TelemetryService) && !ManagementAgent.blocksPersonalOperation(this@TelemetryService)) {
                 val haste = identity.allowCommands && identity.state("management").let { it.optBoolean("lost_mode_active") && it.optBoolean("haste") }
-                val nextSample = elapsed() + if (haste) 10_000 else 60_000
+                val cycleStart = elapsed()
+                val spacing = if (haste) 10_000L else 60_000L
                 try {
                     updateLocationStatus()
-                    freshObservation(mode = if (haste) "haste" else "passive")?.let { fix -> withContext(Dispatchers.IO) { identity.queueLocation(fix.point, fix.stamp, fix.epoch) } }
+                    withContext(Dispatchers.IO) { recordDeviceState(live = true, sharing = true) }
+                    val trace = AttemptTrace()
+                    val fix = freshObservation(mode = if (haste) "haste" else "passive", trace = trace)
+                    val wall = System.currentTimeMillis() / 1000
+                    if (fix != null) {
+                        val gap = gpsHealth.gapSeconds(wall)
+                        withContext(Dispatchers.IO) { identity.queueLocation(fix.point, fix.stamp, fix.epoch) }
+                        if (gpsHealth.fix(wall)) withContext(Dispatchers.IO) { recordGpsGap(restored = true, wall = wall, gapSeconds = gap) }
+                    } else if (trace.listened) {
+                        // The phone really waited for satellites and none produced a usable fix.
+                        if (gpsHealth.miss(wall)) withContext(Dispatchers.IO) { recordGpsGap(restored = false, wall = wall, gapSeconds = null) }
+                    }
                     updateQueueStatus()
                 } catch (e: CancellationException) { throw e }
                 catch (_: Exception) { status.value = status.value.copy(text = "GPS queue unavailable · check local storage") }
-                delay((nextSample - elapsed()).coerceAtLeast(1))
+                sleepUntil(cycleStart + if (haste) spacing else gpsHealth.spacingMillis(spacing))
             }
         }
         worker = scope.launch {
@@ -233,12 +316,13 @@ class TelemetryService : Service() {
                     // (for example the camera becoming ready or this Android user going to the background)
                     // is sent now rather than at the next minute-long telemetry interval.
                     val capabilitiesNow = if (identity.profileCompanion) null else capabilities(this@TelemetryService, identity)
+                    var moreQueued = false
                     if (!identity.profileCompanion && elapsed() < deadline && (capabilitiesNow != advertised || elapsed() >= nextTelemetry || status.value.queuedFixes > 0)) {
-                        upload(api, limit = retry.batchSize)
+                        moreQueued = drainBacklog(api, retry, deadline)
                         advertised = capabilitiesNow
                         nextTelemetry = elapsed() + if (identity.state("management").optBoolean("lost_mode_active")) 30_000 else 60_000
                     }
-                    retry.succeeded(elapsed(), elapsed() - started)
+                    retry.succeeded(elapsed(), moreQueued)
                     updateQueueStatus()
                     status.value = status.value.copy(running = true, connected = true, text = if (identity.profileCompanion) "Profile connected · photos and messages" else if (status.value.queuedFixes > 0) "Connected · sending saved GPS in bounded batches" else "Connected to your household", nextRetryAt = null)
                 } catch (e: CancellationException) { throw e }
@@ -266,7 +350,7 @@ class TelemetryService : Service() {
     }
     private fun disclosureAllowed(epoch: String, command: Boolean) = canSample(command) && identity.gpsEpoch == epoch &&
         !LocalSafety.isStopped(this) && (!command || identity.allowCommands)
-    private suspend fun freshObservation(command: Boolean = false, mode: String = "passive"): Observation? {
+    private suspend fun freshObservation(command: Boolean = false, mode: String = "passive", trace: AttemptTrace? = null): Observation? {
         val epoch = identity.gpsEpoch ?: return null
         val stamp = PrivacySends.fence.stamp()
         if (!disclosureAllowed(epoch, command)) return null
@@ -276,7 +360,11 @@ class TelemetryService : Service() {
         var ticket: DisclosureFence.Ticket? = null
         var bestFix: Location? = null
         val samples = mutableListOf<Location>()
-        val duration = when (mode) { "best_guess" -> 60_000L; "haste" -> 8_000L; else -> 25_000L }
+        // After missed fixes a longer window lets a receiver without assistance data collect satellite ephemeris.
+        val duration = when (mode) { "best_guess" -> 60_000L; "haste" -> 8_000L; else -> gpsHealth.windowMillis(25_000L) }
+        trace?.listened = true
+        // Bounded to this window: the CPU must stay up to receive fixes and finish, even with no radio traffic.
+        val wake = runCatching { getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Bungee:gps-sample").apply { setReferenceCounted(false); acquire(duration + 10_000L) } }.getOrNull()
         try {
             val fix: Location = (withTimeoutOrNull(duration) {
                 suspendCancellableCoroutine { continuation ->
@@ -314,7 +402,26 @@ class TelemetryService : Service() {
             val point = if (estimate == null) locationJson(fix) else JSONObject().put("latitude",estimate.fix.latitude).put("longitude",estimate.fix.longitude).put("accuracy",estimate.fix.accuracy).put("observed_at",estimate.fix.time)
             point.put("source",mode).put("samples",estimate?.used ?: 1).put("system_vpn",ConnectionHealth.systemVpn(this))
             return PrivacySends.fence.checked(stamp, { disclosureAllowed(epoch, command) }) { Observation(point, epoch, stamp) }
-        } finally { ticket?.let { PrivacySends.fence.release(it) } }
+        } finally {
+            ticket?.let { PrivacySends.fence.release(it) }
+            runCatching { if (wake?.isHeld == true) wake.release() }
+        }
+    }
+    /** Sends saved GPS in as many bounded batches as the link carries comfortably. True when more remains and the link is healthy. */
+    private suspend fun drainBacklog(api: HomeApi, retry: DdilRetry, deadline: Long): Boolean {
+        val started = elapsed()
+        var batches = 0
+        while (true) {
+            val requestStarted = elapsed()
+            val sent = try { upload(api, limit = retry.batchSize) }
+                catch (e: Exception) { if (e !is CancellationException) retry.uploadFailed(); throw e }
+            val took = elapsed() - requestStarted
+            retry.uploaded(took)
+            batches++
+            updateQueueStatus()
+            val queued = status.value.queuedFixes
+            if (!DdilDrain.shouldContinue(sent, queued, took, elapsed() - started, batches, deadline - elapsed())) return DdilDrain.comeBackSoon(sent, queued, took)
+        }
     }
     private fun locationJson(location: Location): JSONObject = JSONObject().put("latitude", location.latitude).put("longitude", location.longitude).put("accuracy", location.accuracy.toDouble()).put("observed_at", location.time / 1000)
     private suspend fun uploadPhoto(api: HomeApi, deadline: Long) {
@@ -339,7 +446,7 @@ class TelemetryService : Service() {
         ArmedCameraService.refreshQueue(identity, session)
         ArmedCameraService.status.value = ArmedCameraService.status.value.copy(detail = "Photo delivered to server · removed from phone memory")
     }
-    private suspend fun upload(api: HomeApi, observation: Observation? = null, limit: Int = 25, commandId: String? = null, deadline: Long = Long.MAX_VALUE, expires: Long? = null) {
+    private suspend fun upload(api: HomeApi, observation: Observation? = null, limit: Int = 25, commandId: String? = null, deadline: Long = Long.MAX_VALUE, expires: Long? = null): Int {
         val stamp = observation?.stamp ?: PrivacySends.fence.stamp()
         val epoch = observation?.epoch ?: identity.gpsEpoch
         val battery = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
@@ -370,7 +477,7 @@ class TelemetryService : Service() {
             withContext(Dispatchers.IO) { identity.reconcileGpsEpoch(response.getString("gps_epoch")) }
             if (commandId != null) error("Home erased earlier GPS; requested fix was not accepted")
             status.value = status.value.copy(lastSent = System.currentTimeMillis())
-            return
+            return 0
         }
         PrivacySends.fence.checked(stamp, { !LocalSafety.isStopped(this) && (!sharing || identity.allowLocate) && (commandId == null || identity.allowCommands) }) {
             if (commandId != null) {
@@ -379,6 +486,7 @@ class TelemetryService : Service() {
         }
         if (sharing) withContext(Dispatchers.IO) { identity.acknowledgeLocations(pending, stamp, epoch!!) }
         status.value = status.value.copy(lastSent = System.currentTimeMillis())
+        return if (sharing) pending.length() else 0
     }
     private suspend fun flushReceipts(api: HomeApi, deadline: Long) {
         val pending = withContext(Dispatchers.IO) { identity.pendingReceipts() }
@@ -537,6 +645,9 @@ class TelemetryService : Service() {
         if (LocalSafety.isStopped(this)) runCatching { ArmedCameraService.disarm(this) }
         if (watchingNetwork) runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(callback) }
         if (watchingUnlock) runCatching { unregisterReceiver(unlockReceiver) }
+        if (watchingDeviceState) runCatching { unregisterReceiver(deviceStateReceiver) }
+        if (watchingTick) runCatching { unregisterReceiver(tickReceiver); getSystemService(AlarmManager::class.java).cancel(tickIntent) }
+        runCatching { getSystemService(NotificationManager::class.java).cancel(3) }
         stopRinging(); scope.cancel()
         networkChanged.close()
         val stopped = LocalSafety.isStopped(this)
@@ -549,6 +660,9 @@ class TelemetryService : Service() {
         @Volatile private var activeService: TelemetryService? = null
         fun requestPhotoUpload() { activeService?.networkChanged?.trySend(Unit) }
         val status = MutableStateFlow(SharingStatus())
+        const val ACTION_SAMPLE_TICK = "org.bungee.app.SAMPLE_TICK"
+        /** Process-wide: the periodic delivery report reads it. It restarts with the process, never persists coordinates. */
+        val gpsHealth = GpsCollectionHealth()
         fun hasLocation(context: Context) = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         fun hasBackgroundLocation(context: Context) = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
         fun capabilities(context: Context, identity: Identity): List<String> = buildList {

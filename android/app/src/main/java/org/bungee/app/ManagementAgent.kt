@@ -70,7 +70,7 @@ object ManagementAgent {
         return SharingHistory.addReport(context, JSONObject().put("app_signer_sha256", AppUpdates.installedSigner(context)).put("owner", role == ManagementRole.DEVICE_OWNER || role == ManagementRole.PROFILE_OWNER).put("consent", false)
             .put("foreground_user", profileStatus.opt("foreground_user"))
             .put("camera", cameraReport).put("connection_health", ConnectionHealth.report(context))
-            .put("delivery", identity.backlogReport().put("reported_at", System.currentTimeMillis()/1000).put("gps_access", TelemetryService.status.value.gpsAccess))
+            .put("delivery", DeviceStateMonitor.addDelivery(context, identity.backlogReport().put("reported_at", System.currentTimeMillis()/1000).put("gps_access", TelemetryService.status.value.gpsAccess)))
             .put("recovery_consent", identity.allowCommands && !LocalSafety.isStopped(context)).put("revision", state.optLong("revision", 0))
             .put("always_on", role == ManagementRole.DEVICE_OWNER && runCatching { dpm.getAlwaysOnVpnPackage(admin(context)) == context.packageName }.getOrDefault(false))
             .put("uninstall_blocked", role == ManagementRole.DEVICE_OWNER && runCatching { dpm.isUninstallBlocked(admin(context), context.packageName) }.getOrDefault(false))

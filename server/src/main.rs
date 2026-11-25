@@ -1,3 +1,4 @@
+mod activity;
 mod api;
 mod app_updates;
 mod credentials;
@@ -136,8 +137,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let housekeeping = app.clone();
     tokio::spawn(async move {
         let mut timer = tokio::time::interval(std::time::Duration::from_secs(60));
+        let mut pass = 0u64;
         loop {
             timer.tick().await;
+            if let Err(e) = activity::maintain(&housekeeping, pass) {
+                tracing::error!(error=%e.1, "Automatic log cleanup failed");
+            }
+            pass = pass.wrapping_add(1);
             if let Err(e) = geography::collect(&housekeeping) {
                 tracing::error!(error=%e.1, "Network observation failed");
             }
@@ -177,7 +183,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/devices/{id}/binding",
             delete(enrollment::purge_binding),
         )
-        .route("/api/devices/{id}/location", delete(api::clear_location))
+        .route("/api/devices/{id}/location", delete(activity::purge_gps))
         .route(
             "/api/devices/{id}/history",
             get(history::history).delete(api::clear_history),
@@ -210,6 +216,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(management::get_policy).post(management::save_policy),
         )
         .route("/api/audit", get(api::audit))
+        .route("/api/activity", get(activity::list).delete(activity::purge))
+        .route(
+            "/api/retention",
+            get(activity::retention).put(activity::set_retention),
+        )
         .fallback_service(
             ServeDir::new(&dist).not_found_service(ServeFile::new(format!("{dist}/index.html"))),
         )

@@ -15,6 +15,79 @@ pub struct Event {
     reason: String,
     at: Option<i64>,
     recorded_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    detail: Option<Detail>,
+}
+
+/// Circumstances the phone could observe when a device-state event happened.
+/// Only fixed flags and counters are accepted: never coordinates, network names
+/// or free text. An omitted field means the phone could not tell.
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Detail {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub airplane: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location_services: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gps_provider: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fine_location: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_location: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locked: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interactive: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sharing: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suppressed: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failures: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minutes: Option<u32>,
+}
+impl Detail {
+    fn valid(&self, at: i64) -> bool {
+        self.source
+            .as_deref()
+            .is_none_or(|v| ["live", "reconciled"].contains(&v))
+            && self.since.is_none_or(|v| v > 0 && v <= at + 120)
+            && self.network.as_deref().is_none_or(|v| {
+                ["none", "wifi", "cellular", "ethernet", "vpn", "other"].contains(&v)
+            })
+            && self.suppressed.is_none_or(|v| v <= 1_000_000)
+            && self.failures.is_none_or(|v| v <= 1_000_000)
+            && self.minutes.is_none_or(|v| v <= 5_256_000)
+    }
+    fn reconciled(&self) -> bool {
+        self.source.as_deref() == Some("reconciled")
+    }
+}
+/// Reasons reported by the phone's device-state monitor rather than by a sharing start/stop.
+pub const DEVICE_STATE: &[&str] = &[
+    "airplane_mode_on",
+    "airplane_mode_off",
+    "location_services_off",
+    "location_services_on",
+    "gps_provider_off",
+    "gps_provider_on",
+    "location_permission_lost",
+    "location_permission_restored",
+    "background_location_lost",
+    "background_location_restored",
+    "gps_no_fix",
+    "gps_fix_restored",
+];
+pub fn device_state(code: &str) -> bool {
+    DEVICE_STATE.contains(&code)
 }
 pub fn reason(code: &str) -> Option<(&'static str, &'static str, &'static str)> {
     Some(match code {
@@ -125,6 +198,62 @@ pub fn reason(code: &str) -> Option<(&'static str, &'static str, &'static str)> 
             "unknown",
             "Previous sharing session ended; cause and stop time unknown",
         ),
+        "airplane_mode_on" => (
+            "airplane_on",
+            "system",
+            "Airplane mode turned on; Android does not report who or what changed it",
+        ),
+        "airplane_mode_off" => (
+            "airplane_off",
+            "system",
+            "Airplane mode turned off; Android does not report who or what changed it",
+        ),
+        "location_services_off" => (
+            "location_off",
+            "system",
+            "Android location services turned off; GPS cannot be collected",
+        ),
+        "location_services_on" => (
+            "location_on",
+            "system",
+            "Android location services turned back on",
+        ),
+        "gps_provider_off" => (
+            "location_off",
+            "system",
+            "Android's GPS provider was disabled while location services stayed on",
+        ),
+        "gps_provider_on" => (
+            "location_on",
+            "system",
+            "Android's GPS provider was enabled again",
+        ),
+        "location_permission_lost" => (
+            "permission_lost",
+            "system",
+            "Precise location permission was removed from Bungee",
+        ),
+        "location_permission_restored" => (
+            "permission_restored",
+            "system",
+            "Precise location permission was granted to Bungee again",
+        ),
+        "background_location_lost" => (
+            "permission_lost",
+            "system",
+            "Background location permission was removed; automatic GPS restart is limited",
+        ),
+        "background_location_restored" => (
+            "permission_restored",
+            "system",
+            "Background location permission was granted again",
+        ),
+        "gps_no_fix" => (
+            "gps_gap",
+            "system",
+            "No usable GPS fix for several minutes although location services were available",
+        ),
+        "gps_fix_restored" => ("gps_gap_ended", "system", "Usable GPS fixes resumed"),
         _ => return None,
     })
 }
@@ -136,9 +265,17 @@ pub fn valid(events: &[Event]) -> bool {
                 && reason(&e.reason).is_some()
                 && e.recorded_at > 0
                 && e.recorded_at <= now() + 120
+                && e.detail.as_ref().is_none_or(|d| {
+                    device_state(&e.reason) && d.valid(e.recorded_at.max(e.at.unwrap_or(0)))
+                })
                 && match e.at {
                     Some(at) => at > 0 && at <= now() + 120,
-                    None => e.reason == "unexpected_exit",
+                    // A change found after the app was not running has no trustworthy time.
+                    None => {
+                        e.reason == "unexpected_exit"
+                            || (device_state(&e.reason)
+                                && e.detail.as_ref().is_some_and(Detail::reconciled))
+                    }
                 }
         })
 }
@@ -157,24 +294,33 @@ pub fn commit(
         return Ok(vec![]);
     }
     let tx = db.unchecked_transaction()?;
+    // An administrator's age purge sets this floor. Older events still waiting on a
+    // phone are acknowledged so the phone drops them, but they are not stored again.
+    let floor: i64 = tx.query_row("SELECT activity_floor FROM devices WHERE id=?", [id], |r| {
+        r.get(0)
+    })?;
     let mut accepted = Vec::new();
     for e in events {
-        let existing: Option<(String, Option<i64>, i64)> = tx
+        let detail = e
+            .detail
+            .as_ref()
+            .map(|d| serde_json::to_string(d).unwrap_or_default());
+        let existing: Option<(String, Option<i64>, i64, Option<String>)> = tx
             .query_row(
-                "SELECT reason,at,recorded_at FROM sharing_events WHERE device_id=? AND event_id=?",
+                "SELECT reason,at,recorded_at,detail FROM sharing_events WHERE device_id=? AND event_id=?",
                 params![id, e.id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .optional()?;
         if let Some(content) = existing {
-            if content != (e.reason.clone(), e.at, e.recorded_at) {
+            if content != (e.reason.clone(), e.at, e.recorded_at, detail) {
                 return Err(Error(
                     StatusCode::CONFLICT,
                     "Sharing event ID already has different content",
                 ));
             }
-        } else {
-            tx.execute("INSERT INTO sharing_events(device_id,event_id,reason,at,recorded_at,received_at) VALUES(?,?,?,?,?,?)",params![id,e.id,e.reason,e.at,e.recorded_at,now()])?;
+        } else if e.at.unwrap_or(e.recorded_at) >= floor {
+            tx.execute("INSERT INTO sharing_events(device_id,event_id,reason,at,recorded_at,received_at,detail) VALUES(?,?,?,?,?,?,?)",params![id,e.id,e.reason,e.at,e.recorded_at,now(),detail])?;
         }
         accepted.push(e.id.clone());
     }
@@ -214,11 +360,11 @@ pub async fn history(
     if !exists {
         return Err(Error(StatusCode::NOT_FOUND, "Device not found"));
     }
-    let mut q = db.prepare("SELECT e.sequence,e.event_id,e.reason,e.at,e.recorded_at,e.received_at,d.id,d.name,d.primary_device_id FROM sharing_events e JOIN devices d ON d.id=e.device_id WHERE (d.id=? OR d.primary_device_id=?) AND e.sequence<? ORDER BY e.sequence DESC LIMIT 21")?;
+    let mut q = db.prepare("SELECT e.sequence,e.event_id,e.reason,e.at,e.recorded_at,e.received_at,d.id,d.name,d.primary_device_id,e.detail FROM sharing_events e JOIN devices d ON d.id=e.device_id WHERE (d.id=? OR d.primary_device_id=?) AND e.sequence<? ORDER BY e.sequence DESC LIMIT 21")?;
     let mut rows = q.query_map(params![id,id,page.before.unwrap_or(i64::MAX)], |r| {
         let code: String = r.get(2)?;
         let (kind, category, label) = reason(&code).unwrap_or(("unknown","unknown","Unrecognized sharing event"));
-        Ok(json!({"sequence":r.get::<_,i64>(0)?,"id":r.get::<_,String>(1)?,"reason":code,"kind":kind,"category":category,"label":label,"at":r.get::<_,Option<i64>>(3)?,"recorded_at":r.get::<_,i64>(4)?,"received_at":r.get::<_,i64>(5)?,"device_id":r.get::<_,String>(6)?,"profile_name":if r.get::<_,Option<String>>(8)?.is_some(){r.get::<_,Option<String>>(7)?}else{None}}))
+        Ok(json!({"sequence":r.get::<_,i64>(0)?,"id":r.get::<_,String>(1)?,"reason":code,"kind":kind,"category":category,"label":label,"at":r.get::<_,Option<i64>>(3)?,"recorded_at":r.get::<_,i64>(4)?,"received_at":r.get::<_,i64>(5)?,"device_id":r.get::<_,String>(6)?,"profile_name":if r.get::<_,Option<String>>(8)?.is_some(){r.get::<_,Option<String>>(7)?}else{None},"detail":r.get::<_,Option<String>>(9)?.and_then(|text|serde_json::from_str::<Value>(&text).ok())}))
     })?.collect::<Result<Vec<_>,_>>()?;
     let more = rows.len() > 20;
     rows.truncate(20);

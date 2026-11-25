@@ -8,6 +8,7 @@ import { api } from "./api";
 import { RecoveryMessagePreview } from "./RecoveryMessagePreview";
 import { RecoveryPhotos } from "./RecoveryPhotos";
 import { SharingHistory } from "./SharingHistory";
+import { LOCATION_REQUEST_MESSAGE } from "./activityText";
 import { ProfileSetup } from "./ProfileSetup";
 import type { PhoneProfiles } from "./PhoneStatus";
 
@@ -49,6 +50,10 @@ type Report = {
     oldest_queued_at: number | null;
     pending_receipts: number;
     gps_access?: string | null;
+    location_services?: boolean | null;
+    airplane_mode?: boolean | null;
+    last_fix_at?: number | null;
+    fix_failures?: number | null;
   };
 };
 type Saved = {
@@ -61,8 +66,10 @@ type Saved = {
 const time = (n: number) => new Date(n * 1000).toLocaleString();
 export function DeviceCare({
   device,
+  capabilities,
 }: {
   device: PhoneProfiles;
+  capabilities?: string[];
 }) {
   const [saved, setSaved] = useState<Saved | null>(null),
     [draft, setDraft] = useState<Policy | null>(null);
@@ -92,6 +99,20 @@ export function DeviceCare({
     };
   }, [device.id]);
   const report = saved?.report;
+  const locationOff = report?.delivery?.location_services === false || report?.delivery?.gps_access === "location_services_off";
+  async function askForLocation() {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await api(`/devices/${device.id}/commands`, { method: "POST", body: JSON.stringify({ kind: "message", message: LOCATION_REQUEST_MESSAGE }) });
+      setNotice("Message queued. When the phone collects it, it appears on its lock screen with a request to turn Location on. Clear it afterwards from the recovery message controls.");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
   const set = (key: keyof Policy, value: boolean) =>
     setDraft((old) => (old ? { ...old, [key]: value } : old));
   async function save(e: React.FormEvent) {
@@ -242,6 +263,19 @@ export function DeviceCare({
                   <p className="fine">{report.camera ? `${report.camera.armed ? "Armed at last report" : "Not ready at last report"} · ${time(report.camera.reported_at)}. ${report.camera.status}. Pending ${report.camera.pending}/8; discarded at capacity ${report.camera.dropped}.` : "Not reported. Check the app version and theft-photo settings on the phone."} Enable protection on the phone before it is lost. This server cannot enable it remotely.</p>
                   {!!report.camera?.queued?.length && <ul className="fine">{report.camera.queued.map(photo=><li key={photo.id}>{photo.reason==="remote_manual"?"Manually requested picture":photo.reason==="local_test"?"Labelled camera test":"Failed-entry capture"} · {time(photo.captured_at)} · awaiting upload at last report</li>)}</ul>}
                   <h3 className="delivery-heading">Delivery &amp; offline queue</h3>
+                  {locationOff && (
+                    <div className="notice location-off-notice" role="status">
+                      <strong>Android location services were off at the last report.</strong>{" "}
+                      The phone cannot collect GPS fixes, although it can still receive commands. Android does not let this server, or any app, switch Location on remotely.
+                      You can ask whoever has the phone to do it: this sends a message that shows on the phone and explains what to turn on.
+                      <div>
+                        <button type="button" className="secondary" disabled={busy || !capabilities?.includes("message")} onClick={() => void askForLocation()}>
+                          Ask the phone to turn Location on
+                        </button>
+                        {!capabilities?.includes("message") && <span className="fine"> The phone has not approved recovery messages.</span>}
+                      </div>
+                    </div>
+                  )}
                   {report.delivery ? (
                     <>
                       <p className="fine">
@@ -250,7 +284,22 @@ export function DeviceCare({
                       <dl className="care-health">
                         <div>
                           <dt>GPS access at last report</dt>
-                          <dd>{({background: "Background permission granted", foreground: "Active · background restart not permitted", needs_foreground_start: "Paused · open Bungee to resume GPS", start_restricted: "Paused · Android restricted the location service", permission_denied: "Paused · precise permission missing", disabled: "Sharing disabled", paused: "Paused"} as Record<string,string>)[report.delivery.gps_access ?? ""] ?? "Not reported by this app"}</dd>
+                          <dd>{({background: "Background permission granted", foreground: "Active · background restart not permitted", needs_foreground_start: "Paused · open Bungee to resume GPS", start_restricted: "Paused · Android restricted the location service", location_services_off: "Paused · Android location services are off", permission_denied: "Paused · precise permission missing", disabled: "Sharing disabled", paused: "Paused"} as Record<string,string>)[report.delivery.gps_access ?? ""] ?? "Not reported by this app"}</dd>
+                        </div>
+                        <div>
+                          <dt>Android location services</dt>
+                          <dd>{report.delivery.location_services == null ? "Not reported" : report.delivery.location_services ? "On" : "Off"}</dd>
+                        </div>
+                        <div>
+                          <dt>Airplane mode</dt>
+                          <dd>{report.delivery.airplane_mode == null ? "Not reported" : report.delivery.airplane_mode ? "On" : "Off"}</dd>
+                        </div>
+                        <div>
+                          <dt>Last GPS fix obtained</dt>
+                          <dd>
+                            {report.delivery.last_fix_at ? time(report.delivery.last_fix_at) : "None since the app started"}
+                            {!!report.delivery.fix_failures && ` · ${report.delivery.fix_failures} attempts in a row without a fix`}
+                          </dd>
                         </div>
                         <div>
                           <dt>Queued GPS fixes</dt>

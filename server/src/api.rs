@@ -462,6 +462,9 @@ fn commit_telemetry(
             )
         })?;
     let received = now();
+    // After an outage the phone sends its saved GPS in a quick series of batches. Each carries
+    // the same battery reading, which should not become a burst of identical check-ins.
+    let catch_up = !input.locations.is_empty();
     let mut fixes = std::mem::take(&mut input.locations);
     if let Some(fix) = input.location.take() {
         fixes.push(fix);
@@ -483,8 +486,17 @@ fn commit_telemetry(
             previous = Some(fix);
         }
     }
-    tx.execute("INSERT INTO state_history(device_id,received_at,battery,charging,device_owner) VALUES(?,?,?,?,?)",
-        params![id,received,input.battery,input.charging,input.device_owner])?;
+    let repeated_check_in: bool = catch_up
+        && tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM (SELECT received_at,battery,charging,device_owner FROM state_history WHERE device_id=? ORDER BY id DESC LIMIT 1)
+             WHERE received_at>=? AND battery=? AND charging=? AND device_owner=?)",
+            params![id, received - 60, input.battery, input.charging, input.device_owner],
+            |r| r.get(0),
+        )?;
+    if !repeated_check_in {
+        tx.execute("INSERT INTO state_history(device_id,received_at,battery,charging,device_owner) VALUES(?,?,?,?,?)",
+            params![id,received,input.battery,input.charging,input.device_owner])?;
+    }
     tx.execute(
         "UPDATE devices SET telemetry=?,last_location=?,last_seen=?,capabilities=? WHERE id=? AND revoked=0",
         params![
@@ -512,13 +524,6 @@ fn commit_telemetry(
     ))
 }
 
-pub async fn clear_location(
-    State(app): State<App>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-) -> ApiResult<Json<Value>> {
-    erase_history(&app, &headers, &id, false)
-}
 pub async fn clear_history(
     State(app): State<App>,
     headers: HeaderMap,
@@ -526,7 +531,7 @@ pub async fn clear_history(
 ) -> ApiResult<Json<Value>> {
     erase_history(&app, &headers, &id, true)
 }
-fn erase_history(
+pub(crate) fn erase_history(
     app: &App,
     headers: &HeaderMap,
     id: &str,

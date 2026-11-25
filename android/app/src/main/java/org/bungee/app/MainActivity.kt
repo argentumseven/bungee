@@ -131,6 +131,11 @@ class MainActivity : FragmentActivity() {
     private fun openRecovery(message: String = "") {
         PairingRecoveryPanel(this) { recreate() }.show(message)
     }
+    /** The only supported route: Android keeps the Location switch behind system-only permissions. */
+    private fun openLocationSettings() {
+        runCatching { startActivity(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
+            .onFailure { error = "Open Android Settings → Location and turn Location on." }
+    }
     private fun openStartupAccess() {
         runCatching { startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:$packageName"))) }
             .onFailure { error = "Open Android Settings → Apps → Special app access → Display over other apps → Bungee." }
@@ -284,9 +289,15 @@ class MainActivity : FragmentActivity() {
                             "background" -> "Background GPS permission granted. Android power and location settings still apply."
                             "disabled" -> "GPS sharing is off."
                             "permission_denied" -> "Precise GPS permission is missing. Connection does not mean GPS is recording."
+                            "location_services_off" -> "Android location services are off, so no GPS fixes can be collected. Fixes already saved are kept and sent when a connection is available."
                             else -> "GPS is paused. Open this screen and resume GPS, or grant background location for automatic restart."
                         }, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
-                        if (status.running && status.gpsAccess !in listOf("foreground", "background", "disabled")) TextButton(onClick = { startSharing() }) { Text("Resume GPS from this screen") }
+                        if (status.running && status.gpsAccess == "location_services_off") {
+                            Text("Android does not allow any app to switch Location on for you. Open the setting and turn Location on; Bungee detects the change and resumes collecting within about a minute.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 6.dp))
+                            Button(onClick = { openLocationSettings() }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp), shape = RoundedCornerShape(11.dp)) { Text("Open Android location settings", Modifier.padding(4.dp)) }
+                        }
+                        if (status.running && status.airplane) Text("Airplane mode is on. GPS fixes continue to be saved on this phone when Android provides them, and are sent to your server when a connection returns.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 8.dp))
+                        if (status.running && status.gpsAccess !in listOf("foreground", "background", "disabled", "location_services_off")) TextButton(onClick = { startSharing() }) { Text("Resume GPS from this screen") }
                         }
                         status.nextRetryAt?.let { Text("Next retry around ${java.text.DateFormat.getTimeInstance().format(java.util.Date(it))}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp) }
                         status.lastSent?.let { Text("Last check-in · ${java.text.DateFormat.getTimeInstance().format(java.util.Date(it))}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, modifier = Modifier.padding(top = 16.dp)) }
@@ -310,7 +321,8 @@ class MainActivity : FragmentActivity() {
                         sharingEvents.take(6).forEach { event ->
                             Text("${event.reason.category.uppercase()} · ${event.reason.label}", fontSize = 11.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 12.dp))
                             val date = java.text.DateFormat.getDateTimeInstance()
-                            Text((event.at?.let { date.format(java.util.Date(it * 1000)) } ?: "Stop time unknown · detected ${date.format(java.util.Date(event.recordedAt * 1000))}") + if (event.pending) " · awaiting server confirmation" else " · local record", fontSize = 10.sp, lineHeight = 17.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text((event.at?.let { date.format(java.util.Date(it * 1000)) } ?: "Time unknown · detected ${date.format(java.util.Date(event.recordedAt * 1000))}") + if (event.pending) " · awaiting server confirmation" else " · local record", fontSize = 10.sp, lineHeight = 17.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            DeviceStateText.context(event.detail).takeIf { it.isNotEmpty() }?.let { Text(it, fontSize = 10.sp, lineHeight = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                         }
                         Text("Stops made while sharing is off appear on the server after the next connection. Android may end the app without giving a reason; this is shown as unknown.", fontSize = 10.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 12.dp))
                     }

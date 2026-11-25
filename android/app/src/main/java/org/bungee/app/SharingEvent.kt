@@ -31,21 +31,50 @@ enum class SharingReason(val kind: String, val category: String, val label: Stri
     LOCATE_START("locate_started", "manual", "Temporary GPS requested through recovery commands"),
     LOCATE_FINISHED("locate_finished", "automatic", "Temporary GPS request completed"),
     LOCATE_ERROR("error", "error", "Temporary GPS request failed or was canceled"),
-    UNEXPECTED_EXIT("stopped", "unknown", "Previous sharing session ended; cause and stop time unknown");
+    UNEXPECTED_EXIT("stopped", "unknown", "Previous sharing session ended; cause and stop time unknown"),
+    // Device-state events: observations of Android settings, never actions taken by Bungee.
+    AIRPLANE_MODE_ON("airplane_on", "system", "Airplane mode turned on; Android does not report who or what changed it"),
+    AIRPLANE_MODE_OFF("airplane_off", "system", "Airplane mode turned off; Android does not report who or what changed it"),
+    LOCATION_SERVICES_OFF("location_off", "system", "Android location services turned off; GPS cannot be collected"),
+    LOCATION_SERVICES_ON("location_on", "system", "Android location services turned back on"),
+    GPS_PROVIDER_OFF("location_off", "system", "Android's GPS provider was disabled while location services stayed on"),
+    GPS_PROVIDER_ON("location_on", "system", "Android's GPS provider was enabled again"),
+    LOCATION_PERMISSION_LOST("permission_lost", "system", "Precise location permission was removed from Bungee"),
+    LOCATION_PERMISSION_RESTORED("permission_restored", "system", "Precise location permission was granted to Bungee again"),
+    BACKGROUND_LOCATION_LOST("permission_lost", "system", "Background location permission was removed; automatic GPS restart is limited"),
+    BACKGROUND_LOCATION_RESTORED("permission_restored", "system", "Background location permission was granted again"),
+    GPS_NO_FIX("gps_gap", "system", "No usable GPS fix for several minutes although location services were available"),
+    GPS_FIX_RESTORED("gps_gap_ended", "system", "Usable GPS fixes resumed");
+
+    /** Reported by the device-state monitor rather than by a sharing start/stop. */
+    val deviceState get() = kind in DEVICE_STATE_KINDS
 
     val code get() = name.lowercase()
+    companion object {
+        private val DEVICE_STATE_KINDS = setOf("airplane_on", "airplane_off", "location_off", "location_on", "permission_lost", "permission_restored", "gps_gap", "gps_gap_ended")
+    }
 }
 
-data class SharingEvent(val id: String, val reason: SharingReason, val at: Long?, val recordedAt: Long, val pending: Boolean = true) {
+/** [detail] holds only fixed flags and counters (see the server's Detail); it never carries
+ * coordinates, network names or free text, and is allowed only on device-state reasons. */
+data class SharingEvent(val id: String, val reason: SharingReason, val at: Long?, val recordedAt: Long, val pending: Boolean = true, val detail: JSONObject? = null) {
     fun json(local: Boolean = false) = JSONObject().put("id", id).put("reason", reason.code)
-        .put("at", at ?: JSONObject.NULL).put("recorded_at", recordedAt).apply { if (local) put("pending", pending) }
+        .put("at", at ?: JSONObject.NULL).put("recorded_at", recordedAt).apply {
+            detail?.let { put("detail", JSONObject(it.toString())) }
+            if (local) put("pending", pending)
+        }
+    /** An unobserved change is the one case besides an unexplained exit with no trustworthy time. */
+    val timeUnknown get() = at == null
     companion object {
-        fun create(reason: SharingReason, recordedAt: Long, at: Long? = recordedAt) = SharingEvent(UUID.randomUUID().toString(), reason, at, recordedAt)
+        fun create(reason: SharingReason, recordedAt: Long, at: Long? = recordedAt, detail: JSONObject? = null) = SharingEvent(UUID.randomUUID().toString(), reason, at, recordedAt, true, detail)
         fun parse(value: JSONObject): SharingEvent {
+            val detail = value.optJSONObject("detail")
             val event = SharingEvent(value.getString("id"), SharingReason.valueOf(value.getString("reason").uppercase()),
-                if (value.isNull("at")) null else value.getLong("at"), value.getLong("recorded_at"), value.optBoolean("pending", true))
+                if (value.isNull("at")) null else value.getLong("at"), value.getLong("recorded_at"), value.optBoolean("pending", true), detail)
             require(UUID.fromString(event.id).toString() == event.id && event.recordedAt > 0 && (event.at == null || event.at > 0))
-            require(event.at != null || event.reason == SharingReason.UNEXPECTED_EXIT)
+            require(detail == null || event.reason.deviceState) { "Only device-state events carry detail" }
+            require(event.at != null || event.reason == SharingReason.UNEXPECTED_EXIT ||
+                (event.reason.deviceState && detail?.optString("source") == "reconciled"))
             return event
         }
     }
@@ -55,6 +84,8 @@ data class SharingEvent(val id: String, val reason: SharingReason, val at: Long?
 object SharingEventJournal {
     const val CAPACITY = 128
     const val BATCH = 20
+    /** Acknowledged events only exist to fill the phone's short recent list; the server is the record. */
+    const val KEEP_ACKNOWLEDGED = 12
     fun events(state: JSONObject): List<SharingEvent> = state.optJSONArray("events")?.let { rows ->
         require(rows.length() <= CAPACITY)
         (0 until rows.length()).map { SharingEvent.parse(rows.getJSONObject(it)) }
@@ -64,12 +95,19 @@ object SharingEventJournal {
         if (rows.any { it.id == event.id }) return state
         rows.add(event)
         if (rows.size > CAPACITY) {
-            if (rows.removeAt(0).pending) state.put("dropped", (state.optLong("dropped") + 1).coerceAtMost(9_007_199_254_740_991L))
+            // Make room from what the server already has; only then sacrifice an unsent event.
+            val acknowledged = rows.indexOfFirst { !it.pending }
+            if (rows.removeAt(if (acknowledged >= 0) acknowledged else 0).pending) state.put("dropped", (state.optLong("dropped") + 1).coerceAtMost(9_007_199_254_740_991L))
         }
         return replace(state, rows)
     }
     fun pending(state: JSONObject, before: Long = Long.MAX_VALUE) = JSONArray(events(state).filter { it.pending && it.recordedAt <= before && (it.at == null || it.at <= before) }.take(BATCH).map { it.json() })
-    fun acknowledge(state: JSONObject, ids: Set<String>) = replace(state, events(state).map { if (it.id in ids) it.copy(pending = false) else it })
+    fun acknowledge(state: JSONObject, ids: Set<String>): JSONObject {
+        val rows = events(state).map { if (it.id in ids) it.copy(pending = false) else it }
+        // Keep every unsent event and only the newest few acknowledged ones.
+        var surplus = rows.count { !it.pending } - KEEP_ACKNOWLEDGED
+        return replace(state, rows.filter { it.pending || surplus-- <= 0 })
+    }
     fun reconcileEpoch(state: JSONObject, epoch: String): JSONObject {
         require(epoch.matches(Regex("[A-Za-z0-9_-]{43}|[a-f0-9]{64}")))
         if (state.has("epoch") && state.getString("epoch") != epoch) {

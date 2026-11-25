@@ -35,6 +35,11 @@ object SharingHistory {
         SharingEventJournal.append(state, SharingEvent.create(reason, now()))
         if (reason.kind == "stopped") state.remove("active")
     }
+    /** Device-state observation with its circumstances. A null [at] means the time is unknown. */
+    fun recordDevice(context: Context, reason: SharingReason, at: Long?, detail: JSONObject) = change(context) { state ->
+        require(reason.deviceState)
+        SharingEventJournal.append(state, SharingEvent.create(reason, now(), at, detail))
+    }
     fun started(context: Context, reason: SharingReason) = change(context) { state ->
         SharingEventJournal.append(state, SharingEvent.create(reason, now()))
         state.put("active", JSONObject().put("pid", Process.myPid()).put("since", now()))
@@ -82,6 +87,7 @@ object SharingHistory {
     }
     fun clear(context: Context) = synchronized(this) {
         check(prefs(context).edit().remove("journal").commit()) { "Local sharing-history cleanup failed" }
+        DeviceStateMonitor.clear(context)
         events.value = emptyList(); error.value = null
     }
 }

@@ -54,6 +54,7 @@ import { PasswordSettings } from "./PasswordSettings";
 import { RecoveryPhotos } from "./RecoveryPhotos";
 import { recoveryCamera, reportedBackground } from "./recoveryCamera";
 import { SharingHistory } from "./SharingHistory";
+import { ActivityLog } from "./ActivityLog";
 import { MapManager } from "./MapManager";
 import { AppUpdates } from "./AppUpdates";
 import { ServerUpdates } from "./ServerUpdates";
@@ -106,12 +107,6 @@ type Command = {
   delivery_uncertain?: boolean;
   receipt_received_at?: number | null;
 };
-type Event = {
-  at: number;
-  action: string;
-  device_id: string | null;
-  detail: string;
-};
 const ago = (t: number | null) =>
   t
     ? Date.now() / 1000 - t < 90
@@ -140,7 +135,6 @@ function App() {
     [busy, setBusy] = useState(false);
   const [devices, setDevices] = useState<Device[]>([]),
     [commands, setCommands] = useState<Command[]>([]),
-    [events, setEvents] = useState<Event[]>([]),
     [selected, setSelected] = useState(""),
     [page, setPage] = useState("Overview");
   const [devicesExpanded,setDevicesExpanded]=useState(true);
@@ -203,7 +197,6 @@ function App() {
       setAuth(false);
       setDevices([]);
       setCommands([]);
-      setEvents([]);
       setSelected("");setProfileView("");setMultiProfile(false);setMainProfile("Owner");
       setPage("Overview");
       setTrackingTab("Current estimate");
@@ -224,12 +217,6 @@ function App() {
     const refresh=()=>void load();window.addEventListener("bungee:refresh",refresh);
     return () => {clearInterval(id);window.removeEventListener("bungee:refresh",refresh);};
   }, [auth]);
-  useEffect(() => {
-    if (auth && page === "Activity")
-      api<{ events: Event[] }>("/audit")
-        .then((x) => setEvents(x.events))
-        .catch((e) => setError(e.message));
-  }, [auth, page, commands]);
   useEffect(() => {
     if (!toast) return;
     const id = setTimeout(() => setToast(""), 6000);
@@ -809,7 +796,7 @@ function App() {
                 ))}
               </select>
               {device ? (
-                <DeviceCare key={device.id} device={device} />
+                <DeviceCare key={device.id} device={device} capabilities={device.capabilities} />
               ) : (
                 <section className="panel history-panel">
                   Pair a phone to configure recovery and review its reported
@@ -818,33 +805,7 @@ function App() {
               )}
             </>
           )}
-          {page === "Activity" && (
-            <section className="panel audit-panel">
-              <div className="panel-heading">
-                <h2>
-                  <Activity size={18} />
-                  Household activity
-                </h2>
-                <span className="subtle">LATEST 100 EVENTS</span>
-              </div>
-              {events.map((e, i) => (
-                <div className="audit-row" key={`${e.at}-${i}`}>
-                  <span className="icon-tile small">
-                    <ShieldCheck size={16} />
-                  </span>
-                  <div>
-                    <strong>{e.action.replaceAll(".", " · ")}</strong>
-                    <small>
-                      {e.detail || "Administrator access"}
-                      {e.device_id &&
-                        ` · ${devices.find((d) => d.id === e.device_id)?.name || "Device"}`}
-                    </small>
-                  </div>
-                  <time>{new Date(e.at * 1000).toLocaleString()}</time>
-                </div>
-              ))}
-            </section>
-          )}
+          {page === "Activity" && <ActivityLog phones={devices} refreshKey={commands.length} />}
           {page === "Pairing & history" && <>
             <DeviceRecords phones={devices} scope={recordsDevice} onScope={setRecordsDevice}
               onReconnect={d=>{setRegistrationTarget(d);setWgKey("");setModal("reconnect");}}

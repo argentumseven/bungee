@@ -2,6 +2,17 @@
 
 Versions come from [`release.json`](release.json). Published APK assets include `build.json` with the exact source commit, version code, SHA-256 and signing certificate. Update the server before the matching phone app.
 
+## 1.1.23 — Android code 39
+
+**Update the server first, then the APK.** The new phone reports fields an older server rejects; its queue is kept until the server is updated.
+
+- **Backfill after an outage.** Saved GPS is sent in several bounded batches per connection cycle, sized from the upload request itself, instead of one small batch every fifteen seconds. A failed tunnel connection no longer shrinks the batch to one point, and a long backlog starts the next cycle after two seconds while the link stays healthy. A quick series of catch-up batches records one check-in.
+- **Sampling in radio silence.** GPS sampling no longer depends on timers that stall while the CPU sleeps with no network traffic: each pause ends at an elapsed-realtime deadline with an idle-capable alarm, each listening window holds a short wake lock, a missed window is followed by a longer one and persistent misses back off. Physical-device behavior of Doze, alarms and GNSS without assistance data remains unverified.
+- **Airplane mode, Location and permissions are recorded.** The phone observes (never changes) airplane mode, Android's Location switch, the GPS provider, location and background-location permission, and GPS gaps. Each event keeps the circumstances Android shows (locked, screen on, network gone, sharing running); Android does not say who or why. Changes found after the app was not running have an unknown time. Events are queued on the phone (bounded) and sent after reconnection.
+- **Location off.** The phone shows a notification and button that open Android's location settings, reports the state, and Device care shows it with a button that sends a recovery message asking whoever holds the phone to turn Location on. No app or server can switch Location on remotely.
+- **Activity.** The dashboard feed is chronological, filterable and paginated through every stored entry instead of the latest 100, and shows phone events with their circumstances at the time they happened.
+- **Purge and self-trimming.** Purge saved GPS or activity entirely or by age, per phone and per kind, after a confirmation; set an optional automatic age; the server always trims the oldest rows beyond per-phone ceilings (administrator entries 20,000, phone events 10,000, and 2,000,000 each of GPS points, check-ins and IP observations) and never removes a phone's newest GPS point by age. Purges are recorded.
+
 ## 1.1.22 — Android code 38
 
 - Photo uploads can use their intended 60-second request budget; ordinary control requests retain the shorter budget.

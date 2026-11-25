@@ -161,6 +161,12 @@ pub struct DeliveryReport {
     pub oldest_queued_at: Option<i64>,
     pub pending_receipts: u32,
     pub gps_access: Option<String>,
+    /// Android's master location switch and airplane-mode state at report time (None: not reported).
+    pub location_services: Option<bool>,
+    pub airplane_mode: Option<bool>,
+    /// Newest usable fix the phone itself obtained, and how many sampling attempts in a row failed.
+    pub last_fix_at: Option<i64>,
+    pub fix_failures: Option<u32>,
 }
 impl DeliveryReport {
     fn valid(&self) -> bool {
@@ -178,10 +184,13 @@ impl DeliveryReport {
                     "needs_foreground_start",
                     "foreground",
                     "background",
+                    "location_services_off",
                 ]
                 .contains(&v)
             })
             && self.oldest_queued_at.is_none_or(|t| t > 0)
+            && self.last_fix_at.is_none_or(|t| t > 0 && t <= now() + 120)
+            && self.fix_failures.is_none_or(|n| n <= 1_000_000)
     }
 }
 fn read(db: &rusqlite::Connection, id: &str) -> ApiResult<(i64, Policy)> {
