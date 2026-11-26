@@ -45,6 +45,7 @@ class TelemetryService : Service() {
     private var watchingNetwork = false
     private var watchingUnlock = false
     private var watchingDeviceState = false
+    private var watchingForeground = false
     private var watchingTick = false
     private var locationAlertShown = false
     private val sampleTick = Channel<Unit>(Channel.CONFLATED)
@@ -68,6 +69,21 @@ class TelemetryService : Service() {
     }
     private var locationForeground = false
     @Volatile private var diagnosticsSupported = false
+    @Volatile private var profileFocusSupported = false
+    private var wasForeground = false
+    private var lastForegroundMs: Long? = null
+    @Synchronized private fun foregroundReport(): Pair<Boolean, Long?> {
+        val active = ArmedCameraService.isForegroundUser(this)
+        if (active && !wasForeground) lastForegroundMs = System.currentTimeMillis()
+        wasForeground = active
+        return active to lastForegroundMs
+    }
+    private val foregroundReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            foregroundReport()
+            connectionWakeup.trySend(Unit)
+        }
+    }
     private fun canSample(command: Boolean = false) = TemporaryLocatePolicy.allowed(identity.allowLocate, command, identity.allowCommands, hasLocation(this), locationForeground) && !ManagementAgent.blocksPersonalOperation(this)
     private fun updateLocationStatus() {
         val device = DeviceStateMonitor.snapshot(this)
@@ -155,6 +171,13 @@ class TelemetryService : Service() {
             ContextCompat.registerReceiver(this, deviceStateReceiver, IntentFilter().apply {
                 addAction(Intent.ACTION_AIRPLANE_MODE_CHANGED); addAction(LocationManager.MODE_CHANGED_ACTION); addAction(LocationManager.PROVIDERS_CHANGED_ACTION)
             }, ContextCompat.RECEIVER_NOT_EXPORTED)
+            true
+        }.getOrDefault(false)
+        watchingForeground = runCatching {
+            ContextCompat.registerReceiver(this, foregroundReceiver, IntentFilter().apply {
+                addAction(Intent.ACTION_USER_FOREGROUND)
+                addAction(Intent.ACTION_USER_BACKGROUND)
+            }, ContextCompat.RECEIVER_EXPORTED)
             true
         }.getOrDefault(false)
         watchingTick = runCatching {
@@ -286,14 +309,22 @@ class TelemetryService : Service() {
                     val probeStarted = elapsed()
                     val polled = try { withContext(Dispatchers.IO) { api.request("/v1/commands") }.also { if (!identity.profileCompanion) ConnectionHealth.success(elapsed()-probeStarted) } } catch (e: Exception) { if (!identity.profileCompanion) ConnectionHealth.failed(); throw e }
                     status.value = status.value.copy(connected = true)
-                    diagnosticsSupported = polled.optBoolean("diagnostics_supported")
+                    profileFocusSupported = polled.optBoolean("profile_focus_supported")
+                    diagnosticsSupported = polled.optBoolean("diagnostics_supported") && (!identity.profileCompanion || profileFocusSupported)
                     withContext(Dispatchers.IO) { identity.reconcileGpsEpoch(polled.getString("gps_epoch")) }
                     polled.optString("photo_epoch").takeIf { it.isNotEmpty() }?.let { epoch -> withContext(Dispatchers.IO) { identity.reconcilePhotoEpoch(epoch) } }
                     val batch = polled.getJSONArray("commands")
                     val deadline = elapsed() + 90_000
                     val generation = synchronized(actionsLock) { actionGeneration }
                     if (elapsed() < deadline) { withContext(Dispatchers.IO) {
-                        val desired = api.request("/v1/sync", JSONObject().put("report", ManagementAgent.report(this@TelemetryService, identity)))
+                        val (foreground, since) = foregroundReport()
+                        val report = ManagementAgent.report(this@TelemetryService, identity, foreground)
+                        if (profileFocusSupported) {
+                            report.put("foreground_since_ms", since ?: JSONObject.NULL)
+                                .put("app_version_code", BuildConfig.VERSION_CODE)
+                                .put("diagnostics_ready", diagnosticsSupported && identity.allowCommands && !LocalSafety.isStopped(this@TelemetryService))
+                        }
+                        val desired = api.request("/v1/sync", JSONObject().put("report", report))
                         SharingHistory.accepted(this@TelemetryService, desired)
                         runCatching { AppUpdates.observe(this@TelemetryService,desired.optJSONObject("app_update"),desired.optString("server_version").takeIf { it.isNotBlank() },desired.optJSONObject("app_update_preparation")) }
                         identity.reconcileGpsEpoch(desired.getString("gps_epoch"))
@@ -528,6 +559,7 @@ class TelemetryService : Service() {
         val expires = command.getLong("expires")
         if (expires <= attempted) return
         val kind = command.getString("kind")
+        val requireForeground = command.optJSONObject("payload")?.optBoolean("require_foreground") == true
         check(ProfileCompanionPolicy.permits(identity.profileCompanion, kind)) { "This action belongs to the primary phone" }
         val check = withContext(Dispatchers.IO) { api.request("/v1/command-check", JSONObject().put("id", id)) }
         if (!check.getBoolean("allowed")) return
@@ -539,13 +571,18 @@ class TelemetryService : Service() {
                 receipt.put("status", "rejected").put("result", "Deadline passed before execution; not repeated")
             } else if (kind == "take_picture" && !ArmedCameraService.isForegroundUser(this)) {
                 receipt.put("status", "rejected").put("result", ArmedCameraService.INACTIVE_PROFILE)
+            } else if (requireForeground && !ArmedCameraService.isForegroundUser(this)) {
+                receipt.put("status", "rejected").put("result", "Android switched profiles before this command ran. Check the active profile and retry.")
             } else if (!capabilities(this, identity).contains(kind)) {
                 receipt.put("status", "rejected").put("result", "Permission or local consent was revoked")
             } else {
                 val result = when (kind) {
                     "diagnostics" -> {
                         val checks = withContext(Dispatchers.IO) { PhoneDiagnostics.collect(this@TelemetryService, identity, locationForeground) }
-                        identity.ifCommandsAllowed { LocalSafety.ifAllowed(this) { receipt.put("diagnostic_checks", checks) } }
+                        identity.ifCommandsAllowed { LocalSafety.ifAllowed(this) {
+                            check(!requireForeground || ArmedCameraService.isForegroundUser(this)) { "Android switched profiles before the checks finished. Check the active profile and retry." }
+                            receipt.put("diagnostic_checks", checks)
+                        } }
                         "Phone diagnostics completed"
                     }
                     "take_picture" -> {
@@ -629,7 +666,7 @@ class TelemetryService : Service() {
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            receipt.put("status", "failed").put("result", if (kind == "take_picture") (e.message ?: "Device could not take a picture").take(240) else "Device could not complete this command")
+            receipt.put("status", "failed").put("result", if (kind == "take_picture" || kind == "diagnostics") (e.message ?: "Device could not complete this command").take(240) else "Device could not complete this command")
         }
         withContext(Dispatchers.IO) { identity.saveResult(id, receipt, expires) }
         sendReceipt(api, receipt)
@@ -665,6 +702,7 @@ class TelemetryService : Service() {
         if (watchingNetwork) runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(callback) }
         if (watchingUnlock) runCatching { unregisterReceiver(unlockReceiver) }
         if (watchingDeviceState) runCatching { unregisterReceiver(deviceStateReceiver) }
+        if (watchingForeground) runCatching { unregisterReceiver(foregroundReceiver) }
         if (watchingTick) runCatching { unregisterReceiver(tickReceiver); getSystemService(AlarmManager::class.java).cancel(tickIntent) }
         runCatching { getSystemService(NotificationManager::class.java).cancel(3) }
         stopRinging(); scope.cancel()
@@ -688,6 +726,7 @@ class TelemetryService : Service() {
             if (LocalSafety.isStopped(context) || ManagementAgent.blocksPersonalOperation(context)) return@buildList
             if (identity.allowCommands) {
                 if (ArmedCameraService.canTakePicture()) add("take_picture")
+                if (activeService?.diagnosticsSupported == true) add("diagnostics")
                 if (identity.profileCompanion) {
                     add("stop_all")
                     if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) addAll(listOf("message", "clear_message"))
@@ -695,7 +734,6 @@ class TelemetryService : Service() {
                 }
                 if (hasLocation(context) && (activeService?.locationForeground == true || hasBackgroundLocation(context))) addAll(listOf("locate", "best_guess"))
                 addAll(listOf("ring", "stop_ringing", "stop_all"))
-                if (activeService?.diagnosticsSupported == true) add("diagnostics")
                 if (RecoveryAlarm.flashCamera(context) != null) addAll(listOf("flash", "ring_flash"))
                 if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) addAll(listOf("message", "clear_message"))
                 if (context.getSystemService(DevicePolicyManager::class.java).isAdminActive(ComponentName(context, BungeeAdminReceiver::class.java))) add("lock")

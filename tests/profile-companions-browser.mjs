@@ -7,7 +7,7 @@ import {fixture} from './support/server.mjs';
 import {phone} from './support/phone.mjs';
 
 // Real UI against a real ephemeral server. All names, keys and telemetry are fixtures.
-test('normal phone, explicit main selection, pending invitation, paired hierarchy, profile actions and last-polled status',async t=>{
+test('one phone view supports profile pairing, verified focus, diagnostics, manual targeting and revocation',async t=>{
  const f=await fixture(t),main=await phone(f,{runtime:true,name:'Avery’s Pixel',capabilities:['locate','message','clear_message','stop_all','ring','ring_flash','flash','best_guess']});
  const now=Math.floor(Date.now()/1000);
  const camera=(status='Ready in this profile')=>({armed:true,pending:0,dropped:0,status,failed_in_row:0,queued:[],reported_at:now});
@@ -32,58 +32,109 @@ test('normal phone, explicit main selection, pending invitation, paired hierarch
  await shot('choose-main',page.getByRole('dialog'));
  await page.getByRole('button',{name:'Close dialog',exact:true}).click();
  // Existing normal phones can select their already-paired installation as main.
- await page.getByRole('button',{name:'Device care',exact:true}).click();
- await page.locator('.sandbox-opt-in summary').click();await page.getByLabel('Main Android profile',{exact:true}).selectOption('Owner');
+ await page.getByRole('button',{name:'Add Android profile',exact:true}).click();
+ await page.getByLabel('Main Android profile',{exact:true}).selectOption('Owner');
  await page.getByRole('button',{name:'Use Owner as main',exact:true}).click();
- await page.getByRole('status').filter({hasText:'Waiting for the main installation'}).waitFor();
+ await page.getByRole('status').filter({hasText:'Open Bungee in Owner'}).waitFor();
  const confirmed=await (await main.request('/v1/sync',{report:{profile_fingerprint:main.fingerprint,recovery_consent:true,foreground_user:false,camera:camera('Ready in Owner')}})).json();main.bundle.profile=confirmed.profile;
  await refresh();
- const setup=page.getByRole('region',{name:'Android profiles'});await setup.locator('summary').click();
+ const setup=page.getByRole('region',{name:'Android profiles'});
  await setup.getByLabel('Profile name',{exact:true}).fill('Sandbox');await setup.getByLabel('Public key from that profile’s Bungee app').fill(randomBytes(32).toString('base64'));
  await setup.getByRole('button',{name:'Create profile invitation',exact:true}).click();await setup.getByLabel('Invitation text').waitFor();
  const bundle=JSON.parse(await setup.getByLabel('Invitation text').inputValue());
  assert.equal(bundle.profile.primary_device_id,main.id);
  await setup.getByRole('button',{name:'Hide invitation',exact:true}).click();
- await setup.getByText('Invitation pending · hidden from the phone navigation until officially paired.').waitFor();
+ await setup.getByText('Invitation pending',{exact:true}).waitFor();
  assert.equal(await page.locator('.nav-profiles').count(),0,'pending companions have no profile navigation');
- await setup.locator('summary').click();await shot('pending-invitation',setup);
+ await shot('pending-invitation',setup);
  const sandbox=await phone(f,{bundle,primaryDeviceId:main.id,capabilities:['message','clear_message','stop_all']});
  const work=await phone(f,{primaryDeviceId:main.id,name:'Work',capabilities:['message','clear_message','stop_all']});
- await sandbox.request('/v1/sync',{report:{foreground_user:true,recovery_consent:true,profile_capabilities:['message','clear_message','stop_all'],secure_lock:true,unlock_monitoring:true,camera:camera('Protection armed in Sandbox')}});
- await work.request('/v1/sync',{report:{foreground_user:false,recovery_consent:true,secure_lock:true,unlock_monitoring:true,camera:camera('Protection armed in Work')}});
- await refresh();await openPhone();
- const profilesToggle=page.getByRole('button',{name:'Profiles for Avery’s Pixel',exact:true});
- await profilesToggle.waitFor();
- assert.equal(await profilesToggle.getAttribute('aria-expanded'),'false');
- await profilesToggle.click();await page.locator('.nav-profiles').waitFor();
- assert.equal(await page.locator('.nav-phones>div').count(),1,'one physical phone');
- assert.equal(await page.locator('.nav-profiles>button').count(),3,'main and two officially paired profiles');
- await shot('phone-overview');
- await page.locator('.nav-profiles').getByRole('button',{name:/^Sandbox/}).click();
- const detail=page.getByRole('region',{name:'Android profiles'});await detail.getByLabel('Message for Sandbox').fill('Please contact Avery to return this phone.');
- await detail.getByRole('button',{name:'Send to Sandbox',exact:true}).click();
- await detail.getByRole('status').filter({hasText:'Request queued for Sandbox'}).waitFor();
- assert.deepEqual(f.sql('SELECT device_id,kind FROM commands'),[[sandbox.id,'message']]);
- await shot('sandbox-actions');
- // Both users reporting foreground during a switch never redirects a command.
- await work.request('/v1/sync',{report:{foreground_user:true,recovery_consent:true,camera:camera('Protection armed in Work')}});
- await work.request('/v1/commands',{});
- f.sql('UPDATE devices SET last_contact=?,last_seen=? WHERE id=?',[now-5400,now-5400,main.id]);
+ const sandboxStart=Date.now()-5000, workStart=sandboxStart+3000;
+ const syncProfile=async(phone, report)=>{
+   const response=await phone.request('/v1/sync',{report});
+   assert.equal(response.status,200,await response.text());
+ };
+ await syncProfile(sandbox,{foreground_user:true,foreground_since_ms:sandboxStart,app_version_code:40,recovery_consent:true,profile_capabilities:['message','clear_message','stop_all'],camera:camera()});
+ await syncProfile(work,{foreground_user:false,app_version_code:40,recovery_consent:false,diagnostics_ready:false,profile_capabilities:[]});
  await refresh();await openPhone();
  const overview=page.getByRole('region',{name:'Overall phone status'});
- await overview.getByText('Connected',{exact:true}).waitFor();
- await overview.getByText('Last profile polled',{exact:true}).waitFor();
- await overview.locator('dd').filter({hasText:/^Work/}).waitFor();
- assert.equal(await page.getByRole('navigation',{name:'Phone profiles'}).locator('.profile-dot').count(),3);
+ const statusList=overview.getByRole('list',{name:'Android profile status'});
+ await statusList.getByRole('listitem').filter({hasText:'Sandbox'}).getByText('Active',{exact:true}).waitFor();
+ assert.equal(await statusList.getByRole('button').count(),0);
+ assert.equal(await statusList.locator('.profile-dot').count(),3);
+ assert.equal(await page.locator('.nav-phones button').count(),1,'one physical phone');
+ await shot('phone-overview');
+
+ // Work's newer Android foreground transition wins even when Sandbox still reports
+ // its earlier claim and the main installation polls more recently.
+ await syncProfile(work,{foreground_user:true,foreground_since_ms:workStart,app_version_code:40,recovery_consent:false,diagnostics_ready:false,profile_capabilities:[]});
+ await syncProfile(sandbox,{foreground_user:true,foreground_since_ms:sandboxStart,app_version_code:40,recovery_consent:true,profile_capabilities:['message','clear_message','stop_all'],camera:camera()});
+ await main.request('/v1/commands',{});
+ await refresh();
+ await statusList.getByRole('listitem').filter({hasText:'Work'}).getByText('Active',{exact:true}).waitFor();
+ await statusList.getByRole('listitem').filter({hasText:'Sandbox'}).getByText('Background',{exact:true}).waitFor();
+ const diagnostics=page.getByRole('button',{name:/Check phone diagnostics/});
+ await diagnostics.getByText(/Approve recovery commands/).waitFor();
+ assert.equal(await diagnostics.isDisabled(),true);
+
+ await syncProfile(work,{foreground_user:true,foreground_since_ms:workStart,app_version_code:40,recovery_consent:true,diagnostics_ready:true,profile_capabilities:['diagnostics','message','clear_message','stop_all']});
+ await refresh();
+ await diagnostics.click();
+ const report=page.getByRole('region',{name:'Phone diagnostics'});
+ await report.getByText(/Waiting for Work/).waitFor();
+ const workCommands=(await (await work.request('/v1/commands',{})).json()).commands;
+ assert.equal(workCommands.length,1);
+ assert.equal(workCommands[0].kind,'diagnostics');
+ assert.equal(workCommands[0].payload.require_foreground,true);
+ assert.equal((await work.request('/v1/ack',{
+   id:workCommands[0].id, status:'executed', result:'Diagnostics complete',
+   attempted_at:Math.floor(Date.now()/1000),
+   diagnostic_checks:[{label:'Android location services',status:'ok',detail:'Location is on.'}],
+ })).status,200);
+ await report.getByText('Location is on.',{exact:true}).waitFor();
+ await report.getByText(/Work reported in at/).waitFor();
+
+ // When the most recent foreground profile leaves focus, a delayed older
+ // positive report must not become active again.
+ await syncProfile(work,{foreground_user:false,app_version_code:40,recovery_consent:true,diagnostics_ready:true,profile_capabilities:['diagnostics','message','clear_message','stop_all']});
+ await refresh();
+ await overview.locator("dd").filter({hasText:/^Focus unconfirmed$/}).waitFor();
+ await diagnostics.getByText(/No active profile reported/).waitFor();
+ assert.equal(await diagnostics.isDisabled(),true);
+
+ // Manual targeting stays on the phone page and does not depend on foreground.
+ await page.getByLabel('Target for profile commands').selectOption(sandbox.id);
+ await page.getByRole('button',{name:/^Leave a message/}).click();
+ await page.getByLabel('Recovery message',{exact:true}).fill('Please contact Avery to return this phone.');
+ await page.getByRole('button',{name:'Queue message',exact:true}).click();
+ await page.getByRole('status').filter({hasText:'Command queued for Sandbox'}).waitFor();
+ const queued=(await (await sandbox.request('/v1/commands',{})).json()).commands;
+ assert.equal(queued[0].kind,'message');
+ assert.equal(queued[0].payload.require_foreground,undefined);
+ assert.equal((await f.admin(`/api/devices/${main.id}/commands`,'POST',{kind:'ring',profile:sandbox.id})).status,400);
+ await shot('sandbox-actions');
+
+ f.sql('UPDATE devices SET last_contact=?,last_seen=? WHERE id=?',[now-5400,now-5400,main.id]);
+ await refresh();
+ await statusList.getByRole('listitem').filter({hasText:'Owner'}).getByText('No recent contact',{exact:true}).waitFor();
+ assert.equal(await overview.locator('.phone-hero-heading').getByText('Connected',{exact:true}).count(),1);
  await shot('limited-connection');
- assert.equal(f.sql('SELECT last_contact FROM devices WHERE id=?',[main.id])[0][0],now-5400);
  assert.equal((await sandbox.acquire({instance:'8c87740d-4bfc-4c38-96d0-55b53356c7a4',secret:randomBytes(32).toString('base64url')})).status,423);
- await refresh();await page.getByRole('region',{name:'Overall phone status'}).getByText('Duplicate instance blocked',{exact:true}).waitFor();
+ await refresh();await overview.getByText('Duplicate instance blocked',{exact:true}).waitFor();
  await shot('duplicate-blocked');
- await page.setViewportSize({width:390,height:844});await shot('mobile');assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'no horizontal overflow');
- await page.setViewportSize({width:1440,height:1080});await page.locator('.nav-profiles').getByRole('button',{name:/^Sandbox/}).click();
- page.on('dialog',d=>d.accept());await page.getByRole('region',{name:'Android profiles'}).getByRole('button',{name:'Disconnect profile',exact:true}).click();
- await page.waitForFunction(()=>!document.querySelector('.nav-profiles')?.textContent?.includes('Sandbox'));
- assert.equal((await main.request('/v1/commands',{})).status,200);assert.equal((await sandbox.request('/v1/commands',{})).status,401);
+ await page.setViewportSize({width:390,height:844});await shot('mobile');
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ await page.setViewportSize({width:1440,height:1080});
+
+ await page.getByRole('button',{name:'Pairing & history settings',exact:true}).click();
+ await page.getByRole('button',{name:'Manage Android profiles',exact:true}).click();
+ page.on('dialog',d=>d.accept());
+ await setup.locator('article').filter({hasText:'Sandbox'}).getByRole('button',{name:'Revoke profile & erase data',exact:true}).click();
+ await setup.getByRole('status').filter({hasText:'Sandbox revoked and its saved data erased'}).waitFor();
+ await setup.locator('article').filter({hasText:'Sandbox'}).getByText('Disconnected',{exact:true}).waitFor();
+ assert.equal((await main.request('/v1/commands',{})).status,200);
+ assert.equal((await work.request('/v1/commands',{})).status,200);
+ assert.equal((await sandbox.request('/v1/commands',{})).status,401);
+ assert.equal(f.sql('SELECT COUNT(*) FROM commands WHERE device_id=?',[sandbox.id])[0][0],0);
  assert.deepEqual(errors,[]);
 });

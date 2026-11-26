@@ -481,7 +481,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await phoneRequest("/v1/sync",{report:{revision:saved.revision,recovery_consent:true,lost_mode_active:true,camera:{armed:true,pending:0,dropped:0,status:"Armed · synthetic fixture report",reported_at:Math.floor(Date.now()/1000)}}});
     await page.getByRole("button",{name:"Device care",exact:true}).click();
     await page.getByText(/Armed at last report/).waitFor();
-    await page.getByRole("button", {name:"View recovery photos",exact:true}).click();
+    await page.getByRole("button", {name:"Recovery captures",exact:true}).click();
     const gallery = page.locator("section.recovery-photos");
     const image = gallery.getByRole("img",{name:"Labelled local camera test"});
     await image.waitFor();
@@ -490,10 +490,10 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await page.setViewportSize({width:390,height:844});
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),true);
     await gallery.screenshot({path:"docs/screenshots/mobile-recovery-photos.png",animations:"disabled"});
-    await gallery.getByRole("button",{name:"Erase all recovery photos",exact:true}).click();
+    await gallery.getByRole("button",{name:"Erase all captures",exact:true}).click();
     assert.equal(await image.count(),1,"confirmation must precede deletion");
-    await gallery.getByRole("button",{name:"Confirm photo erasure",exact:true}).click();
-    await gallery.getByText("No saved photos in this view.",{exact:true}).waitFor();
+    await gallery.getByRole("button",{name:"Confirm capture erasure",exact:true}).click();
+    await gallery.getByText("No saved captures in this view.",{exact:true}).waitFor();
     assert.equal(await gallery.locator("img").count(),0);
     await page.setViewportSize({width:1440,height:1050});
     await page.locator(".nav-phones").getByRole("button",{name:"Avery's Pixel",exact:true}).click();

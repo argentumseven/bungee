@@ -76,7 +76,7 @@ test("diagnostics reports return to their own panel and activity filters use eve
   await page.getByRole("button", { name: /^Devices/ }).click();
   await page.getByRole("button", { name: /Check phone diagnostics/ }).click();
   const report = page.getByRole("region", { name: "Phone diagnostics" });
-  await report.getByText(/Waiting for the main installation/).waitFor();
+  await report.getByText(/Waiting for .+ to connect and run the checks/).waitFor();
   const poll = (await (await p.request("/v1/commands", {})).json()).commands;
   assert.equal(poll.length, 1);
   assert.equal(poll[0].kind, "diagnostics");

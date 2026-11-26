@@ -32,24 +32,29 @@ object PhoneDiagnostics {
             if (locationEnabled) "On. Satellite provider: ${if (gps) "enabled" else "unavailable"}. Network provider: ${if (network) "enabled" else "unavailable"}."
             else "Off. Turn on Location in Android Settings before requesting a GPS fix.",
             if (locationEnabled && gps) "ok" else "attention")
-        val precise = TelemetryService.hasLocation(context)
-        val approximate = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        check("Bungee location access", precise, "Precise location is granted.",
-            if (approximate) "Only approximate location is granted. Enable precise location in Bungee’s Android permissions."
-            else "Location permission is denied. Grant precise location in Bungee’s Android permissions.")
-        val background = TelemetryService.hasBackgroundLocation(context)
-        check("Background GPS", background, "Location is allowed all the time.",
-            if (locationForeground) "Bungee is using the foreground location service. Grant Allow all the time so GPS can resume after a restart."
-            else "Background location is unavailable. Grant Allow all the time for temporary GPS while Bungee is in the background.")
-        add("Automatic GPS sharing", if (identity.allowLocate) "Enabled on the phone." else "Off on the phone. Approved temporary GPS can still work with the required Android access.")
-        val delivery = runCatching { identity.backlogReport() }.getOrNull()
-        if (delivery == null) {
-            add("Saved GPS delivery", "The local GPS queue could not be read. Check Bungee’s storage on the phone.", "attention")
+        if (identity.profileCompanion) {
+            add("Android profile", if (ArmedCameraService.isForegroundUser(context)) "This linked profile is in the foreground." else "This linked profile is in the background.")
+            add("GPS sharing", "Check the main installation for its location permissions, GPS sharing and saved fixes.")
         } else {
-            val queued = delivery.optInt("queued_fixes")
-            val dropped = delivery.optLong("dropped_fixes")
-            add("Saved GPS delivery", "$queued fixes waiting on the phone. $dropped fixes discarded at local capacity.",
-                if (dropped > 0) "attention" else "info")
+            val precise = TelemetryService.hasLocation(context)
+            val approximate = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            check("Bungee location access", precise, "Precise location is granted.",
+                if (approximate) "Only approximate location is granted. Enable precise location in Bungee’s Android permissions."
+                else "Location permission is denied. Grant precise location in Bungee’s Android permissions.")
+            val background = TelemetryService.hasBackgroundLocation(context)
+            check("Background GPS", background, "Location is allowed all the time.",
+                if (locationForeground) "Bungee is using the foreground location service. Grant Allow all the time so GPS can resume after a restart."
+                else "Background location is unavailable. Grant Allow all the time for temporary GPS while Bungee is in the background.")
+            add("Automatic GPS sharing", if (identity.allowLocate) "Enabled on the phone." else "Off on the phone. Approved temporary GPS can still work with the required Android access.")
+            val delivery = runCatching { identity.backlogReport() }.getOrNull()
+            if (delivery == null) {
+                add("Saved GPS delivery", "The local GPS queue could not be read. Check Bungee’s storage on the phone.", "attention")
+            } else {
+                val queued = delivery.optInt("queued_fixes")
+                val dropped = delivery.optLong("dropped_fixes")
+                add("Saved GPS delivery", "$queued fixes waiting on the phone. $dropped fixes discarded at local capacity.",
+                    if (dropped > 0) "attention" else "info")
+            }
         }
 
         val connection = ConnectionHealth.report(context)
@@ -83,16 +88,16 @@ object PhoneDiagnostics {
         val cameraEnabled = LocalSafety.isCameraEnabled(context)
         val cameraPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         add("Theft-photo protection", when {
-            camera.armed -> "Armed in the main profile."
-            !cameraPermission -> "Camera permission is off in the main profile."
+            camera.armed -> "Armed in this profile."
+            !cameraPermission -> "Camera permission is off in this profile."
             cameraEnabled -> "Approved but currently unarmed. Check the main profile on the phone."
-            else -> "Off in the main profile."
+            else -> "Off in this profile."
         }, if (cameraEnabled && !camera.armed) "attention" else "info")
         if (cameraEnabled) {
             val automaticBoot = LocalSafety.isCameraRestartAllowed(context)
             val startupAccess = CameraBootRecovery.hasStartupAccess(context)
             add("Automatic recovery after reboot", when {
-                !automaticBoot -> "Off. Open Bungee in the main profile after a reboot to restore theft-photo protection."
+                !automaticBoot -> "Off. Open Bungee in this profile after a reboot to restore theft-photo protection."
                 startupAccess -> "Approved with Android startup access."
                 else -> "Approved. Grant Android startup access to restore theft-photo protection after first unlock."
             }, if (automaticBoot && !startupAccess) "attention" else "info")

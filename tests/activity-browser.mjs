@@ -141,6 +141,12 @@ test("device care offers a one-tap route back to Location only when Android loca
   const at = now();
   const delivery = extra => ({ reported_at: at, queued_fixes: 12, dropped_fixes: 0, pending_receipts: 0, oldest_queued_at: at - 900, gps_access: "background", location_services: true, airplane_mode: false, last_fix_at: at - 60, fix_failures: 0, ...extra });
   const report = d => p.request("/v1/sync", { report: { recovery_consent: true, delivery: d } });
+  const epoch = (await (await p.request("/v1/sync", { report: {} })).json()).sharing_epoch;
+  const changes = [
+    event("airplane_mode_on", at - 1800, { source: "live", airplane: true }),
+    { id: randomUUID(), reason: "airplane_mode_off", at: null, recorded_at: at - 600, detail: { source: "reconciled", since: at - 1800, airplane: false } },
+  ];
+  assert.equal((await p.request("/v1/sync", { report: { sharing_epoch: epoch, sharing_events: changes } })).status, 200);
   assert.equal((await report(delivery())).status, 200);
   const browser = await launch();
   t.after(() => browser.close());
@@ -151,6 +157,11 @@ test("device care offers a one-tap route back to Location only when Android loca
   await page.goto(f.origin);
   await page.getByRole("button", { name: "Device care", exact: true }).click();
   await page.getByText("Android location services", { exact: true }).waitFor();
+  const airplane = page.locator(".airplane-history");
+  await airplane.getByText("Airplane mode last turned on",{exact:true}).waitFor();
+  await airplane.getByText("Airplane mode last turned off",{exact:true}).waitFor();
+  await airplane.getByText("Exact change time unknown",{exact:true}).waitFor();
+  assert.equal(await airplane.getByText(/Reported after reconnecting/).count(),2);
   assert.equal(await page.getByText("Android location services were off at the last report.").count(), 0);
 
   assert.equal((await report(delivery({ gps_access: "location_services_off", location_services: false, airplane_mode: true, last_fix_at: at - 3000, fix_failures: 6 }))).status, 200);

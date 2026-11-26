@@ -1,9 +1,127 @@
 use crate::security::*;
 use axum::http::StatusCode;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
-pub const COMMANDS: &[&str] = &["message", "clear_message", "stop_all", "take_picture"];
+pub const COMMANDS: &[&str] = &[
+    "message",
+    "clear_message",
+    "stop_all",
+    "take_picture",
+    "diagnostics",
+];
+const PROFILE_ACTIONS: &[&str] = &["message", "clear_message", "take_picture", "diagnostics"];
+
+#[derive(serde::Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum Focus {
+    Active { id: String, since_ms: Option<i64> },
+    Switching,
+    Unknown,
+}
+
+pub fn focus(db: &Connection, phone: &str, time: i64) -> rusqlite::Result<Focus> {
+    let mut query = db.prepare(
+        "SELECT id,json_extract(management_report,'$.foreground_since_ms'),
+                COALESCE(last_contact>?2 AND management_report_at>?2 AND json_extract(management_report,'$.foreground_user')=1,0)
+         FROM devices WHERE (id=?1 OR primary_device_id=?1) AND revoked=0 AND public_key IS NOT NULL
+         ORDER BY 2 DESC",
+    )?;
+    let reports = query
+        .query_map(params![phone, time - 90], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<i64>>(1)?,
+                row.get::<_, bool>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut legacy = reports
+        .iter()
+        .filter(|(_, since, active)| since.is_none() && *active);
+    if let Some((id, Some(since), active)) = reports.first() {
+        // Keep the newest transition even after its owner goes to the background.
+        // An older positive report must never become current again by default.
+        if !active {
+            return Ok(Focus::Unknown);
+        }
+        if reports
+            .get(1)
+            .is_some_and(|(_, other, _)| *other == Some(*since))
+            || legacy.next().is_some()
+        {
+            return Ok(Focus::Switching);
+        }
+        return Ok(Focus::Active {
+            id: id.clone(),
+            since_ms: Some(*since),
+        });
+    }
+    match (legacy.next(), legacy.next()) {
+        (Some((id, _, _)), None) => Ok(Focus::Active {
+            id: id.clone(),
+            since_ms: None,
+        }),
+        (Some(_), Some(_)) => Ok(Focus::Switching),
+        _ => Ok(Focus::Unknown),
+    }
+}
+
+pub fn command_target(
+    db: &Connection,
+    phone: String,
+    selection: Option<&str>,
+    kind: &str,
+) -> ApiResult<(String, bool)> {
+    let Some(selection) = selection else {
+        return Ok((phone, false));
+    };
+    if !PROFILE_ACTIONS.contains(&kind) {
+        return Err(bad("This command uses the main installation"));
+    }
+    let multi = db.query_row(
+        "SELECT profiles_enabled FROM devices WHERE id=? AND primary_device_id IS NULL AND revoked=0 AND public_key IS NOT NULL",
+        [&phone], |row| row.get::<_, bool>(0),
+    ).optional()?.ok_or(Error(StatusCode::NOT_FOUND, "Paired phone not found"))?;
+    if selection == "active" {
+        if !multi {
+            return Ok((phone, false));
+        }
+        return match focus(db, &phone, now())? {
+            Focus::Active {
+                id,
+                since_ms: Some(_),
+            } => Ok((id, true)),
+            // The existing camera command independently verifies foreground on the phone.
+            Focus::Active { id, since_ms: None } if kind == "take_picture" => Ok((id, false)),
+            Focus::Active { .. } => Err(Error(
+                StatusCode::CONFLICT,
+                "Choose a profile manually until the active installation reports foreground support",
+            )),
+            Focus::Switching => Err(Error(
+                StatusCode::CONFLICT,
+                "Android profile switch in progress",
+            )),
+            Focus::Unknown => Err(Error(
+                StatusCode::CONFLICT,
+                "No linked Android profile has reported foreground recently",
+            )),
+        };
+    }
+    let member: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM devices WHERE id=?1 AND (id=?2 OR primary_device_id=?2)
+         AND revoked=0 AND public_key IS NOT NULL)",
+        params![selection, phone],
+        |row| row.get(0),
+    )?;
+    if !member {
+        return Err(Error(
+            StatusCode::NOT_FOUND,
+            "Profile is not paired to this phone",
+        ));
+    }
+    Ok((selection.to_owned(), false))
+}
 
 pub fn companion(db: &Connection, id: &str) -> rusqlite::Result<bool> {
     db.query_row(

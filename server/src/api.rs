@@ -200,8 +200,16 @@ pub async fn devices(State(app): State<App>, headers: HeaderMap) -> ApiResult<Js
     }))})?.collect::<Result<Vec<_>,_>>()?;
     let mut q=db.prepare("SELECT id,device_id,kind,created,expires,status,result,receipt_received_at,canceled_at,canceled_after_offer FROM commands ORDER BY created DESC LIMIT 50")?;
     let commands=q.query_map([],|r| Ok(json!({"id":r.get::<_,String>(0)?,"device_id":r.get::<_,String>(1)?,"kind":r.get::<_,String>(2)?,"created":r.get::<_,i64>(3)?,"expires":r.get::<_,i64>(4)?,"status":if r.get::<_,i64>(4)?<now() && ["pending","delivered"].contains(&r.get::<_,String>(5)?.as_str()) {"expired".to_owned()} else {r.get(5)?},"result":r.get::<_,Option<String>>(6)?,"receipt_received_at":r.get::<_,Option<i64>>(7)?,"canceled_at":r.get::<_,Option<i64>>(8)?,"canceled_after_offer":r.get::<_,bool>(9)?,"delivery_uncertain":r.get::<_,String>(5)?=="delivered" && r.get::<_,i64>(4)?<now()})))?.collect::<Result<Vec<_>,_>>()?;
+    let time = now();
+    let mut devices = crate::profiles::grouped(rows);
+    for phone in &mut devices {
+        if phone["profiles_enabled"] == true && phone["revoked"] == false {
+            let id = phone["id"].as_str().unwrap();
+            phone["focus"] = json!(crate::profiles::focus(&db, id, time)?);
+        }
+    }
     Ok(Json(
-        json!({"devices":crate::profiles::grouped(rows),"commands":commands,"server_time":now()}),
+        json!({"devices":devices,"commands":commands,"server_time":time}),
     ))
 }
 
@@ -586,6 +594,7 @@ pub(crate) fn reset_gps(db: &rusqlite::Connection, id: &str, cutoff: i64) -> rus
 pub struct Command {
     kind: String,
     message: Option<String>,
+    profile: Option<String>,
     #[serde(rename = "password")]
     _password: Option<String>,
 }
@@ -611,6 +620,8 @@ pub async fn command(
         return Err(bad("Recovery messages must contain 1–240 characters"));
     }
     let db = app.db.lock().unwrap();
+    let (id, require_foreground) =
+        crate::profiles::command_target(&db, id, input.profile.as_deref(), &input.kind)?;
     crate::profiles::command_allowed(&db, &id, &input.kind)?;
     let caps: Option<String> = db
         .query_row(
@@ -634,13 +645,13 @@ pub async fn command(
     }
     if input.kind == "diagnostics" {
         let outstanding = tx.query_row(
-            "SELECT id,expires FROM commands WHERE device_id=? AND kind='diagnostics' AND status IN ('pending','delivered') AND expires>? ORDER BY created DESC LIMIT 1",
-            params![id, now()],
+            "SELECT id,expires FROM commands WHERE device_id=? AND kind='diagnostics' AND status IN ('pending','delivered') AND expires>? AND COALESCE(json_extract(payload,'$.require_foreground'),0)=? ORDER BY created DESC LIMIT 1",
+            params![id, now(), require_foreground],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
         ).optional()?;
         if let Some((command, expires)) = outstanding {
             return Ok(Json(
-                json!({"id":command,"status":"pending","expires":expires}),
+                json!({"id":command,"device_id":id,"status":"pending","expires":expires}),
             ));
         }
     }
@@ -649,7 +660,12 @@ pub async fn command(
         return Err(bad("Too many commands awaiting delivery"));
     }
     let cmd = uuid::Uuid::new_v4().to_string();
-    let payload = json!({"message":text}).to_string();
+    let payload = if require_foreground {
+        json!({"message":text,"require_foreground":true})
+    } else {
+        json!({"message":text})
+    }
+    .to_string();
     let expires = now() + if input.kind == "stop_all" { 86400 } else { 300 };
     tx.execute(
         "INSERT INTO commands(id,device_id,kind,payload,created,expires) VALUES(?,?,?,?,?,?)",
@@ -665,7 +681,9 @@ pub async fn command(
     }
     store::audit(&tx, "command.queued", Some(&id), &input.kind)?;
     tx.commit()?;
-    Ok(Json(json!({"id":cmd,"status":"pending","expires":expires})))
+    Ok(Json(
+        json!({"id":cmd,"device_id":id,"status":"pending","expires":expires}),
+    ))
 }
 pub async fn cancel_command(
     State(app): State<App>,
@@ -749,7 +767,7 @@ pub async fn poll(
         )?;
     }
     if crate::profiles::companion(&db, &id)? {
-        db.execute("UPDATE commands SET status='rejected',result='Not available to a profile companion' WHERE device_id=? AND kind NOT IN ('message','clear_message','stop_all','take_picture') AND status IN ('pending','delivered')", [&id])?;
+        db.execute("UPDATE commands SET status='rejected',result='Not available to a profile companion' WHERE device_id=? AND kind NOT IN ('message','clear_message','stop_all','take_picture','diagnostics') AND status IN ('pending','delivered')", [&id])?;
     }
     db.execute("UPDATE commands SET status='rejected',result='Disabled by reversibility policy' WHERE device_id=? AND kind='reboot' AND status IN ('pending','delivered')", [&id])?;
     let mut q=db.prepare("SELECT id,kind,payload,expires FROM commands WHERE device_id=? AND status IN ('pending','delivered') AND expires>? AND (?=0 OR kind='stop_all') ORDER BY (kind='stop_all') DESC,created LIMIT 10")?;
@@ -765,7 +783,7 @@ pub async fn poll(
         |r| r.get(0),
     )?;
     Ok(Json(
-        json!({"commands":list,"diagnostics_supported":true,"gps_epoch":epoch,"photo_epoch":db.query_row("SELECT photo_epoch FROM devices WHERE id=?",[&id],|r|r.get::<_,String>(0))?,"server_time":now()}),
+        json!({"commands":list,"diagnostics_supported":true,"profile_focus_supported":true,"gps_epoch":epoch,"photo_epoch":db.query_row("SELECT photo_epoch FROM devices WHERE id=?",[&id],|r|r.get::<_,String>(0))?,"server_time":now()}),
     ))
 }
 #[derive(Deserialize)]

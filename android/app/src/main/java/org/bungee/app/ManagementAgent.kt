@@ -43,7 +43,7 @@ object ManagementAgent {
             }
         }
     )
-    @Synchronized fun report(context: Context, identity: Identity): JSONObject {
+    @Synchronized fun report(context: Context, identity: Identity, foreground: Boolean): JSONObject {
         val dpm = context.getSystemService(DevicePolicyManager::class.java)
         val role = role(context)
         val state = identity.state("management")
@@ -59,7 +59,7 @@ object ManagementAgent {
                 .put("status", camera.detail.take(80)).put("reported_at", System.currentTimeMillis()/1000)
         }.getOrDefault(JSONObject.NULL) // A broken photo queue must not block ordinary reporting.
         val profileStatus = JSONObject().put("app_signer_sha256", AppUpdates.installedSigner(context))
-            .put("foreground_user", if (Build.VERSION.SDK_INT >= 31) context.getSystemService(UserManager::class.java).isUserForeground else JSONObject.NULL)
+            .put("foreground_user", foreground)
             .put("camera", cameraReport).put("revision", state.optLong("revision", 0))
             .put("secure_lock", context.getSystemService(KeyguardManager::class.java).isDeviceSecure)
             .put("screen_locked", context.getSystemService(KeyguardManager::class.java).isDeviceLocked)

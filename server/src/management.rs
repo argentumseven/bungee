@@ -77,6 +77,9 @@ pub struct Report {
     pub runtime_sequence: Option<i64>,
     pub profile_fingerprint: Option<String>,
     pub foreground_user: Option<bool>,
+    pub foreground_since_ms: Option<i64>,
+    pub app_version_code: Option<i64>,
+    pub diagnostics_ready: Option<bool>,
     pub profile_capabilities: Option<Vec<String>>,
     pub app_signer_sha256: Option<String>,
     #[serde(skip_serializing)]
@@ -225,8 +228,25 @@ pub async fn get_policy(
         .optional()?;
     let report = report.ok_or(Error(StatusCode::NOT_FOUND, "Device not found"))?;
     let (revision, policy) = read(&db, &id)?;
+    let mut event = db.prepare(
+        "SELECT at,recorded_at,received_at FROM sharing_events WHERE device_id=? AND reason=?
+         ORDER BY COALESCE(at,recorded_at) DESC,sequence DESC LIMIT 1",
+    )?;
+    let mut latest = |reason: &str| -> rusqlite::Result<Option<Value>> {
+        event
+            .query_row(params![id, reason], |row| {
+                Ok(json!({
+                    "at":row.get::<_, Option<i64>>(0)?,
+                    "recorded_at":row.get::<_, i64>(1)?,
+                    "received_at":row.get::<_, i64>(2)?,
+                }))
+            })
+            .optional()
+    };
+    let airplane_changes =
+        json!({"on":latest("airplane_mode_on")?, "off":latest("airplane_mode_off")?});
     Ok(Json(
-        json!({"server_version":crate::release::version(),"app_update_preparation":crate::app_updates::preparation(),"app_update":crate::app_updates::descriptor(),"revision":revision,"policy":policy.reversible(),"persistent_controls_enabled":false,"legacy_policy_present":policy.has_persistent_controls(),"report":report.and_then(|s|serde_json::from_str::<Report>(&s).ok())}),
+        json!({"server_version":crate::release::version(),"app_update_preparation":crate::app_updates::preparation(),"app_update":crate::app_updates::descriptor(),"revision":revision,"policy":policy.reversible(),"persistent_controls_enabled":false,"legacy_policy_present":policy.has_persistent_controls(),"airplane_changes":airplane_changes,"report":report.and_then(|s|serde_json::from_str::<Report>(&s).ok())}),
     ))
 }
 #[derive(Deserialize)]
@@ -294,8 +314,16 @@ pub async fn sync(
     let id = verify_device(&app, &headers, "/v1/sync", &body)?;
     let input: Sync =
         serde_json::from_slice(&body).map_err(|_| bad("Invalid management report"))?;
-    let r = &input.report;
+    let mut r = input.report;
     let companion = crate::profiles::companion(&app.db.lock().unwrap(), &id)?;
+    if r.foreground_since_ms
+        .is_some_and(|at| at <= 0 || at > (now() + 120) * 1000 || r.foreground_user.is_none())
+        || r.app_version_code
+            .is_some_and(|code| !(1..=2_100_000_000).contains(&code))
+        || (r.diagnostics_ready == Some(true) && !r.recovery_consent)
+    {
+        return Err(bad("Invalid profile foreground or diagnostics report"));
+    }
     if r.profile_capabilities.as_ref().is_some_and(|caps| {
         !companion
             || caps.len() > crate::profiles::COMMANDS.len()
@@ -405,10 +433,22 @@ pub async fn sync(
     } else {
         true
     };
+    if ordered
+        && r.app_version_code.is_some()
+        && r.foreground_user == Some(false)
+        && r.foreground_since_ms.is_none()
+    {
+        // A background service restart can lose its in-memory transition time.
+        // Keep the last known claim so an older foreground report cannot resurface.
+        r.foreground_since_ms = db.query_row(
+            "SELECT json_extract(management_report,'$.foreground_since_ms') FROM devices WHERE id=?",
+            [&id], |row| row.get(0),
+        )?;
+    }
     let changed = if ordered {
         db.execute(
         "UPDATE devices SET management_report=?,management_report_at=? WHERE id=? AND revoked=0",
-        params![serde_json::to_string(r).unwrap(), now(), id],
+        params![serde_json::to_string(&r).unwrap(), now(), id],
     )?
     } else {
         1
@@ -420,6 +460,25 @@ pub async fn sync(
         db.execute(
             "UPDATE devices SET capabilities=? WHERE id=?",
             params![serde_json::to_string(caps).unwrap(), id],
+        )?;
+    }
+    if ordered
+        && !companion
+        && let Some(ready) = r.diagnostics_ready
+    {
+        let current: String = db.query_row(
+            "SELECT capabilities FROM devices WHERE id=?",
+            [&id],
+            |row| row.get(0),
+        )?;
+        let mut caps: Vec<String> = serde_json::from_str(&current).unwrap_or_default();
+        caps.retain(|kind| kind != "diagnostics");
+        if ready {
+            caps.push("diagnostics".into());
+        }
+        db.execute(
+            "UPDATE devices SET capabilities=? WHERE id=?",
+            params![serde_json::to_string(&caps).unwrap(), id],
         )?;
     }
     let epoch: String = db.query_row(

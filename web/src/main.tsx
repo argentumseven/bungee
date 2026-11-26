@@ -33,7 +33,7 @@ import {
   Zap,
 } from "lucide-react";
 import QRCode from "qrcode";
-import { version as releaseVersion } from "../../release.json";
+import { version as releaseVersion, android_version_code as releaseCode } from "../../release.json";
 import "./style.css";
 import { api, ApiError } from "./api";
 import { gpsTrail, currentEstimate, savedPosition, uncertainPosition } from "./gpsTrail";
@@ -45,15 +45,14 @@ import {
 } from "./PrivateMap";
 import { DeviceRecords } from "./DeviceRecords";
 import { DeviceCare } from "./DeviceCare";
-import { ProfileCompanions } from "./ProfileCompanions";
-import { PhoneHeader, ProfileTabs, ProfileOptions, ProfileDot, ConnectionBadge, lastPolled, type PhoneProfiles } from "./PhoneStatus";
-import { MainProfileChoice } from "./ProfileSetup";
+import { PhoneHeader, ProfileDot, ConnectionBadge, focusLabel, profileName, recentContact, type PhoneProfiles } from "./PhoneStatus";
+import { MainProfileChoice, ProfileSetup } from "./ProfileSetup";
 import { AppearanceControl, useAppearance } from "./Appearance";
 import { RecoveryMessagePreview } from "./RecoveryMessagePreview";
 import { PasswordSettings } from "./PasswordSettings";
-import { RecoveryPhotos } from "./RecoveryPhotos";
+import { RecoveryCaptures } from "./RecoveryPhotos";
 import { PhoneDiagnostics, type DiagnosticRequest } from "./PhoneDiagnostics";
-import { recoveryCamera, reportedBackground } from "./recoveryCamera";
+import { installationCamera, recoveryCamera, reportedBackground } from "./recoveryCamera";
 import { SharingHistory } from "./SharingHistory";
 import { ActivityLog } from "./ActivityLog";
 import { MapManager } from "./MapManager";
@@ -128,6 +127,9 @@ function Brand() {
     </div>
   );
 }
+const CAPTURES = "Recovery captures";
+const PROFILE_COMMANDS = ["take_picture", "message", "clear_message", "diagnostics"];
+
 function App() {
   const [loginNotice, setLoginNotice] = useState("");
   const appearance = useAppearance();
@@ -139,10 +141,10 @@ function App() {
     [selected, setSelected] = useState(""),
     [page, setPage] = useState("Overview");
   const [devicesExpanded, setDevicesExpanded] = useState(true);
-  const [expandedPhones, setExpandedPhones] = useState<Set<string>>(() => new Set());
   const [photoScope, setPhotoScope] = useState("");
   const [diagnosticsRequest, setDiagnosticsRequest] = useState<DiagnosticRequest>();
-  const [profileView,setProfileView]=useState("");
+  const [profileChoice, setProfileChoice] = useState<{ phoneId: string; profileId: string }>();
+  const [profileSetup, setProfileSetup] = useState<{ phoneId: string; invite: boolean }>();
   const [multiProfile,setMultiProfile]=useState(false),[mainProfile,setMainProfile]=useState("Owner");
   const [recordsDevice,setRecordsDevice]=useState("");
   const [pairingTarget,setPairingTarget]=useState<Device|null>(null);
@@ -181,29 +183,63 @@ function App() {
     }
   };
   const serverNow = () => Date.now() / 1000 + clockSkew;
-  const picture = recoveryCamera(device, serverNow());
-  const mainInBackground = !!device?.profiles_enabled && reportedBackground(device, serverNow());
-  const profile = device?.profiles?.find(p => p.id === profileView);
-  const openPhone = (id: string, profileId = "") => {
+  const profiles = device ? [device, ...(device.profiles ?? [])] : [];
+  const selectedProfileId = profileChoice?.phoneId === device?.id ? profileChoice?.profileId : undefined;
+  const manualProfile = profiles.find(p => p.id === selectedProfileId);
+  const activeId = device?.focus?.state === "active" ? device.focus.id : undefined;
+  const activeProfile = profiles.find(p => p.id === activeId);
+  const target = device?.profiles_enabled ? (selectedProfileId ? manualProfile : activeProfile) : device;
+  const targetName = target && device ? profileName(device, target.id) : undefined;
+  const mainInBackground = !!device?.profiles_enabled && (activeProfile ? activeProfile.id !== device.id : reportedBackground(device, serverNow()));
+  const automaticLegacy = !!device?.profiles_enabled && !selectedProfileId && device.focus?.state === "active" && device.focus.since_ms == null;
+  const focusHelp = selectedProfileId && !manualProfile
+    ? "The selected profile is no longer paired. Choose another profile or Automatic."
+    : device?.focus?.state === "switching"
+      ? "Android profile switch in progress. Wait for a focus report or choose a profile."
+      : "No active profile reported. Open Bungee in the active Android profile or choose a profile.";
+  const camera = target && device?.profiles_enabled ? installationCamera(target, serverNow()) : null;
+  const picture = !device?.profiles_enabled ? recoveryCamera(device, serverNow())
+    : camera?.ready && target ? { target: { ...target, name: targetName ?? target.name }, detail: `Front camera in ${targetName} · locally approved` }
+    : { target: undefined, detail: camera?.detail ?? focusHelp };
+  const diagnosticsHelp = !target ? focusHelp
+    : automaticLegacy ? "Choose this profile manually until it reports foreground support."
+    : target.capabilities.includes("diagnostics") ? "Location settings, connection, power and recovery readiness"
+    : !recentContact(target, serverNow()) ? "Waiting for this profile to connect and report readiness."
+    : target.management?.recovery_consent === false ? "Approve recovery commands in Bungee in this Android profile."
+    : target.management?.app_version_code != null && target.management.app_version_code < releaseCode
+      ? `Install Bungee ${releaseVersion} in this Android profile to use diagnostics.`
+      : "Diagnostics readiness has not been reported. Open Bungee in this profile and let it connect.";
+  const profileCommandReady = (kind: string) => kind === "take_picture" ? !!picture.target
+    : !!target?.enrolled && !automaticLegacy && target.capabilities.includes(kind);
+  const pendingDiagnostics = !!target && commands.some(c => c.device_id === target.id && c.kind === "diagnostics" && ["pending", "delivered"].includes(c.status));
+
+  const openPhone = (id: string) => {
     setSelected(id);
-    setProfileView(profileId);
     setDevicesExpanded(true);
     setPage("Devices");
   };
-  const openPhotos = (id = "") => {
-    setPhotoScope(id);
-    setPage("Photos");
+  const openCaptures = () => {
+    setPhotoScope("");
+    setPage(CAPTURES);
   };
-  const recentCommands = commands.filter(c => !device || c.device_id === device.id || device.profiles?.some(p => p.id === c.device_id));
+  const manageProfiles = (phoneId: string, invite: boolean) => {
+    setRecordsDevice(phoneId);
+    setProfileSetup({ phoneId, invite });
+    setPage("Pairing & history");
+  };
+  const managedPhone = active.find(phone => phone.id === profileSetup?.phoneId && phone.id === recordsDevice);
+  const recentCommands = commands.filter(c => profiles.some(p => p.id === c.device_id));
   useEffect(() => {
-    if (page === "Devices" && profileView && !profile) setProfileView("");
-  }, [page, profileView, profile]);
+    if (page === "Pairing & history" && profileSetup) {
+      requestAnimationFrame(() => document.getElementById("profile-management")?.scrollIntoView({ block: "start" }));
+    }
+  }, [page, profileSetup]);
   useEffect(() => {
     api("/session")
       .then(() => setAuth(true))
       .catch(() => setAuth(false));
   }, []);
-  useEffect(()=>{window.scrollTo({top:0,left:0,behavior:"instant"});},[page,selected,profileView]);
+  useEffect(()=>{window.scrollTo({top:0,left:0,behavior:"instant"});},[page,selected]);
   useEffect(()=>{
     const show=()=>{setPage("Settings");window.setTimeout(()=>document.getElementById("map-downloads")?.scrollIntoView({behavior:"smooth",block:"start"}),0);};
     window.addEventListener("bungee:maps",show);
@@ -215,9 +251,10 @@ function App() {
       setDevices([]);
       setCommands([]);
       setPhotoScope("");
-      setExpandedPhones(new Set());
+      setProfileChoice(undefined);
+      setProfileSetup(undefined);
       setDiagnosticsRequest(undefined);
-      setSelected("");setProfileView("");setMultiProfile(false);setMainProfile("Owner");
+      setSelected("");setMultiProfile(false);setMainProfile("Owner");
       setPage("Overview");
       setTrackingTab("Current estimate");
       setModal(null);
@@ -238,7 +275,7 @@ function App() {
     return () => {clearInterval(id);window.removeEventListener("bungee:refresh",refresh);};
   }, [auth]);
   useEffect(() => {
-    if (!diagnosticsRequest || diagnosticsRequest.deviceId !== device?.id) return;
+    if (!diagnosticsRequest || diagnosticsRequest.phoneId !== device?.id) return;
     const report = document.getElementById("phone-diagnostics");
     report?.focus({ preventScroll: true });
     report?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -295,20 +332,25 @@ function App() {
   }
   async function send(kind: string, text?: string) {
     if (!device) return;
-    const camera = kind === "take_picture" ? recoveryCamera(device, serverNow()) : undefined;
-    if (camera && !camera.target) { setError(camera.detail); return; }
-    const target = camera?.target || device;
+    const scoped = PROFILE_COMMANDS.includes(kind);
+    if (scoped && !profileCommandReady(kind)) {
+      setError(kind === "diagnostics" ? diagnosticsHelp : kind === "take_picture" ? picture.detail : "Choose a profile that has approved recovery messages.");
+      return;
+    }
     setBusy(true);
     try {
-      const queued = await api<{ id: string; expires: number }>(`/devices/${target.id}/commands`, {
+      const queued = await api<{ id: string; device_id: string; expires: number }>(`/devices/${device.id}/commands`, {
         method: "POST",
         body: JSON.stringify({
           kind,
           message: text,
+          profile: scoped && device.profiles_enabled ? manualProfile?.id ?? "active" : undefined,
         }),
       });
-      if (kind === "diagnostics") setDiagnosticsRequest({ ...queued, deviceId: target.id, created: queued.expires - 300 });
-      else setToast(camera ? `Picture requested in ${target.name}. Check Recent commands for its response.` : "Command queued. Check Recent commands for the phone’s response.");
+      const destination = profileName(device, queued.device_id) ?? device.name;
+      if (kind === "diagnostics") setDiagnosticsRequest({ ...queued, phoneId: device.id, deviceId: queued.device_id, profileName: destination, created: queued.expires - 300 });
+      else if (kind === "take_picture") setToast(`Picture requested in ${destination}. Check Recent commands for its response.`);
+      else setToast(scoped && device.profiles_enabled ? `Command queued for ${destination}.` : "Command queued. Check Recent commands for the phone’s response.");
       setModal(null);
       setMessage("");
       await load();
@@ -477,7 +519,7 @@ function App() {
             { name: "Device care", icon: ShieldCheck },
             { name: "Pairing & history", icon: KeyRound },
             { name: "Tracking", icon: Compass },
-            { name: "Photos", icon: Camera },
+            { name: CAPTURES, icon: Camera },
             { name: "Tunnels", icon: Radio },
             { name: "Activity", icon: Activity },
             { name: "Settings", icon: Settings },
@@ -491,8 +533,8 @@ function App() {
                 onClick={() => {
                   if (name === "Devices" && page === "Devices") { setDevicesExpanded(value => !value); return; }
                   if (name === "Devices") setDevicesExpanded(true);
-                  if (name === "Pairing & history") setRecordsDevice("");
-                  if (name === "Photos") { openPhotos(); return; }
+                  if (name === "Pairing & history") { setRecordsDevice(""); setProfileSetup(undefined); }
+                  if (name === CAPTURES) { openCaptures(); return; }
                   setPage(name);
                 }}
               >
@@ -503,22 +545,10 @@ function App() {
               {name === "Devices" && devicesExpanded && <div className="nav-phones" id="sidebar-phones" aria-label="Paired phones" data-current={page === "Devices"}>
                 {active.map(phone => {
                   const current = page === "Devices" && device?.id === phone.id;
-                  const expanded = expandedPhones.has(phone.id);
-                  return <div key={phone.id}>
-                    <div className="nav-phone-row">
-                      <button type="button" className={current && !profile ? "nav-item active" : "nav-item"} aria-current={current && !profile ? "page" : undefined} onClick={() => openPhone(phone.id)}>
-                        <ProfileDot phone={phone} profile /><span>{phone.name}</span>
-                      </button>
-                      {!!phone.profiles?.length && <button type="button" className="nav-profile-toggle" aria-label={`Profiles for ${phone.name}`} aria-expanded={expanded} aria-controls={expanded ? `profiles-${phone.id}` : undefined} onClick={() => setExpandedPhones(previous => {
-                        const next = new Set(previous);
-                        if (next.has(phone.id)) next.delete(phone.id);
-                        else next.add(phone.id);
-                        return next;
-                      })}><ChevronRight size={15} /></button>}
-                    </div>
-                    {expanded && !!phone.profiles?.length && <div className="nav-profiles" id={`profiles-${phone.id}`} aria-label={`${phone.name} profiles`}>
-                      <ProfileOptions phone={phone} selected={current ? profile?.id ?? "" : phone.id} onSelect={id => openPhone(phone.id, id)} />
-                    </div>}
+                  return <div className="nav-phone-row" key={phone.id}>
+                    <button type="button" className={current ? "nav-item active" : "nav-item"} aria-current={current ? "page" : undefined} onClick={() => openPhone(phone.id)}>
+                      <ProfileDot phone={phone} now={serverNow()} /><span>{phone.name}</span>
+                    </button>
                   </div>;
                 })}
               </div>}
@@ -588,8 +618,8 @@ function App() {
                         ? "Manage phone connections, saved history and erasure in one place."
                       : page === "Tracking"
                         ? "Current estimates, movement history and network locations."
-                        : page === "Photos"
-                          ? "Saved recovery photos from your phones and Android profiles."
+                        : page === CAPTURES
+                          ? "Pictures from failed credential attempts, recovery requests and labelled camera tests."
                         : page === "Activity"
                           ? "Enrollment, administrator access and command events."
                           : "Connection, permissions and data retention."}
@@ -617,34 +647,29 @@ function App() {
           )}
           {page === "Overview" && <section className="phone-overview" aria-label="Your devices">
             {active.length===0 && <section className="panel care-card"><h2>No paired phones</h2><p>Add a device and scan its invitation in Bungee.</p></section>}
-            {active.map(d => {
-              const polled = lastPolled(d);
-              return <button type="button" className="panel phone-card" key={d.id} onClick={() => openPhone(d.id)}>
-                <div className="phone-card-heading"><Smartphone size={24} /><h2>{d.name}</h2><ConnectionBadge phone={d} /></div>
+            {active.map(d => <button type="button" className="panel phone-card" key={d.id} onClick={() => openPhone(d.id)}>
+                <div className="phone-card-heading"><Smartphone size={24} /><h2>{d.name}</h2><ConnectionBadge phone={d} now={serverNow()} /></div>
                 <dl>
                   <div><dt>Battery</dt><dd>{d.telemetry ? `${d.telemetry.battery}%${d.telemetry.charging ? " · charging" : ""}` : "Not reported"}</dd></div>
                   <div><dt>Network</dt><dd>{connectionLabel(d)}{d.management?.connection_health?.signal_dbm != null && ` · ${d.management.connection_health.signal_dbm} dBm`}</dd></div>
-                  <div><dt>{d.profiles_enabled ? "Last profile polled" : "Last contact"}</dt><dd>{d.profiles_enabled ? polled?.name ?? "No poll yet" : ago(d.last_contact ?? d.last_seen)}{d.profiles_enabled && polled && <small>{polled.at}</small>}</dd></div>
+                  <div><dt>{d.profiles_enabled ? "Active Android profile" : "Last contact"}</dt><dd>{d.profiles_enabled ? focusLabel(d) : ago(d.last_contact ?? d.last_seen)}</dd></div>
                 </dl>
                 <span className="phone-card-link">Open recovery controls <ArrowRight size={15} /></span>
-              </button>;
-            })}
+              </button>)}
           </section>}
           {page === "Devices" && (
             <>
               {device && <>
-                <PhoneHeader phone={device} networkLabel={connectionLabel(device)}>
+                <PhoneHeader phone={device} networkLabel={connectionLabel(device)} now={serverNow()}>
                   <div className="phone-links">
-                    <button type="button" className="secondary" onClick={() => setPage("Device care")}>Device care &amp; profile setup</button>
+                    <button type="button" className="secondary" onClick={() => setPage("Device care")}>Care settings</button>
                     <button type="button" className="secondary" onClick={() => { setTrackingTab("Current estimate"); setPage("Tracking"); }}>Tracking &amp; history</button>
-                    <button type="button" className="secondary" onClick={() => { setRecordsDevice(device.id); setPage("Pairing & history"); }}>Pairing &amp; history settings</button>
+                    <button type="button" className="secondary" onClick={() => { setProfileSetup(undefined); setRecordsDevice(device.id); setPage("Pairing & history"); }}>Pairing &amp; history settings</button>
+                    <button type="button" className="secondary" disabled={!device.enrolled} onClick={() => manageProfiles(device.id, true)}><Plus size={16} /> Add Android profile</button>
                   </div>
                 </PhoneHeader>
-                <ProfileTabs phone={device} selected={profile?.id ?? ""} onSelect={setProfileView} />
               </>}
-              {device && profile
-                ? <ProfileCompanions key={profile.id} deviceId={device.id} deviceName={device.name} profiles={[profile]} clockSkew={clockSkew} detail onViewPhotos={openPhotos} />
-                : device ? <>
+              {device ? <>
               <div className="dashboard-grid device-detail-grid">
                 <section className="panel location-panel">
                   <div className="panel-heading">
@@ -692,6 +717,15 @@ function App() {
                     <button className="stop-actions" disabled={busy || !device?.enrolled || !device.capabilities.includes("stop_all")} onClick={() => send("stop_all")}><VolumeX size={18}/> Stop all Bungee actions <small>Stop sound, flash and remote GPS; clear messages and lost mode</small></button>
                     <p className="fine">A stop waits for the phone to connect. It cancels outstanding commands. It cannot unlock Android after a screen lock has already happened.</p>
                     <p className="fine">Refresh location makes a temporary GPS request even when automatic GPS sharing is off. Approved recovery commands and location permission are required. A locally stopped or offline app must reconnect before it can receive the request.</p>
+                    {device.profiles_enabled && <div className="command-target">
+                      <label htmlFor="command-profile">Target for profile commands</label>
+                      <select id="command-profile" value={selectedProfileId ?? "active"} onChange={e => setProfileChoice(e.target.value === "active" ? undefined : { phoneId: device.id, profileId: e.target.value })}>
+                        <option value="active">Automatic · active profile</option>
+                        {selectedProfileId && !manualProfile && <option value={selectedProfileId} disabled>Selected profile disconnected</option>}
+                        {profiles.filter(p => p.enrolled).map(p => <option key={p.id} value={p.id}>{profileName(device, p.id)}{p.id === device.id ? " · Main" : ""}</option>)}
+                      </select>
+                      <p>{targetName ? `${targetName} receives pictures, messages and diagnostics.` : focusHelp} Shared controls use the main installation.</p>
+                    </div>}
                     <div className="actions-grid">
                       {[
                         {
@@ -709,7 +743,7 @@ function App() {
                         {
                           kind: "diagnostics",
                           name: "Check phone diagnostics",
-                          desc: device.capabilities.includes("diagnostics") ? "Location access, connection, power and recovery readiness" : "Requires the updated phone app and recovery approval",
+                          desc: diagnosticsHelp,
                           icon: Activity,
                         },
                         {kind:"best_guess",name:"Best guess",desc:"Collect a longer GPS burst",icon:Compass},
@@ -719,7 +753,7 @@ function App() {
                         {
                           kind: "message",
                           name: "Leave a message",
-                          desc: "An Android notification",
+                          desc: profileCommandReady("message") ? "An Android notification" : target ? "Recovery messages need local approval and notification access." : focusHelp,
                           icon: MessageSquare,
                         },
                         {
@@ -739,9 +773,8 @@ function App() {
                           disabled={
                             busy ||
                             !device?.enrolled ||
-                            (kind === "diagnostics" && diagnosticsRequest?.deviceId === device.id &&
-                              commands.some(command => command.id === diagnosticsRequest.id && ["pending", "delivered"].includes(command.status))) ||
-                            (kind === "take_picture" ? !picture.target : !device.capabilities.includes(kind))
+                            (kind === "diagnostics" && pendingDiagnostics) ||
+                            (PROFILE_COMMANDS.includes(kind) ? !profileCommandReady(kind) : !device.capabilities.includes(kind))
                           }
                           onClick={() =>
                             kind === "message" ? setModal("message") : send(kind)
@@ -778,7 +811,7 @@ function App() {
                         <button
                           className="secondary"
                           disabled={
-                            !device.capabilities.includes("clear_message") || busy
+                            !profileCommandReady("clear_message") || busy
                           }
                           onClick={() => send("clear_message")}
                         >
@@ -837,7 +870,7 @@ function App() {
                   )}
                 </section>
               </div>
-              <PhoneDiagnostics key={device.id} deviceId={device.id} request={diagnosticsRequest?.deviceId === device.id ? diagnosticsRequest : undefined} />
+              <PhoneDiagnostics key={device.id} deviceId={device.id} request={diagnosticsRequest?.phoneId === device.id ? diagnosticsRequest : undefined} />
               </> : <section className="panel care-card"><h2>No paired phones</h2><p>Add a phone to use recovery controls.</p></section>}
             </>
           )}
@@ -866,20 +899,14 @@ function App() {
               )}
             </>
           )}
-          {page === "Photos" && <>
-            <label className="page-select">Phone or profile
-              <select value={photoScope} onChange={e => setPhotoScope(e.target.value)}>
-                <option value="">All phones and profiles</option>
-                {devices.map(phone => {
-                  const profiles = [...(phone.profiles ?? []), ...(phone.profile_archives ?? [])];
-                  return profiles.length ? <optgroup key={phone.id} label={phone.name}>
-                    <option value={phone.id}>{phone.name} · all profiles</option>
-                    {profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}{profile.revoked ? " · saved photos" : ""}</option>)}
-                  </optgroup> : <option key={phone.id} value={phone.id}>{phone.name}</option>;
-                })}
+          {page === CAPTURES && <>
+            <label className="page-select" htmlFor="capture-phone">Phone
+              <select id="capture-phone" value={photoScope} onChange={e => setPhotoScope(e.target.value)}>
+                <option value="">All phones</option>
+                {devices.map(phone => <option key={phone.id} value={phone.id}>{phone.name}</option>)}
               </select>
             </label>
-            <RecoveryPhotos key={photoScope} deviceId={photoScope || undefined} />
+            <RecoveryCaptures key={photoScope} deviceId={photoScope || undefined} />
           </>}
           {page === "Device care" && (
             <>
@@ -896,7 +923,7 @@ function App() {
                 ))}
               </select></label>
               {device ? (
-                <DeviceCare key={device.id} device={device} capabilities={device.capabilities} onViewPhotos={() => openPhotos(device.id)} />
+                <DeviceCare key={device.id} device={device} capabilities={device.capabilities} onViewSharing={() => { setTrackingTab("Sharing history"); setPage("Tracking"); }} />
               ) : (
                 <section className="panel history-panel">
                   Pair a phone to configure recovery and review its reported
@@ -907,7 +934,8 @@ function App() {
           )}
           {page === "Activity" && <ActivityLog phones={devices} refreshKey={commands.length} />}
           {page === "Pairing & history" && <>
-            <DeviceRecords phones={devices} scope={recordsDevice} onScope={setRecordsDevice}
+            <DeviceRecords phones={devices} scope={recordsDevice} onScope={id => { setRecordsDevice(id); setProfileSetup(undefined); }}
+              onManageProfiles={(phone, invite) => manageProfiles(phone.id, invite)}
               onReconnect={d=>{setRegistrationTarget(d);setWgKey("");setModal("reconnect");}}
               onDisconnect={d=>{setPairingTarget(d);setModal("disconnect");setError("");}}
               onRevoke={d=>{setPairingTarget(d);setModal("revoke");setError("");}}
@@ -917,6 +945,9 @@ function App() {
               onReissue={d=>{setName(d.name);setWgKey(d.wg_public_key||"");setPreviousWgKey("");setBundle("");setModal("enroll");}}
               onViewHistory={d=>{setSelected(d.id);setTrackingTab("Current estimate");setPage("Tracking");}}
               />
+            {managedPhone && <div id="profile-management">
+              <ProfileSetup key={`${managedPhone.id}-${profileSetup?.invite}`} phone={managedPhone} invite={profileSetup?.invite} />
+            </div>}
             {purgedBinding&&<section className="panel records-next"><Check size={19}/><span>Inactive pairing removed for {purgedBinding.name}. Saved history was kept.</span><button className="secondary" onClick={()=>{setName(purgedBinding.name);setWgKey("");setPreviousWgKey(purgedBinding.wg_public_key||"");setBundle("");setModal("enroll");}}>Create another invitation</button></section>}
           </>}
           {page === "Settings" && (
@@ -1139,7 +1170,7 @@ function App() {
               >
                 <div className="message-editor">
                 <p>
-                  A high-priority notification for {device?.name}. It can appear
+                  A high-priority notification for {targetName ?? device?.name}. It can appear
                   as a heads-up banner or on the lock screen when Android allows it.
                   Unlock controls stay available.
                 </p>
@@ -1154,7 +1185,7 @@ function App() {
                   placeholder="If you find this phone, please call…"
                 />
                 <small>{message.length}/240 characters</small>
-                <button className="primary full" disabled={busy}>
+                <button className="primary full" disabled={busy || !profileCommandReady("message")}>
                   <MessageSquare size={17} />
                   Queue message
                 </button>

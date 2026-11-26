@@ -2235,10 +2235,8 @@ select:not(:disabled):hover { border-color: var(--accent-border); }
 .profile-agent { border-top: 1px solid var(--border); padding-top: 20px; margin-top: 20px; }
 .profile-agent h3 { font-size: 15px; margin: 0; }
 .profile-companions .profile-agent .panel-heading { padding: 0; margin: 0 0 12px; border: 0; }
-.profile-agent .panel-heading > span { font-size: 11px; color: var(--muted); background: var(--soft); border: 1px solid var(--border); border-radius: 999px; padding: 5px 9px; }
 .profile-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
 .profile-setup { border-top: 1px solid var(--border); padding-top: 20px; margin-top: 20px; }
-.profile-setup summary { cursor: pointer; font-weight: 600; font-size: 13px; color: var(--accent); min-height: 36px; }
 .profile-setup form { display: grid; gap: 9px; margin-top: 16px; }
 .profile-setup form > button { justify-self: start; margin-top: 8px; }
 .profile-invitation { margin-top: 20px; }
@@ -2251,8 +2249,12 @@ select:not(:disabled):hover { border-color: var(--accent-border); }
 .connection-badge { display: inline-flex; align-items: center; gap: 7px; flex-shrink: 0; padding: 5px 9px; border: 1px solid var(--border); border-radius: 999px; background: var(--soft); color: var(--muted); font-size: 12px; font-weight: 600; line-height: 1.4; }
 .connection-badge i, .profile-dot { display: inline-block; width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: currentColor; }
 .connection-badge.good { color: var(--green); background: var(--success-soft); border-color: var(--success-border); }
-.profile-dot.good { color: var(--green); }
-.profile-dot.neutral { color: var(--muted); opacity: .75; }
+.profile-dot.good { color: #19c663; }
+.profile-dot.lost { color: #e5af13; }
+.profile-dot.disconnected { color: #e44648; }
+.profile-dot.neutral { color: var(--subtle); }
+.connection-badge.lost { color: var(--warning); background: var(--warning-soft); border-color: var(--warning-border); }
+.connection-badge.disconnected { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-border); }
 .phone-card { display: grid; align-content: start; gap: 14px; padding: 22px; text-align: left; color: var(--text); min-width: 0; }
 .phone-card:hover { border-color: var(--accent); }
 .phone-card-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
@@ -2270,9 +2272,6 @@ select:not(:disabled):hover { border-color: var(--accent-border); }
 .phone-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(122px, 1fr)); gap: 16px; margin: 16px 0 0; padding-top: 14px; border-top: 1px solid var(--border); }
 .phone-facts > div { display: grid; align-content: start; gap: 4px; }
 .phone-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
-.profile-tabs { display: flex; flex-wrap: wrap; gap: 5px; padding: 5px; margin-bottom: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
-.profile-tabs button, .nav-profiles > button { display: flex; align-items: center; gap: 7px; padding: 9px 12px; background: transparent; color: var(--muted); border-radius: 7px; font-size: 13px; text-align: left; }
-.profile-tabs button:hover, .profile-tabs button.selected, .nav-profiles > button:hover, .nav-profiles > button.selected { color: var(--text); background: var(--accent-soft); }
 .profile-role, .role-badge { font-size: 11px; color: var(--muted); font-weight: 500; }
 .profile-role { margin-left: 2px; }
 .role-badge { border: 1px solid var(--border); border-radius: 5px; padding: 2px 5px; }
@@ -2280,12 +2279,6 @@ select:not(:disabled):hover { border-color: var(--accent-border); }
 .nav-phone-row { display: flex; align-items: stretch; gap: 3px; }
 .sidebar .nav-phone-row .nav-item { height: auto; width: auto; flex: 1; min-width: 0; padding: 6px 8px; min-height: 34px; margin: 0; gap: 6px; font-size: 12px; justify-content: flex-start; }
 .nav-phone-row .nav-item > span:last-child { min-width: 0; overflow-wrap: anywhere; }
-.nav-profile-toggle { display: grid; place-items: center; width: 28px; flex: 0 0 28px; margin: 0; color: var(--muted); background: transparent; border-radius: 7px; }
-.nav-profile-toggle:hover { background: var(--soft); color: var(--text); }
-.nav-profile-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
-.nav-profiles { margin: 2px 0 6px 11px; border-left: 1px solid var(--border); padding: 2px 0 2px 7px; display: grid; gap: 2px; }
-.nav-profiles > button { padding: 7px; font-size: 12px; overflow-wrap: anywhere; }
-.nav-profiles > button > span:not(.profile-dot) { min-width: 0; flex: 1; }
 .duplicate-notice { margin-top: 16px; display: grid; gap: 5px; padding: 12px 14px; border: 1px solid var(--warning-border); border-radius: 9px; background: var(--warning-soft); font-size: 12px; line-height: 1.6; }
 .duplicate-notice span { color: var(--muted); }
 .sandbox-opt-in > summary { font-weight: 600; font-size: 14px; cursor: pointer; }
@@ -2299,8 +2292,6 @@ select:not(:disabled):hover { border-color: var(--accent-border); }
 .pair-profile-toggle input { width: 16px !important; height: 16px !important; margin: 0 !important; }
 .pair-main-choice { padding: 4px 16px 10px; margin-bottom: 20px; background: var(--accent-soft); border: 1px solid var(--border); border-radius: 9px; }
 .pair-main-choice p { font-size: 12px; line-height: 1.65; color: var(--muted); }
-.profile-content { display: grid; gap: 16px; min-width: 0; }
-.profile-detail .profile-agent { border: 0; margin: 0; padding: 0; }
 .profile-agent label { margin-top: 12px; }
 .profile-companions .panel-heading .connection-badge.good { color: var(--green); background: var(--success-soft); border-color: var(--success-border); }
 .profile-companions .profile-agent .panel-heading { min-height: 0; margin-bottom: 8px; }
@@ -2386,7 +2377,6 @@ select:not(:disabled):hover { border-color: var(--accent-border); }
   .sidebar > nav > .nav-item > svg { width: 17px; }
   .nav-phones { grid-column: 1 / -1; order: 1; margin: 4px 0 0; padding: 3px 0 0; border: 0; border-top: 1px solid var(--border); }
   .nav-phones[data-current="false"] { display: none; }
-  .nav-profile-toggle { flex-basis: 38px; }
   .sidebar-bottom { display: flex; width: auto; gap: 3px; padding: 0; margin: 0; }
   .sidebar-bottom .nav-item { width: 34px; height: 38px; padding: 0; margin: 0; gap: 0; }
   .sidebar-bottom .nav-item > svg + svg { display: none; }
@@ -2422,3 +2412,29 @@ select:not(:disabled):hover { border-color: var(--accent-border); }
 .log-maintenance .record-action select{width:100%}
 .location-off-notice{margin:12px 0}
 .location-off-notice button{margin-top:10px}
+
+.phone-profile-list { margin-top: 16px; }
+.phone-profile-list h3 { font-size: 13px; margin-bottom: 8px; }
+.phone-profile-list ul { list-style: none; padding: 0; margin: 0; border: 1px solid var(--border); border-radius: 9px; }
+.phone-profile-list li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(110px, auto) max-content; align-items: center; gap: 9px; padding: 9px 12px; font-size: 13px; }
+.phone-profile-list li + li { border-top: 1px solid var(--border); }
+.phone-profile-list li strong { overflow-wrap: anywhere; }
+.phone-profile-list .profile-role { margin-left: 8px; }
+.profile-active { color: var(--green); font-size: 12px; font-weight: 650; }
+.profile-focus-state { color: var(--muted); font-size: 12px; }
+.command-target { margin: 14px 0 8px; padding: 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--soft); }
+.command-target label { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 600; }
+.command-target p { font-size: 12px; line-height: 1.55; color: var(--muted); margin-top: 7px; }
+.record-state.inactive { display: inline-flex; align-items: center; gap: 7px; }
+.record-profile-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 24px; border-bottom: 1px solid var(--border); }
+#profile-management { margin-top: 18px; scroll-margin-top: 16px; }
+.profile-setup h3 { font-size: 15px; }
+.profile-setup input { min-height: 42px; width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); }
+.airplane-history { margin-block: 12px 0; }
+.airplane-history small { display: block; line-height: 1.5; margin-top: 3px; }
+@media (max-width: 600px) {
+  .phone-profile-list li { grid-template-columns: minmax(0, 1fr) max-content; gap: 3px 8px; }
+  .phone-profile-list li > .connection-badge { grid-column: 2; grid-row: 1 / span 2; }
+  .phone-profile-list li > .profile-active, .phone-profile-list li > .profile-focus-state { grid-column: 1; }
+  .record-profile-actions { padding-inline: 16px; }
+}

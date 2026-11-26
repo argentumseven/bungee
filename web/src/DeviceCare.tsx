@@ -1,14 +1,11 @@
 import React, { useEffect, useState } from "react";
 import {
   ShieldCheck,
-  Radio,
   LockKeyhole,
 } from "lucide-react";
 import { api } from "./api";
 import { RecoveryMessagePreview } from "./RecoveryMessagePreview";
-import { SharingHistory } from "./SharingHistory";
 import { LOCATION_REQUEST_MESSAGE } from "./activityText";
-import { ProfileSetup } from "./ProfileSetup";
 import type { PhoneProfiles } from "./PhoneStatus";
 
 type Policy = {
@@ -55,22 +52,24 @@ type Report = {
     fix_failures?: number | null;
   };
 };
+type AirplaneChange = { at: number | null; recorded_at: number; received_at: number };
 type Saved = {
   revision: number;
   policy: Policy;
   report: Report | null;
   persistent_controls_enabled: false;
   legacy_policy_present: boolean;
+  airplane_changes?: { on: AirplaneChange | null; off: AirplaneChange | null };
 };
 const time = (n: number) => new Date(n * 1000).toLocaleString();
 export function DeviceCare({
   device,
   capabilities,
-  onViewPhotos,
+  onViewSharing,
 }: {
   device: PhoneProfiles;
   capabilities?: string[];
-  onViewPhotos: () => void;
+  onViewSharing: () => void;
 }) {
   const [saved, setSaved] = useState<Saved | null>(null),
     [draft, setDraft] = useState<Policy | null>(null);
@@ -100,13 +99,18 @@ export function DeviceCare({
     };
   }, [device.id]);
   const report = saved?.report;
+  const focus = device.focus;
+  const focusCapabilities = focus?.state === "active" && focus.since_ms != null
+    ? focus.id === device.id ? capabilities : device.profiles?.find(p => p.id === focus.id)?.capabilities
+    : undefined;
+  const canAskForLocation = (device.profiles_enabled ? focusCapabilities : capabilities)?.includes("message");
   const locationOff = report?.delivery?.location_services === false || report?.delivery?.gps_access === "location_services_off";
   async function askForLocation() {
     setBusy(true);
     setError("");
     setNotice("");
     try {
-      await api(`/devices/${device.id}/commands`, { method: "POST", body: JSON.stringify({ kind: "message", message: LOCATION_REQUEST_MESSAGE }) });
+      await api(`/devices/${device.id}/commands`, { method: "POST", body: JSON.stringify({ kind: "message", message: LOCATION_REQUEST_MESSAGE, profile: device.profiles_enabled ? "active" : undefined }) });
       setNotice("Message queued. When the phone collects it, it appears on its lock screen with a request to turn Location on. Clear it afterwards from the recovery message controls.");
     } catch (e) {
       setError((e as Error).message);
@@ -239,7 +243,7 @@ export function DeviceCare({
                   <ShieldCheck size={18} />
                   Phone-reported state
                 </h2>
-                <Radio size={17} />
+                <button type="button" className="secondary" onClick={onViewSharing}>Open sharing history</button>
               </div>
               {!report ? (
                 <p>
@@ -260,7 +264,7 @@ export function DeviceCare({
                           : "Requested state reported"}
                     </strong>
                   </div>
-                  <div className="care-subheading"><h3>Theft-photo protection</h3><button type="button" className="secondary" onClick={onViewPhotos}>View recovery photos</button></div>
+                  <h3 className="delivery-heading">Main profile camera protection</h3>
                   <p className="fine">{report.camera ? `${report.camera.armed ? "Armed at last report" : "Not ready at last report"} · ${time(report.camera.reported_at)}. ${report.camera.status}. Pending ${report.camera.pending}/8; discarded at capacity ${report.camera.dropped}.` : "Not reported. Check the app version and theft-photo settings on the phone."} Enable protection on the phone before it is lost. This server cannot enable it remotely.</p>
                   {!!report.camera?.queued?.length && <ul className="fine">{report.camera.queued.map(photo=><li key={photo.id}>{photo.reason==="remote_manual"?"Manually requested picture":photo.reason==="local_test"?"Labelled camera test":"Failed-entry capture"} · {time(photo.captured_at)} · awaiting upload at last report</li>)}</ul>}
                   <h3 className="delivery-heading">Delivery &amp; offline queue</h3>
@@ -270,13 +274,27 @@ export function DeviceCare({
                       The phone cannot collect GPS fixes, although it can still receive commands. Android does not let this server, or any app, switch Location on remotely.
                       You can ask whoever has the phone to do it: this sends a message that shows on the phone and explains what to turn on.
                       <div>
-                        <button type="button" className="secondary" disabled={busy || !capabilities?.includes("message")} onClick={() => void askForLocation()}>
+                        <button type="button" className="secondary" disabled={busy || !canAskForLocation} onClick={() => void askForLocation()}>
                           Ask the phone to turn Location on
                         </button>
-                        {!capabilities?.includes("message") && <span className="fine"> The phone has not approved recovery messages.</span>}
+                        {!canAskForLocation && <span className="fine"> {device.profiles_enabled ? "Use Recovery commands to choose a profile that can receive messages." : "The phone has not approved recovery messages."}</span>}
                       </div>
                     </div>
                   )}
+                  <dl className="care-health airplane-history">
+                    {(["on", "off"] as const).map(state => {
+                      const change = saved.airplane_changes?.[state];
+                      return <div key={state}>
+                        <dt>Airplane mode last turned {state}</dt>
+                        <dd>{!change ? "No change recorded" : change.at == null
+                          ? <>Observed {time(change.recorded_at)}<small>Exact change time unknown</small></>
+                          : time(change.at)}
+                          {change && change.received_at - (change.at ?? change.recorded_at) > 300 &&
+                            <small>Reported after reconnecting · {time(change.received_at)}</small>}
+                        </dd>
+                      </div>;
+                    })}
+                  </dl>
                   {report.delivery ? (
                     <>
                       <p className="fine">
@@ -292,7 +310,7 @@ export function DeviceCare({
                           <dd>{report.delivery.location_services == null ? "Not reported" : report.delivery.location_services ? "On" : "Off"}</dd>
                         </div>
                         <div>
-                          <dt>Airplane mode</dt>
+                          <dt>Airplane mode at last report</dt>
                           <dd>{report.delivery.airplane_mode == null ? "Not reported" : report.delivery.airplane_mode ? "On" : "Off"}</dd>
                         </div>
                         <div>
@@ -391,14 +409,10 @@ export function DeviceCare({
                 </>
               )}
               <p className="fine">
-                Failure streaks reset after a successful credential unlock. Fingerprint and face failures may not count. The app signs these reports; hardware attestation is unavailable.
-                Failed-credential reports require Android administration and
-                may exclude biometric attempts.
+                Failed-entry reports require Android device administration. Android may omit biometric attempts, and a successful credential unlock resets the streak.
               </p>
             </section>
           </div>
-          <ProfileSetup key={`profiles-${device.id}`} phone={device}/>
-          <SharingHistory key={`sharing-${device.id}`} deviceId={device.id} />
         </>
       )}
     </div>

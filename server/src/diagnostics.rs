@@ -45,7 +45,7 @@ pub async fn latest(
     require_admin(&app, &headers)?;
     let db = app.db.lock().unwrap();
     let exists: bool = db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM devices WHERE id=? AND revoked=0 AND primary_device_id IS NULL)",
+        "SELECT EXISTS(SELECT 1 FROM devices WHERE id=? AND revoked=0)",
         [&id],
         |row| row.get(0),
     )?;
@@ -54,8 +54,11 @@ pub async fn latest(
     }
     let time = now();
     let report = db.query_row(
-        "SELECT id,created,expires,status,result,receipt_received_at,diagnostic_checks FROM commands
-         WHERE device_id=? AND kind='diagnostics' AND created>=? ORDER BY created DESC,rowid DESC LIMIT 1",
+        "SELECT c.id,c.created,c.expires,c.status,c.result,c.receipt_received_at,c.diagnostic_checks,c.device_id,
+                CASE WHEN d.primary_device_id IS NULL THEN COALESCE(d.main_profile_name,d.name) ELSE d.name END
+         FROM commands c JOIN devices d ON d.id=c.device_id
+         WHERE (d.id=?1 OR d.primary_device_id=?1) AND d.revoked=0 AND c.kind='diagnostics' AND c.created>=?2
+         ORDER BY c.created DESC,c.rowid DESC LIMIT 1",
         params![id, time - 86400],
         |row| {
             let expires: i64 = row.get(2)?;
@@ -70,6 +73,8 @@ pub async fn latest(
                 "status": if expired { "expired" } else { &status },
                 "result": row.get::<_, Option<String>>(4)?,
                 "received_at": row.get::<_, Option<i64>>(5)?,
+                "device_id": row.get::<_, String>(7)?,
+                "profile_name": row.get::<_, String>(8)?,
                 "checks": checks,
             }))
         },

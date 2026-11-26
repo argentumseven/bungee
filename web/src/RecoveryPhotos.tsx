@@ -10,7 +10,7 @@ type Photo = {
 const photoLabel = (photo: Photo) => photo.reason === "remote_manual" ? "Manually requested picture" : photo.reason === "local_test" ? "Local camera test" : `${photo.failed_attempts} failed credential entries`;
 type Album = { photos: Photo[]; next_before: number | null };
 
-export function RecoveryPhotos({ deviceId }: { deviceId?: string }) {
+export function RecoveryCaptures({ deviceId }: { deviceId?: string }) {
   const [before, setBefore] = useState<number | null>(null);
   const [album, setAlbum] = useState<Album | null>(null);
   const [reload, setReload] = useState(0);
@@ -55,24 +55,24 @@ export function RecoveryPhotos({ deviceId }: { deviceId?: string }) {
     } catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   }
-  return <section className="panel care-card recovery-photos" aria-label="Recovery photo gallery">
+  return <section className="panel care-card recovery-photos" aria-label="Recovery captures gallery">
     <div className="panel-heading">
-      <h2><Camera size={18} /> Recovery photos</h2>
+      <h2><Camera size={18} /> Recovery captures</h2>
       <div className="photo-tools">
-        <button type="button" className="secondary" onClick={() => setReload(n => n + 1)}><RefreshCw size={15} /> Refresh photos</button>
-        <button type="button" className="danger-button" onClick={() => setConfirm(true)} disabled={busy}><Trash2 size={15} /> Erase all recovery photos</button>
+        <button type="button" className="secondary" onClick={() => setReload(n => n + 1)}><RefreshCw size={15} /> Refresh captures</button>
+        <button type="button" className="danger-button" onClick={() => setConfirm(true)} disabled={busy}><Trash2 size={15} /> Erase all captures</button>
       </div>
     </div>
     {confirm && <div className="notice photo-confirm">
-      <p>Erase all saved photos in this view? The server also discards earlier queued photos. New captures can arrive while protection is armed.</p>
+      <p>Erase all saved captures in this view? The server also discards earlier queued photos. New captures can arrive while protection is armed.</p>
       <div className="photo-tools">
-        <button type="button" className="danger-button" disabled={busy} onClick={() => void erase()}>Confirm photo erasure</button>
-        <button type="button" className="secondary" disabled={busy} onClick={() => setConfirm(false)}>Keep photos</button>
+        <button type="button" className="danger-button" disabled={busy} onClick={() => void erase()}>Confirm capture erasure</button>
+        <button type="button" className="secondary" disabled={busy} onClick={() => setConfirm(false)}>Keep captures</button>
       </div>
     </div>}
     {error && <p className="error" role="alert">{error}</p>}
-    {!album && !error && <p className="gallery-feedback" role="status">Loading saved photos…</p>}
-    {album?.photos.length === 0 && <p className="gallery-feedback">No saved photos in this view.</p>}
+    {!album && !error && <p className="gallery-feedback" role="status">Loading saved captures…</p>}
+    {album?.photos.length === 0 && <p className="gallery-feedback">No saved captures in this view.</p>}
     {!!album?.photos.length && <div className="photo-grid">{album.photos.map((photo, index) => <figure key={`${photo.source_device_id || deviceId || photo.device_id}-${photo.id}`}>
       <a href={`/api${imagePath(photo)}`} target="_blank" rel="noopener noreferrer">
         <img src={`/api${imagePath(photo)}`} loading={index < 4 ? "eager" : "lazy"} alt={photo.reason === "local_test" ? "Labelled local camera test" : photoLabel(photo)} />
@@ -88,12 +88,12 @@ export function RecoveryPhotos({ deviceId }: { deviceId?: string }) {
           try { await api(imagePath(photo), { method: "DELETE" }); setReload(n => n + 1); }
           catch (e) { setError((e as Error).message); }
           finally { setBusy(false); }
-        }}>Erase this photo</button>
+        }}>Erase this capture</button>
       </figcaption>
     </figure>)}</div>}
     {(before != null || album?.next_before != null) && <div className="history-pagination">
-      {before != null && <button type="button" className="secondary" onClick={() => paginate(null)}>Newest photos</button>}
-      {album?.next_before != null && <button type="button" className="secondary" onClick={() => paginate(album.next_before)}>Older photos</button>}
+      {before != null && <button type="button" className="secondary" onClick={() => paginate(null)}>Newest captures</button>}
+      {album?.next_before != null && <button type="button" className="secondary" onClick={() => paginate(album.next_before)}>Older captures</button>}
     </div>}
   </section>;
 }
