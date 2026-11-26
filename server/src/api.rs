@@ -815,16 +815,38 @@ pub async fn ack(
     // A restored server may not know an offered command yet. Preserve the phone's
     // journal in every non-matching case so later polls/restoration can reconcile it.
     let received = now();
-    let row: Option<(String, Option<String>, i64, i64, String, Option<String>)> = db
+    struct CommandReceiptRow {
+        status: String,
+        result: Option<String>,
+        created: i64,
+        expires: i64,
+        kind: String,
+        recorded_checks: Option<String>,
+    }
+    let row = db
         .query_row(
             "SELECT status,result,created,expires,kind,diagnostic_checks FROM commands WHERE id=? AND device_id=?",
             params![input.id, id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            |r| Ok(CommandReceiptRow {
+                status: r.get(0)?,
+                result: r.get(1)?,
+                created: r.get(2)?,
+                expires: r.get(3)?,
+                kind: r.get(4)?,
+                recorded_checks: r.get(5)?,
+            }),
         )
         .optional()?;
     let disposition = match row {
         None => "unknown_command",
-        Some((status, result, created, expires, kind, recorded_checks)) => {
+        Some(CommandReceiptRow {
+            status,
+            result,
+            created,
+            expires,
+            kind,
+            recorded_checks,
+        }) => {
             let checks = crate::diagnostics::validate(
                 &kind,
                 &input.status,
