@@ -2,6 +2,21 @@
 
 The maintainer reports successful real-device operation. This record primarily covers automated checks and their limits; device/build-specific physical test results have not yet been recorded here, and an independent security audit is not documented. The [device procedure](RECOVERY_CONTROLS.md#physical-device-checks) covers camera/boot acceptance; [SAFETY.md](SAFETY.md) covers local recovery and removal.
 
+## 1.1.24 documentation and screenshot refresh
+
+This pass changed documentation, browser-fixture screenshot captures and one style rule. No release metadata, version, workflow, signing file, Rust source or Android source changed, so the 1.1.24 / code 40 release, its signing and the phone app are unaffected.
+
+**What was documented.** The 1.1.24 behavior: active-profile focus and its limits, targeted profile commands, phone diagnostics, resumable and retried phone update downloads and what their messages (including `HTTP 404`) mean, date filters, GPS purge for all phones, read-only host `status`, and the renamed pages. Every dashboard label and number written into the documents was checked against the web, server and Android source, and several first drafts were corrected by that check.
+
+**Screenshots.** All captures were regenerated from the browser fixtures in a dark appearance, and six were added (device events, log storage and cleanup, the location-services notice, mobile Activity, phone diagnostics, phone app updates). They show synthetic fixture data. The container's fonts differ from the earlier captures, so every image changed.
+
+| Check | Result |
+| --- | --- |
+| Documentation | `scripts/check-doc-images.py` passes (51 embedded images exist); 138 Python tests pass |
+| API (`npm test`) | 27 TypeScript-helper tests pass; 138 of 139 API tests pass. The one failure is "unreadable regional metadata cannot suppress the bundled overview…", which depends on file permissions and fails identically on unmodified code when run as root |
+| Browser | 44 of 47 Chromium checks pass and 2 Firefox checks were skipped (no Firefox installed). The one failure is the same "unreadable regional metadata" case |
+| Not run | Rust and Kotlin checks (no source changed in this pass), Android builds, Firefox, and every physical-device behavior. The documented 1.1.24 behaviors were reviewed against the source here, not exercised on a phone |
+
 ## 1.1.23: DDIL backfill, device-state events, and activity maintenance
 
 **Backfill.** Saved GPS was sent as one small batch per fifteen-second cycle, and any failed connection halved the batch toward one point, so a week of fixes could take hours to appear after an outage. Batches are now sized from the upload request itself, a connection cycle sends several batches while the link is healthy, and a remaining backlog schedules the next cycle after two seconds. **Sampling.** GPS sampling waited with Handler timers that stop counting while the CPU sleeps; with no radio traffic (airplane mode, no signal) and the screen off nothing wakes the CPU, so the trail could stall until connectivity returned. Pauses now end at an elapsed-realtime deadline with an idle-capable alarm and each listening window holds a short wake lock. This is a source-level diagnosis supported by the code and unit tests; it has not been reproduced or confirmed on a physical phone, and Doze may still delay an inexact alarm.
