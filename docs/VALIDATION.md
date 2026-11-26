@@ -2,6 +2,22 @@
 
 The maintainer reports successful real-device operation. This record primarily covers automated checks and their limits; device/build-specific physical test results have not yet been recorded here, and an independent security audit is not documented. The [device procedure](RECOVERY_CONTROLS.md#physical-device-checks) covers camera/boot acceptance; [SAFETY.md](SAFETY.md) covers local recovery and removal.
 
+## 1.1.25: slow-link request deadlines
+
+**Defect.** The phone's native HTTP client had a fixed ten-second `Timeout`, which covers the whole request including reading the response. It silently overrode every per-request deadline, so a recovery-photo upload (meant to have 60 seconds) or an app-update chunk on a weak connection was cut off at ten seconds and reported as `home server unreachable`. The 1.1.22 change raised the photo ceilings in the Kotlin code and in the transport's request validation, but this client-wide limit remained. The client no longer has one: every request already runs under a validated per-request deadline (10 seconds for control requests, 60 for a photo), and an app-update chunk now gets 30. The Kotlin side previously capped chunk requests at ten seconds in two places and now requests and permits the larger budget.
+
+Checks run for this release:
+
+| Check | Result |
+| --- | --- |
+| Go transport (Go 1.26.9, real in-process WireGuard) | All tests pass. New: photo and APK-chunk responses that take 10.5 seconds succeed, the chunk ceiling (30 s), photo ceiling (60 s) and control ceiling (10 s) stay enforced, and the test fails with `home server unreachable` when the old client timeout is put back |
+| Android JVM tests | All 158 pass (new: per-path request maximums). Compiled with a standalone Kotlin 2.1.21 compiler against Android 16 framework classes with stubs; the Compose `MainActivity`/theme were not compiled and two Activities that need AndroidX libraries were replaced by stubs |
+| Rust and API | `cargo build --locked` succeeds with the bumped version. `npm test`: 27 of 27 TypeScript-helper tests and 138 of 139 API tests pass. The one failure is the file-permission case that cannot fail for root; that file passes 4 of 4 when run as a non-root user |
+| Browser | Full Chromium suite run as a non-root user: all pass, with 2 Firefox checks skipped (no Firefox installed) |
+| Workflow | The nightly-refresh fix has regression tests that run the workflow's real shell step against a fake `gh`: an Android-only release list succeeds with nothing promoted, the newest stable `vX.Y.Z` release is chosen behind APK, draft and pre-release entries, and an API error still fails. The previous script exits 1 on an Android-only list |
+| Documentation | 143 Python tests and the image check pass |
+| Not run | The Gradle/AGP build, Android lint, R8, the Compose `MainActivity`, the Android build of the Go transport (CI builds it), Firefox, and any transfer over a real weak cellular link |
+
 ## 1.1.24 documentation and screenshot refresh
 
 This pass changed documentation, browser-fixture screenshot captures and one style rule. No release metadata, version, workflow, signing file, Rust source or Android source changed, so the 1.1.24 / code 40 release, its signing and the phone app are unaffected.
