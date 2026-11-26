@@ -2,7 +2,6 @@ import { useState } from "react";
 import QRCode from "qrcode";
 import { api } from "./api";
 import { ConnectionBadge, DuplicateNotice } from "./PhoneStatus";
-import { RecoveryPhotos } from "./RecoveryPhotos";
 import { SharingHistory } from "./SharingHistory";
 import { installationCamera } from "./recoveryCamera";
 
@@ -12,6 +11,8 @@ export type ProfileAgent = {
   enrolled: boolean;
   revoked: boolean;
   last_contact?: number | null;
+  last_seen?: number | null;
+  last_poll?: number | null;
   management_report_at?: number | null;
   duplicate_blocked_at?: number | null;
   binding_released?: boolean;
@@ -36,6 +37,7 @@ export function ProfileCompanions({
   profiles,
   detail = false,
   clockSkew = 0,
+  onViewPhotos,
 }: {
   deviceId: string;
   deviceName: string;
@@ -43,6 +45,7 @@ export function ProfileCompanions({
   detail?: boolean;
   /** Server time minus this browser's time, in seconds. */
   clockSkew?: number;
+  onViewPhotos?: (id: string) => void;
 }) {
   const [name, setName] = useState(""),
     [key, setKey] = useState("");
@@ -100,13 +103,14 @@ export function ProfileCompanions({
     }
   }
   return (
+    <div className="profile-content">
     <section
-      className="panel care-card profile-companions"
+      className={`panel care-card profile-companions${detail ? " profile-detail" : ""}`}
       aria-label="Android profiles"
     >
       <div className="panel-heading">
-        <h2>{detail?profiles[0]?.name:"Manage sandbox profiles"}</h2>
-        <span>{detail?"Profile actions":`${profiles.filter(p=>!p.revoked&&p.enrolled).length}/8 paired`}</span>
+        <h2>{detail ? profiles[0]?.name : "Manage sandbox profiles"}</h2>
+        {detail && profiles[0] ? <ConnectionBadge phone={profiles[0]} profile /> : <span>{profiles.filter(p=>!p.revoked&&p.enrolled).length}/8 paired</span>}
       </div>
       {!detail && <p>
         Phone status, GPS, battery, network history, sound and flash come from{" "}
@@ -133,12 +137,11 @@ export function ProfileCompanions({
         const picture = installationCamera(profile, serverNow);
         return (
           <article className="profile-agent" key={profile.id}>
-            <div className="panel-heading">
+            {!detail && <div className="panel-heading">
               <h3>{profile.name}</h3>
               <ConnectionBadge phone={profile} profile/>
               {profile.revoked && <span className="role-badge">Saved profile</span>}
-
-            </div>
+            </div>}
             {!profile.enrolled && !profile.revoked && <p className="fine">{profile.enrollment_state==="expired"?"Invitation expired":"Invitation pending"} · hidden from the phone navigation until officially paired.</p>}
             <p className="fine">
               {profile.management?.foreground_user && recent && !!profile.management_report_at && serverNow-profile.management_report_at<90
@@ -193,7 +196,7 @@ export function ProfileCompanions({
                   </button>
                   <button
                     type="button"
-                    className="text-button"
+                    className="secondary"
                     disabled={
                       busy || !profile.capabilities.includes("clear_message")
                     }
@@ -201,6 +204,7 @@ export function ProfileCompanions({
                   >
                     Clear profile message
                   </button>
+                  {detail && onViewPhotos && <button type="button" className="secondary" onClick={() => onViewPhotos(profile.id)}>View recovery photos</button>}
                   <button
                     type="button"
                     className="danger-button"
@@ -409,8 +413,8 @@ export function ProfileCompanions({
           </div>
         )}
       </details>}
-      {detail&&profiles[0]&&<RecoveryPhotos deviceId={profiles[0].id}/> }
-      {detail&&profiles[0]&&<SharingHistory deviceId={profiles[0].id}/> }
     </section>
+    {detail && profiles[0] && <SharingHistory key={profiles[0].id} deviceId={profiles[0].id} />}
+    </div>
   );
 }

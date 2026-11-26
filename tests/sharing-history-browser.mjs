@@ -12,7 +12,7 @@ test("sharing timeline separates manual actions from crashes/errors and retains 
   assert.equal((await p.request("/v1/sync", { report: { sharing_epoch: epoch, sharing_events: events } })).status, 200);
   const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN || "/usr/bin/chromium", headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
   t.after(() => browser.close());
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1050 } }), [name, value] = f.cookie.split("=");
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1050 }, timezoneId: "UTC" }), [name, value] = f.cookie.split("=");
   await context.addCookies([{ name, value, url: f.origin }]);
   const page = await context.newPage(), errors = []; page.on("pageerror", e => errors.push(e.message));
   await page.goto(f.origin);
@@ -25,6 +25,12 @@ test("sharing timeline separates manual actions from crashes/errors and retains 
   assert.equal(await timeline.locator(".sharing-event-error").count(), 1);
   await timeline.getByText(/Stop time unknown · detected on phone/).waitFor();
   assert.equal(await timeline.locator(".sharing-event-crash").getByText("Manual", { exact: true }).count(), 0);
+  await timeline.getByLabel("From (local time)").fill(new Date((now - 300) * 1000).toISOString().slice(0, 16));
+  await timeline.getByRole("button", { name: "Apply filter", exact: true }).click();
+  await timeline.getByText(/Stop time unknown · detected on phone/).waitFor();
+  assert.equal(await timeline.locator(".sharing-event").count(), 1);
+  await timeline.getByRole("button", { name: "Clear filter", exact: true }).click();
+  await timeline.getByText("Android reported an app crash", { exact: true }).waitFor();
   await timeline.screenshot({ path: "docs/screenshots/sharing-history.png" });
   f.sql("UPDATE devices SET last_contact=? WHERE id=?", [now - 86400, p.id]);
   await timeline.getByRole("button", { name: "Refresh sharing history", exact: true }).click();
@@ -53,4 +59,43 @@ test("manual Locate stays available with passive GPS off and leaves that setting
   const policy = await (await f.admin(`/api/devices/${p.id}/policy`)).json();
   assert.equal(policy.report.delivery.gps_access, "disabled");
   assert.equal(policy.policy.lost_mode, false);
+});
+
+
+test("diagnostics reports return to their own panel and activity filters use event time", async t => {
+  const f = await fixture(t), p = await phone(f, { capabilities: ["diagnostics"] });
+  const now = Math.floor(Date.now() / 1000);
+  f.sql("INSERT INTO audit(at,action,device_id,detail) VALUES(?,?,?,?)", [now - 3600, "fixture.previous", p.id, "Earlier activity fixture"]);
+  const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN || "/usr/bin/chromium", headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+  t.after(() => browser.close());
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, timezoneId: "UTC" });
+  const [name, value] = f.cookie.split("=");
+  await context.addCookies([{ name, value, url: f.origin }]);
+  const page = await context.newPage();
+  await page.goto(f.origin);
+  await page.getByRole("button", { name: /^Devices/ }).click();
+  await page.getByRole("button", { name: /Check phone diagnostics/ }).click();
+  const report = page.getByRole("region", { name: "Phone diagnostics" });
+  await report.getByText(/Waiting for the main installation/).waitFor();
+  const poll = (await (await p.request("/v1/commands", {})).json()).commands;
+  assert.equal(poll.length, 1);
+  assert.equal(poll[0].kind, "diagnostics");
+  const receipt = {
+    id: poll[0].id, status: "executed", result: "Phone diagnostics completed",
+    attempted_at: Math.floor(Date.now() / 1000),
+    diagnostic_checks: [{ label: "Android location services", status: "attention", detail: "Location is disabled in Android Settings." }],
+  };
+  assert.equal((await p.request("/v1/ack", { ...receipt, diagnostic_checks: [] })).status, 400);
+  assert.equal((await p.request("/v1/ack", receipt)).status, 200);
+  const retry = await (await p.request("/v1/ack", receipt)).json();
+  assert.equal(retry.receipt_status, "already_terminal");
+  await report.getByText("Location is disabled in Android Settings.", { exact: true }).waitFor();
+  await report.getByText("1 check needs attention", { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  await page.getByRole("button", { name: "Activity", exact: true }).click();
+  await page.getByText(/Earlier activity fixture/).waitFor();
+  await page.getByLabel("From (local time)").fill(new Date((now - 300) * 1000).toISOString().slice(0, 16));
+  await page.getByRole("button", { name: "Apply filter", exact: true }).click();
+  await page.getByText("Command receipt received", { exact: true }).waitFor();
+  assert.equal(await page.getByText(/Earlier activity fixture/).count(), 0);
 });

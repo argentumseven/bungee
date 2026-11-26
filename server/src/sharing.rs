@@ -340,7 +340,10 @@ pub fn erase(db: &Connection, id: &str) -> rusqlite::Result<()> {
 #[derive(Deserialize)]
 pub struct Page {
     before: Option<i64>,
+    from: Option<i64>,
+    to: Option<i64>,
 }
+
 pub async fn history(
     State(app): State<App>,
     headers: HeaderMap,
@@ -348,7 +351,9 @@ pub async fn history(
     Query(page): Query<Page>,
 ) -> ApiResult<Json<Value>> {
     require_admin(&app, &headers)?;
-    if page.before.is_some_and(|n| n <= 0) {
+    let (from, to) = crate::activity::date_bounds(page.from, page.to)?;
+    let before = page.before.unwrap_or(i64::MAX);
+    if before <= 0 {
         return Err(bad("Invalid sharing history cursor"));
     }
     let db = app.db.lock().unwrap();
@@ -360,8 +365,8 @@ pub async fn history(
     if !exists {
         return Err(Error(StatusCode::NOT_FOUND, "Device not found"));
     }
-    let mut q = db.prepare("SELECT e.sequence,e.event_id,e.reason,e.at,e.recorded_at,e.received_at,d.id,d.name,d.primary_device_id,e.detail FROM sharing_events e JOIN devices d ON d.id=e.device_id WHERE (d.id=? OR d.primary_device_id=?) AND e.sequence<? ORDER BY e.sequence DESC LIMIT 21")?;
-    let mut rows = q.query_map(params![id,id,page.before.unwrap_or(i64::MAX)], |r| {
+    let mut q = db.prepare("SELECT e.sequence,e.event_id,e.reason,e.at,e.recorded_at,e.received_at,d.id,d.name,d.primary_device_id,e.detail FROM sharing_events e JOIN devices d ON d.id=e.device_id WHERE (d.id=? OR d.primary_device_id=?) AND e.sequence<? AND COALESCE(e.at,e.recorded_at) BETWEEN ? AND ? ORDER BY e.sequence DESC LIMIT 21")?;
+    let mut rows = q.query_map(params![id,id,before,from,to], |r| {
         let code: String = r.get(2)?;
         let (kind, category, label) = reason(&code).unwrap_or(("unknown","unknown","Unrecognized sharing event"));
         Ok(json!({"sequence":r.get::<_,i64>(0)?,"id":r.get::<_,String>(1)?,"reason":code,"kind":kind,"category":category,"label":label,"at":r.get::<_,Option<i64>>(3)?,"recorded_at":r.get::<_,i64>(4)?,"received_at":r.get::<_,i64>(5)?,"device_id":r.get::<_,String>(6)?,"profile_name":if r.get::<_,Option<String>>(8)?.is_some(){r.get::<_,Option<String>>(7)?}else{None},"detail":r.get::<_,Option<String>>(9)?.and_then(|text|serde_json::from_str::<Value>(&text).ok())}))

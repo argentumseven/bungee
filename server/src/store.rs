@@ -65,6 +65,7 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
     for (name, definition) in [
         ("execution_started_at", "INTEGER"),
         ("canceled_at", "INTEGER"),
+        ("diagnostic_checks", "TEXT"),
         ("canceled_after_offer", "INTEGER NOT NULL DEFAULT 0"),
     ] {
         if !command_columns.iter().any(|c| c == name) {
@@ -130,6 +131,9 @@ fn initialize(db: &Connection) -> rusqlite::Result<()> {
             "ALTER TABLE devices ADD COLUMN binding_released INTEGER NOT NULL DEFAULT 0",
             [],
         )?;
+    }
+    if !columns.iter().any(|c| c == "last_poll") {
+        tx.execute("ALTER TABLE devices ADD COLUMN last_poll INTEGER", [])?;
     }
     if !columns.iter().any(|c| c == "last_contact") {
         tx.execute("ALTER TABLE devices ADD COLUMN last_contact INTEGER", [])?;

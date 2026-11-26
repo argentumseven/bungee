@@ -447,26 +447,55 @@ class MainActivity : FragmentActivity() {
                         Text("Pending pictures: ${pendingPhotos.first}/${PhotoOutbox.CAPACITY} · memory only · discarded at capacity: ${pendingPhotos.second}", fontSize = 10.sp, modifier = Modifier.padding(top = 8.dp))
                         Text("Failed PIN/password entries toward next capture: ${camera.failedInRow}/3", fontSize = 10.sp)
                         Text("Enable before the phone is lost. While ready, three new failed PIN/password entries in this Android user trigger one front-camera attempt. Other users need their own linked companion. Protection starts after this user’s first unlock. Optional boot recovery restores protection after Android’s first unlock. After a force-stop, open Bungee manually. Camera privacy settings apply; biometric failures may not be reported.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 8.dp))
-                        if (!cameraGranted) TextButton(onClick = { cameraPermission.launch(Manifest.permission.CAMERA) }) { Text("Grant camera permission") }
+                        if (!cameraGranted) OutlinedButton(
+                            onClick = { cameraPermission.launch(Manifest.permission.CAMERA) },
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                        ) { Text("Grant camera permission") }
                         if (cameraEnabled) {
-                            HorizontalDivider(Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outlineVariant)
-                            Text("Automatic recovery after reboot", fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                            Text(if (cameraBootAllowed && startupAccess) "Enabled · after Android’s first unlock, a brief Bungee startup screen restores protection and closes. No tap in Bungee is needed."
-                                else "Enable once and grant Android’s ‘Display over other apps’ access. Bungee uses it to show its startup screen; it does not draw an overlay or cover your lock screen.", fontSize = 10.sp, lineHeight = 17.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
-                            if (!cameraBootAllowed) TextButton(onClick = { showCameraBootConsent = true }) { Text("Enable automatic boot recovery") }
-                            else {
-                                if (!startupAccess) TextButton(onClick = { openStartupAccess() }) { Text("Grant startup access in Android Settings") }
-                                TextButton(onClick = {
-                                    runCatching { LocalSafety.setCameraRestartAllowed(this@MainActivity, false); CameraBootRecovery.cancel(this@MainActivity) }
-                                        .onSuccess { cameraBootAllowed = false }.onFailure { error = "Automatic recovery preference could not be saved. Use local recovery or Android Settings." }
-                                }) { Text("Turn off automatic boot recovery") }
+                            HorizontalDivider(Modifier.padding(top = 14.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                            SettingRow(
+                                "Automatic recovery after reboot",
+                                when {
+                                    cameraBootAllowed && startupAccess -> "Restores protection after Android’s first unlock."
+                                    cameraBootAllowed -> "Waiting for Android startup access."
+                                    else -> "Restore protection after the first unlock. Requires Android startup access."
+                                },
+                                cameraBootAllowed
+                            ) { enabled ->
+                                if (enabled) showCameraBootConsent = true
+                                else runCatching {
+                                    LocalSafety.setCameraRestartAllowed(this@MainActivity, false)
+                                    CameraBootRecovery.cancel(this@MainActivity)
+                                }.onSuccess { cameraBootAllowed = false }
+                                    .onFailure { error = "Automatic recovery preference could not be saved. Use local recovery or Android Settings." }
+                            }
+                            if (cameraBootAllowed && !startupAccess) {
+                                OutlinedButton(onClick = { openStartupAccess() }, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Grant Android startup access")
+                                }
                             }
                         }
                         if (camera.armed || cameraEnabled) {
-                            Button(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { ArmedCameraService.disarm(this@MainActivity) }; cameraEnabled = LocalSafety.isCameraEnabled(this@MainActivity) }.onFailure { error = "Camera disarmed; pending-photo cleanup failed. Use Bungee recovery or Android security settings to finish cleanup." } } }, modifier = Modifier.padding(top = 12.dp)) { Text("Disarm camera") }
-                            TextButton(enabled = camera.armed, onClick = { unlock { locked = false; runCatching { ArmedCameraService.test(this@MainActivity) }.onFailure { error = it.message } } }) { Text("Take a labelled test photo") }
-                            if (!camera.armed) TextButton(onClick = { resumeCameraIfEnabled() }) { Text("Resume protection") }
-                            Text("High-quality JPEGs up to 2048 pixels / 1 MiB. Test photos and manual web requests share the 30-second / 20-attempts-per-hour limit.", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Column(Modifier.fillMaxWidth().padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Button(onClick = {
+                                    scope.launch {
+                                        runCatching {
+                                            withContext(Dispatchers.IO) { ArmedCameraService.disarm(this@MainActivity) }
+                                            cameraEnabled = LocalSafety.isCameraEnabled(this@MainActivity)
+                                        }.onFailure { error = "Camera disarmed; pending-photo cleanup failed. Use Bungee recovery or Android security settings to finish cleanup." }
+                                    }
+                                }, modifier = Modifier.fillMaxWidth()) { Text("Disarm camera") }
+                                OutlinedButton(enabled = camera.armed, onClick = {
+                                    unlock {
+                                        locked = false
+                                        runCatching { ArmedCameraService.test(this@MainActivity) }.onFailure { error = it.message }
+                                    }
+                                }, modifier = Modifier.fillMaxWidth()) { Text("Take a labelled test photo") }
+                                if (!camera.armed) OutlinedButton(onClick = { resumeCameraIfEnabled() }, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Resume protection")
+                                }
+                                Text("High-quality JPEGs up to 2048 pixels / 1 MiB. Test photos and manual web requests share the 30-second / 20-attempts-per-hour limit.", fontSize = 11.sp, lineHeight = 17.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         } else {
                             Button(onClick = { showCameraConsent = true }, enabled = commands && status.running && cameraGranted, modifier = Modifier.padding(top = 12.dp)) { Text("Enable theft photos") }
                             Text("Needs sharing, household commands, camera, notifications and removable device administration. Disarming clears unsent photos; saved server photos need separate erasure.", fontSize = 9.sp, lineHeight = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
@@ -510,7 +539,7 @@ class MainActivity : FragmentActivity() {
             Text("Version ${BuildConfig.VERSION_NAME} · no Google Play services required", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp, modifier = Modifier.padding(bottom = 22.dp))
         }
         if (showCommandConsent) AlertDialog(onDismissRequest = { showCommandConsent = false }, title = { Text("Allow household recovery commands?") }, text = {
-            Text(if (identity.profileCompanion) "The server administrator can show and clear recovery notifications in this Android profile. Phone-wide actions and device telemetry remain with the main installation. Camera protection requires separate local approval. While its camera is ready, the administrator can also request a front-camera picture in this profile from the web GUI. Turn messages off here or stop this profile companion through local recovery." else "The server administrator can request a fresh GPS fix, play or stop an alarm, and show or clear a recovery notification. Screen locking also needs removable Android device administration. When theft photos are enabled locally and the camera is ready, the administrator can also request a front-camera picture from the web GUI.\n\nEnabling commands can apply an existing lost-mode request. Automatic GPS sharing has separate consent. Approved recovery commands can request a temporary GPS fix while automatic sharing is off, with Android location permission. Turn commands off here, or stop Bungee through local recovery or Android Settings.")
+            Text(if (identity.profileCompanion) "The server administrator can show and clear recovery notifications in this Android profile. Phone-wide actions and device telemetry remain with the main installation. Camera protection requires separate local approval. While its camera is ready, the administrator can also request a front-camera picture in this profile from the web GUI. Turn messages off here or stop this profile companion through local recovery." else "The server administrator can request a fresh GPS fix, play or stop an alarm, show or clear a recovery notification, and check phone readiness. Diagnostics report location settings, network health, storage, power and recovery permissions without collecting a location or photo. Screen locking also needs removable Android device administration. When theft photos are enabled locally and the camera is ready, the administrator can also request a front-camera picture from the web GUI.\n\nEnabling commands can apply an existing lost-mode request. Automatic GPS sharing has separate consent. Approved recovery commands can request a temporary GPS fix while automatic sharing is off, with Android location permission. Turn commands off here, or stop Bungee through local recovery or Android Settings.")
         }, confirmButton = { TextButton(onClick = {
             showCommandConsent = false
             unlock {
@@ -557,7 +586,10 @@ class MainActivity : FragmentActivity() {
     }
     @Composable private fun SettingRow(title: String, subtitle: String, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
         Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) { Text(title, fontSize = 12.sp, fontWeight = FontWeight.Medium); Text(subtitle, fontSize = 9.sp, lineHeight = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp)) }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(title, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Text(subtitle, fontSize = 11.sp, lineHeight = 17.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             Switch(checked = checked, enabled = enabled, onCheckedChange = onChange, modifier = Modifier.padding(start = 10.dp))
         }
     }

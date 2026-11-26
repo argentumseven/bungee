@@ -2,6 +2,7 @@ mod activity;
 mod api;
 mod app_updates;
 mod credentials;
+mod diagnostics;
 mod enrollment;
 mod export;
 mod geography;
@@ -184,11 +185,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             delete(enrollment::purge_binding),
         )
         .route("/api/devices/{id}/location", delete(activity::purge_gps))
+        .route("/api/locations", delete(activity::purge_all_gps))
         .route(
             "/api/devices/{id}/history",
             get(history::history).delete(api::clear_history),
         )
         .route("/api/devices/{id}/commands", post(api::command))
+        .route("/api/devices/{id}/diagnostics", get(diagnostics::latest))
         .route("/api/devices/{id}/sharing-history", get(sharing::history))
         .route(
             "/api/devices/{id}/commands/{command}",

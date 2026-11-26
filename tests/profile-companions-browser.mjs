@@ -7,7 +7,7 @@ import {fixture} from './support/server.mjs';
 import {phone} from './support/phone.mjs';
 
 // Real UI against a real ephemeral server. All names, keys and telemetry are fixtures.
-test('normal phone, explicit main selection, pending invitation, paired hierarchy, profile actions and limited connectivity',async t=>{
+test('normal phone, explicit main selection, pending invitation, paired hierarchy, profile actions and last-polled status',async t=>{
  const f=await fixture(t),main=await phone(f,{runtime:true,name:'Avery’s Pixel',capabilities:['locate','message','clear_message','stop_all','ring','ring_flash','flash','best_guess']});
  const now=Math.floor(Date.now()/1000);
  const camera=(status='Ready in this profile')=>({armed:true,pending:0,dropped:0,status,failed_in_row:0,queued:[],reported_at:now});
@@ -51,7 +51,11 @@ test('normal phone, explicit main selection, pending invitation, paired hierarch
  const work=await phone(f,{primaryDeviceId:main.id,name:'Work',capabilities:['message','clear_message','stop_all']});
  await sandbox.request('/v1/sync',{report:{foreground_user:true,recovery_consent:true,profile_capabilities:['message','clear_message','stop_all'],secure_lock:true,unlock_monitoring:true,camera:camera('Protection armed in Sandbox')}});
  await work.request('/v1/sync',{report:{foreground_user:false,recovery_consent:true,secure_lock:true,unlock_monitoring:true,camera:camera('Protection armed in Work')}});
- await refresh();await openPhone();await page.locator('.nav-profiles').waitFor();
+ await refresh();await openPhone();
+ const profilesToggle=page.getByRole('button',{name:'Profiles for Avery’s Pixel',exact:true});
+ await profilesToggle.waitFor();
+ assert.equal(await profilesToggle.getAttribute('aria-expanded'),'false');
+ await profilesToggle.click();await page.locator('.nav-profiles').waitFor();
  assert.equal(await page.locator('.nav-phones>div').count(),1,'one physical phone');
  assert.equal(await page.locator('.nav-profiles>button').count(),3,'main and two officially paired profiles');
  await shot('phone-overview');
@@ -63,9 +67,14 @@ test('normal phone, explicit main selection, pending invitation, paired hierarch
  await shot('sandbox-actions');
  // Both users reporting foreground during a switch never redirects a command.
  await work.request('/v1/sync',{report:{foreground_user:true,recovery_consent:true,camera:camera('Protection armed in Work')}});
+ await work.request('/v1/commands',{});
  f.sql('UPDATE devices SET last_contact=?,last_seen=? WHERE id=?',[now-5400,now-5400,main.id]);
  await refresh();await openPhone();
- await page.getByRole('region',{name:'Overall phone status'}).getByText('Profile connected',{exact:true}).waitFor();
+ const overview=page.getByRole('region',{name:'Overall phone status'});
+ await overview.getByText('Connected',{exact:true}).waitFor();
+ await overview.getByText('Last profile polled',{exact:true}).waitFor();
+ await overview.locator('dd').filter({hasText:/^Work/}).waitFor();
+ assert.equal(await page.getByRole('navigation',{name:'Phone profiles'}).locator('.profile-dot').count(),3);
  await shot('limited-connection');
  assert.equal(f.sql('SELECT last_contact FROM devices WHERE id=?',[main.id])[0][0],now-5400);
  assert.equal((await sandbox.acquire({instance:'8c87740d-4bfc-4c38-96d0-55b53356c7a4',secret:randomBytes(32).toString('base64url')})).status,423);

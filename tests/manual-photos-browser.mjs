@@ -39,7 +39,7 @@ test("manual picture command requires a ready camera capability and displays its
   const photo = { id: randomUUID(), captured_at: Math.floor(Date.now() / 1000), reason: "remote_manual", failed_attempts: 0, jpeg: (await readFile("tests/fixtures/recovery-test.jpg")).toString("base64") };
   assert.equal((await p.request("/v1/photos", { photo_epoch: offered.photo_epoch, photo })).status, 200);
   assert.equal((await p.request("/v1/ack", { id: queued[0][0], status: "executed", result: "Picture captured and queued for upload", attempted_at: photo.captured_at })).status, 200);
-  await page.getByRole("button", { name: "Device care", exact: true }).click();
+  await page.getByRole("button", { name: "Photos", exact: true }).click();
   const image = page.getByRole("img", { name: "Manually requested picture", exact: true });
   await image.waitFor();
   await page.waitForFunction(() => document.querySelector(".recovery-photos img")?.naturalWidth === 320);
@@ -83,6 +83,7 @@ test("manual picture command requires a ready camera capability and displays its
   await f.admin(`/api/devices/${p.id}/commands/${f.sql("SELECT id FROM commands WHERE kind='ring'")[0][0]}`, "DELETE");
   await page.setViewportSize({ width: 1440, height: 1050 });
   await page.evaluate(() => window.dispatchEvent(new Event("bungee:refresh")));
+  await page.getByRole("button", { name: /^Profiles for / }).click();
   await page.locator(".nav-profiles").getByRole("button", { name: /^Sandbox/ }).click();
   await page.getByRole("button", { name: "Take picture in Sandbox", exact: true }).click();
   await page.getByRole("status").filter({ hasText: "Request queued for Sandbox" }).waitFor();
@@ -92,10 +93,13 @@ test("manual picture command requires a ready camera capability and displays its
   assert.equal((await (await sandbox.request("/v1/command-check", { id: profileCommands[0].id })).json()).allowed, true);
   const sandboxPhoto = { ...photo, id: randomUUID() };
   assert.equal((await sandbox.request("/v1/photos", { photo_epoch: sandbox.photoEpoch, photo: sandboxPhoto })).status, 200);
-  await page.getByRole("button", { name: "Refresh photos", exact: true }).click();
+  await page.getByRole("button", { name: "View recovery photos", exact: true }).click();
   await page.getByRole("img", { name: "Manually requested picture", exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Phone or profile").inputValue(), sandbox.id);
+  await page.getByRole("button", { name: "Refresh photos", exact: true }).click();
   const album = await (await f.admin(`/api/devices/${p.id}/photos`)).json();
   assert.ok(album.photos.some(row => row.id === sandboxPhoto.id && row.profile_name === "Sandbox" && row.source_device_id === sandbox.id));
+  await page.locator(".nav-profiles").getByRole("button", { name: /^Sandbox/ }).click();
   // An explicit profile button follows the same readiness rules as the phone-level one.
   await report(sandbox, { foreground_user: false, camera, profile_capabilities: ["take_picture"] });
   await refresh();
@@ -103,6 +107,6 @@ test("manual picture command requires a ready camera capability and displays its
   assert.equal(await page.getByRole("button", { name: "Take picture in Sandbox", exact: true }).isDisabled(), true);
   await report(sandbox, { foreground_user: true, camera, profile_capabilities: ["take_picture"] });
   await refresh();
-  await page.waitForFunction(() => ![...document.querySelectorAll("button")].find(b => b.textContent === "Take picture in Sandbox")?.disabled);
+  await page.waitForFunction(() => [...document.querySelectorAll("button")].find(b => b.textContent === "Take picture in Sandbox")?.disabled === false);
   assert.deepEqual(errors, []);
 });

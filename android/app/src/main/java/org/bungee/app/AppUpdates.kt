@@ -7,7 +7,9 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -24,6 +26,12 @@ import java.security.MessageDigest
 object AppUpdates {
     private val mutable = MutableStateFlow(AppUpdateStatus())
     private val downloads = Mutex()
+    private val retryDelays = longArrayOf(1000, 3000, 8000)
+    private val transientTransportFailures = setOf(
+        "home server unreachable", "invalid home response", "request canceled",
+        "request canceled or already used", "private connection is stopped", "too many pending home requests",
+        "The private tunnel is disconnected", "The app-contained connection is unavailable"
+    )
     val status = mutable.asStateFlow()
     private fun sha(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
     private fun digest(file: File): String {
@@ -44,15 +52,17 @@ object AppUpdates {
         mutable.update { it.observed(release,serverVersion,preparation,BuildConfig.VERSION_CODE.toLong(),signer,explicit) }
     }
     fun fail(message: String) { mutable.update { it.copy(message=message,phase=if(it.ready) AppUpdatePhase.READY else AppUpdatePhase.ERROR) } }
-    private suspend fun <T> connected(context: Context, identity: Identity, action: suspend () -> T): T {
+    private fun connect(context: Context, identity: Identity, owner: Any) {
+        // Reusing telemetry’s connection leaves ownership with the sharing service.
+        HomeTunnel.connect(context, identity, JSONObject(checkNotNull(identity.bundle) { "Pair this phone first" }), owner, claimExisting = false)
+    }
+    private suspend fun <T> connected(context: Context, identity: Identity, action: suspend (Any) -> T): T {
         val owner=Any()
         try {
             currentCoroutineContext().ensureActive()
-            // A check may open a connection without starting GPS sharing. Reusing the
-            // telemetry service's peer must not transfer its ownership to this request.
-            HomeTunnel.connect(context,identity,JSONObject(checkNotNull(identity.bundle) { "Pair this phone first" }),owner,claimExisting=false)
+            connect(context, identity, owner)
             currentCoroutineContext().ensureActive()
-            return action()
+            return action(owner)
         } finally { HomeTunnel.disconnectOwned(owner) }
     }
     suspend fun check(context: Context, identity: Identity) = downloads.withLock {
@@ -61,6 +71,38 @@ object AppUpdates {
             val result=HomeApi(identity).request("/v1/app-update", JSONObject().put("installed_signer_sha256", installedSigner(context)))
             currentCoroutineContext().ensureActive()
             observe(context,result.optJSONObject("release"),result.optString("server_version").takeIf { it.isNotBlank() },result.optJSONObject("preparation"),explicit=true)
+        }
+    }
+    private suspend fun fetchChunk(context: Context, identity: Identity, owner: Any, api: HomeApi, release: AppRelease, offset: Long): JSONObject {
+        var attempt = 0
+        while (true) {
+            currentCoroutineContext().ensureActive()
+            check(identity.requestsAllowed()) { "Bungee stopped or pairing changed. Reopen Bungee before resuming." }
+            try {
+                if (!HomeTunnel.appContained) connect(context, identity, owner)
+                return api.request("/v1/app-update/chunk", JSONObject().put("sha256", release.sha).put("offset", offset))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (e is HomeApiException && e.status == 404) {
+                    throw IllegalStateException("The server replaced this APK. Check for updates again.", e)
+                }
+                val throttled = e is HomeApiException && e.status == 429
+                val transient = if (e is HomeApiException) throttled || e.status in 500..599 || e.status == 408
+                    else e.message in transientTransportFailures
+                if (!transient) throw e
+                if (attempt == retryDelays.size) {
+                    throw IllegalStateException("Download interrupted: ${e.message}. Saved chunks are ready to resume.", e)
+                }
+                if (e.message == "home server unreachable") HomeTunnel.disconnectOwned(owner)
+                val wait = if (throttled && attempt == retryDelays.lastIndex) 60_000L else retryDelays[attempt]
+                val message = if (throttled) "The server is limiting update requests. Waiting to resume…"
+                    else "Connection interrupted. Retrying from the last saved chunk…"
+                mutable.update { it.copy(message = message) }
+                delay(wait)
+                attempt++
+                mutable.update { it.copy(message = "Downloading from your paired server…") }
+            }
         }
     }
     private fun directory(context: Context)=File(context.cacheDir,"app-updates").apply { mkdirs() }
@@ -81,7 +123,7 @@ object AppUpdates {
                 mutable.value=mutable.value.copy(phase=AppUpdatePhase.READY,message="Download verified. Tap Install update; Android will ask for confirmation.");return@withLock
             } catch(_:Exception) { check(target.delete()) { "Cannot remove a damaged APK" } }
         }
-        connected(context,identity) {
+        connected(context,identity) { owner ->
             val api=HomeApi(identity)
             RandomAccessFile(part,"rw").use { output ->
                 var offset=output.length().coerceAtMost(release.size)
@@ -90,9 +132,8 @@ object AppUpdates {
                 check(dir.usableSpace >= release.size-offset+128L*1024*1024) { "Free more phone storage before downloading this update" }
                 while (offset<release.size) {
                     currentCoroutineContext().ensureActive()
-                    check(identity.requestsAllowed()) { "Sharing stopped or pairing changed; download paused" }
-                    mutable.value=mutable.value.copy(phase=AppUpdatePhase.DOWNLOADING,message="Downloading from your paired server…",downloadedBytes=offset)
-                    val chunk=api.request("/v1/app-update/chunk",JSONObject().put("sha256",release.sha).put("offset",offset))
+                    mutable.update { it.copy(message="Downloading from your paired server…",downloadedBytes=offset) }
+                    val chunk=fetchChunk(context, identity, owner, api, release, offset)
                     check(chunk.getString("sha256")==release.sha && chunk.getLong("offset")==offset)
                     val encoded=chunk.getString("data")
                     require(encoded.length<=174764)

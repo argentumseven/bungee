@@ -44,6 +44,17 @@ pub struct ListQuery {
     limit: Option<usize>,
     device: Option<String>,
     group: Option<String>,
+    from: Option<i64>,
+    to: Option<i64>,
+}
+
+pub(crate) fn date_bounds(from: Option<i64>, to: Option<i64>) -> ApiResult<(i64, i64)> {
+    let from = from.unwrap_or(0);
+    let to = to.unwrap_or(i64::MAX);
+    if from < 0 || to < from {
+        return Err(bad("Invalid date range"));
+    }
+    Ok((from, to))
 }
 
 /// Total order of the feed: newest time first; at equal times phone events before audit
@@ -92,6 +103,7 @@ pub async fn list(
     require_admin(&app, &headers)?;
     let limit = query.limit.unwrap_or(50);
     let group = query.group.as_deref().unwrap_or("all");
+    let (from, to) = date_bounds(query.from, query.to)?;
     let cursor = match query.before.as_deref() {
         Some(text) => Some(Cursor::parse(text).ok_or_else(|| bad("Invalid activity cursor"))?),
         None => None,
@@ -124,6 +136,7 @@ pub async fn list(
             "SELECT id,at,action,device_id,detail FROM audit
              WHERE (?1 IS NULL OR device_id IN (SELECT id FROM devices WHERE id=?1 OR primary_device_id=?1))
                AND (at<?2 OR (at=?2 AND id<?3))
+               AND at BETWEEN ?5 AND ?6
              ORDER BY at DESC,id DESC LIMIT ?4",
         )?;
         let found = q.query_map(
@@ -131,7 +144,9 @@ pub async fn list(
                 query.device,
                 after.ts,
                 after.id_bound(AUDIT),
-                limit as i64 + 1
+                limit as i64 + 1,
+                from,
+                to
             ],
             |r| {
                 let (id, at): (i64, i64) = (r.get(0)?, r.get(1)?);
@@ -160,7 +175,8 @@ pub async fn list(
             "SELECT e.sequence,e.event_id,e.reason,e.at,e.recorded_at,e.received_at,d.id,d.name,d.primary_device_id,e.detail,COALESCE(e.at,e.recorded_at)
              FROM sharing_events e JOIN devices d ON d.id=e.device_id
              WHERE (?1 IS NULL OR d.id=?1 OR d.primary_device_id=?1)
-               AND (COALESCE(e.at,e.recorded_at)<?2 OR (COALESCE(e.at,e.recorded_at)=?2 AND e.sequence<?3)) {filter}
+               AND (COALESCE(e.at,e.recorded_at)<?2 OR (COALESCE(e.at,e.recorded_at)=?2 AND e.sequence<?3))
+               AND COALESCE(e.at,e.recorded_at) BETWEEN ?5 AND ?6 {filter}
              ORDER BY COALESCE(e.at,e.recorded_at) DESC,e.sequence DESC LIMIT ?4"
         ))?;
         let found = q.query_map(
@@ -168,7 +184,9 @@ pub async fn list(
                 query.device,
                 after.ts,
                 after.id_bound(EVENT),
-                limit as i64 + 1
+                limit as i64 + 1,
+                from,
+                to
             ],
             |r| {
                 let sequence: i64 = r.get(0)?;
@@ -349,16 +367,7 @@ pub async fn purge_gps(
     if !exists {
         return Err(Error(StatusCode::NOT_FOUND, "Enrolled device not found"));
     }
-    let removed = tx.execute(
-        "DELETE FROM location_history WHERE device_id=?1 AND observed_at<?2
-         AND observed_at<(SELECT MAX(observed_at) FROM location_history WHERE device_id=?1)",
-        params![id, cutoff],
-    )?;
-    // Running exports and history reads notice the change and retry.
-    tx.execute(
-        "UPDATE devices SET history_revision=history_revision+1 WHERE id=?",
-        [&id],
-    )?;
+    let removed = purge_gps_before(&tx, &id, cutoff)?;
     store::audit(
         &tx,
         "location.purged",
@@ -367,6 +376,61 @@ pub async fn purge_gps(
             "{removed} saved GPS points older than {days} days removed; the newest point was kept"
         ),
     )?;
+    tx.commit()?;
+    Ok(Json(json!({"purged":true,"removed":removed})))
+}
+
+fn purge_gps_before(db: &Connection, id: &str, cutoff: i64) -> rusqlite::Result<usize> {
+    let removed = db.execute(
+        "DELETE FROM location_history WHERE device_id=?1 AND observed_at<?2
+         AND observed_at<(SELECT MAX(observed_at) FROM location_history WHERE device_id=?1)",
+        params![id, cutoff],
+    )?;
+    // Running exports and history reads notice the change and retry.
+    db.execute(
+        "UPDATE devices SET history_revision=history_revision+1 WHERE id=?",
+        [id],
+    )?;
+    Ok(removed)
+}
+
+pub async fn purge_all_gps(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Query(query): Query<GpsPurgeQuery>,
+) -> ApiResult<Json<Value>> {
+    require_admin(&app, &headers)?;
+    if !valid_age(query.older_than_days) {
+        return Err(bad("Choose between 1 and 3650 days"));
+    }
+    let mut db = app.db.lock().unwrap();
+    let tx = db.transaction()?;
+    let phones = tx.prepare("SELECT id FROM devices WHERE primary_device_id IS NULL AND (revoked=1 OR public_key IS NOT NULL)")?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let time = now();
+    let mut removed = 0;
+    let (action, detail) = if let Some(days) = query.older_than_days {
+        for id in phones {
+            removed += purge_gps_before(&tx, &id, time - days * 86_400)?;
+        }
+        (
+            "location.purged",
+            format!(
+                "{removed} GPS points older than {days} days removed across all phones; each newest point was kept"
+            ),
+        )
+    } else {
+        for id in phones {
+            crate::api::reset_gps(&tx, &id, time)?;
+            removed += tx.execute("DELETE FROM location_history WHERE device_id=?", [&id])?;
+        }
+        (
+            "location.erased_all",
+            format!("{removed} saved GPS points erased across all phones"),
+        )
+    };
+    store::audit(&tx, action, None, &detail)?;
     tx.commit()?;
     Ok(Json(json!({"purged":true,"removed":removed})))
 }

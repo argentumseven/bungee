@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Activity, Database, MapPinOff, Plane, ShieldCheck, Smartphone, Trash2, TriangleAlert, Crosshair } from "lucide-react";
 import { api } from "./api";
-import { activityQuery, ageChoices, auditTitle, categories, contextLine, formatBytes, groups, lateDelivery, phoneKinds, purgeQuery, type Detail } from "./activityText";
+import { RecordDates } from "./RecordDates";
+import { activityQuery, ageChoices, auditTitle, categories, contextLine, formatBytes, groups, lateDelivery, phoneKinds, purgeQuery, type Detail, type Filter } from "./activityText";
 
 type Row = {
   source: "server" | "phone"; id: string; ts: number; device_id: string | null;
@@ -24,33 +25,40 @@ const icon = (row: Row) => {
 };
 
 export function ActivityLog({ phones, refreshKey }: { phones: Phone[]; refreshKey: number }) {
-  const [filter, setFilter] = useState({ device: "", group: "all" });
+  const [filter, setFilter] = useState<Filter>({ device: "", group: "all" });
   const [rows, setRows] = useState<Row[]>([]);
   const [next, setNext] = useState<string | null>(null);
   const [error, setError] = useState(""), [busy, setBusy] = useState(false), [loaded, setLoaded] = useState(false);
-  const older = useRef(false); // once older pages are loaded, background refresh stops so the view stays put
+  const older = useRef(false); // once older pages are requested, background refresh stops so the view stays put
+  const requestScope = useRef<AbortController | null>(null);
   const names = (id: string | null) => phones.find(p => p.id === id)?.name;
   const loadFirst = useCallback(async (signal?: AbortSignal) => {
     try {
       const page = await api<Page>(`/activity${activityQuery(filter, null)}`, { signal });
+      if (signal?.aborted) return;
       setRows(page.events); setNext(page.next_before); setError(""); setLoaded(true); older.current = false;
     } catch (e) { if (!signal?.aborted) setError((e as Error).message); }
   }, [filter]);
   useEffect(() => {
     const abort = new AbortController();
+    requestScope.current = abort;
+    setBusy(false);
     setLoaded(false); void loadFirst(abort.signal);
     const timer = window.setInterval(() => { if (!older.current) void loadFirst(abort.signal); }, 15000);
     return () => { abort.abort(); window.clearInterval(timer); };
   }, [loadFirst, refreshKey]);
   async function loadOlder() {
     if (!next || busy) return;
+    const signal = requestScope.current?.signal;
     setBusy(true);
+    older.current = true;
     try {
-      const page = await api<Page>(`/activity${activityQuery(filter, next)}`);
-      older.current = true;
+      const page = await api<Page>(`/activity${activityQuery(filter, next)}`, { signal });
+      if (signal?.aborted) return;
       setRows(old => { const seen = new Set(old.map(r => `${r.source}:${r.id}`)); return [...old, ...page.events.filter(r => !seen.has(`${r.source}:${r.id}`))]; });
       setNext(page.next_before); setError("");
-    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+    } catch (e) { if (!signal?.aborted) setError((e as Error).message); }
+    finally { if (!signal?.aborted) setBusy(false); }
   }
   return <>
     <section className="panel audit-panel" aria-label="Household activity">
@@ -58,20 +66,23 @@ export function ActivityLog({ phones, refreshKey }: { phones: Phone[]; refreshKe
         <h2><Activity size={18} />Household activity</h2>
         <span className="subtle">{rows.length ? `${rows.length} SHOWN${next ? " · MORE AVAILABLE" : " · ALL LOADED"}` : "NEWEST FIRST"}</span>
       </div>
-      <div className="activity-filters">
-        <label>Phone<select value={filter.device} onChange={e => setFilter({ ...filter, device: e.target.value })}>
-          <option value="">All phones</option>
-          {phones.filter(p => p.enrolled && !p.revoked).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select></label>
-        <label>Show<select value={filter.group} onChange={e => setFilter({ ...filter, group: e.target.value })}>
-          {groups.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-        </select></label>
+      <div className="audit-controls">
+        <div className="activity-filters">
+          <label>Phone<select value={filter.device} onChange={e => setFilter({ ...filter, device: e.target.value })}>
+            <option value="">All phones</option>
+            {phones.filter(p => p.enrolled && !p.revoked).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select></label>
+          <label>Show<select value={filter.group} onChange={e => setFilter({ ...filter, group: e.target.value })}>
+            {groups.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select></label>
+        </div>
+        <RecordDates onApply={range => setFilter(current => ({ ...current, from: range.from, to: range.to }))} />
       </div>
-      {error && <p className="error" role="alert">{error}</p>}
-      {!loaded && !error && <p role="status">Loading activity…</p>}
-      {loaded && !rows.length && <p>No activity matches this view.</p>}
+      {error && <p className="error audit-feedback" role="alert">{error}</p>}
+      {!loaded && !error && <p className="audit-feedback" role="status">Loading activity…</p>}
+      {loaded && !rows.length && <p className="audit-feedback">No activity matches this view.</p>}
       <ol className="activity-list">
-        {rows.map(row => {
+        {loaded && rows.map(row => {
           const phone = row.device_id ? names(row.device_id) ?? row.phone_name : undefined;
           const late = row.source === "phone" && lateDelivery(row.at ?? null, row.recorded_at ?? row.ts, row.received_at ?? row.ts);
           const context = row.source === "phone" ? contextLine(row.detail as Detail) : "";
@@ -89,13 +100,13 @@ export function ActivityLog({ phones, refreshKey }: { phones: Phone[]; refreshKe
           </li>;
         })}
       </ol>
-      <div className="photo-pagination">
-        {next && <button type="button" className="secondary" disabled={busy} onClick={() => void loadOlder()}>{busy ? "Loading…" : "Load older activity"}</button>}
-        {older.current && <button type="button" className="text-button" onClick={() => void loadFirst()}>Back to newest</button>}
+      <div className="history-pagination">
+        {loaded && next && <button type="button" className="secondary" disabled={busy} onClick={() => void loadOlder()}>{busy ? "Loading…" : "Load older activity"}</button>}
+        {loaded && older.current && <button type="button" className="secondary" disabled={busy} onClick={() => void loadFirst(requestScope.current?.signal)}>Back to newest</button>}
       </div>
       <p className="fine">Phone events are sent by the phone when it can connect; a phone in airplane mode reports them afterwards, so they appear at the time they happened. Android does not tell Bungee who or what changed a setting, so each entry shows the circumstances instead. These are phone-reported diagnostics, not proof of what a person did.</p>
     </section>
-    <LogMaintenance phones={phones} onChanged={() => void loadFirst()} />
+    <LogMaintenance phones={phones} onChanged={() => void loadFirst(requestScope.current?.signal)} />
   </>;
 }
 
@@ -106,7 +117,8 @@ function LogMaintenance({ phones, onChanged }: { phones: Phone[]; onChanged: () 
   // Activity and GPS purges are separate decisions with their own phone and age, so one cannot be mistaken for the other.
   const [activity, setActivity] = useState({ device: "", days: 0, scope: "all" });
   const [gps, setGps] = useState({ device: "", days: 0 });
-  const gpsTarget = enrolled.find(p => p.id === gps.device) ?? enrolled[0];
+  const gpsTarget = gps.device === "all" ? undefined : enrolled.find(p => p.id === gps.device) ?? enrolled[0];
+  const gpsPath = gpsTarget ? `/devices/${encodeURIComponent(gpsTarget.id)}/location` : "/locations";
   const [confirm, setConfirm] = useState<"" | "activity" | "gps">("");
   const [auto, setAuto] = useState({ gps_days: 0, activity_days: 0 });
   const load = useCallback(async () => {
@@ -122,8 +134,13 @@ function LogMaintenance({ phones, onChanged }: { phones: Phone[]; onChanged: () 
         const r = await api<{ server_removed: number; phone_removed: number }>(`/activity${purgeQuery(activity)}`, { method: "DELETE" });
         setMessage(`Activity purged: ${r.server_removed} administrator entries and ${r.phone_removed} phone events removed.`);
       } else {
-        const r = await api<{ removed?: number; cleared?: boolean }>(`/devices/${encodeURIComponent(gpsTarget!.id)}/location${purgeQuery({ days: gps.days })}`, { method: "DELETE" });
-        setMessage(gps.days ? `${r.removed ?? 0} saved GPS points removed. The newest point was kept.` : "All saved GPS points erased. The phone stays paired.");
+        const r = await api<{ removed?: number; cleared?: boolean }>(`${gpsPath}${purgeQuery({ days: gps.days })}`, { method: "DELETE" });
+        const result = gpsTarget
+          ? "The newest point was kept."
+          : "Each phone’s newest point was kept.";
+        const removed = r.removed ?? 0;
+        setMessage(gps.days ? `${removed} saved GPS ${removed === 1 ? "point" : "points"} removed. ${result}`
+          : gpsTarget ? "All saved GPS points erased. The phone stays paired." : "Saved GPS erased for all phones.");
       }
       setConfirm(""); await load(); onChanged();
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
@@ -177,15 +194,16 @@ function LogMaintenance({ phones, onChanged }: { phones: Phone[]; onChanged: () 
         {confirmRow("activity", "Purge activity…")}
       </div>
       <div className="record-action record-destructive"><Crosshair size={20} /><h3>Purge saved GPS</h3>
-        {enrolled.length ? <>
+        {phones.length ? <>
           <div className="activity-filters">
-            <label>Phone<select aria-label="Phone whose GPS to purge" value={gpsTarget?.id ?? ""} onChange={e => { setGps({ ...gps, device: e.target.value }); setConfirm(""); }}>
+            <label>Phone<select aria-label="Phone whose GPS to purge" value={gpsTarget?.id ?? "all"} onChange={e => { setGps({ ...gps, device: e.target.value }); setConfirm(""); }}>
+              <option value="all">All phones</option>
               {enrolled.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select></label>
             <label>Remove {ageSelect("GPS age to purge", gps.days, n => { setGps({ ...gps, days: n }); setConfirm(""); }, "Everything")}</label>
           </div>
-          <p>Removes {ageText(gps.days)} of saved GPS points for <strong>{gpsTarget?.name}</strong>. {gps.days ? "The newest point is kept and the phone's offline backlog still uploads." : "The phone stays paired; points it still has queued from before now are discarded."}</p>
-          {confirmRow("gps", "Purge GPS…", !gpsTarget)}
+          <p>Removes {ageText(gps.days)} of saved GPS points for <strong>{gpsTarget?.name ?? "all phones"}</strong>. {gps.days ? "Each phone’s newest point is kept, and its offline backlog can still upload." : "Pairing is kept and earlier queued fixes are discarded."}</p>
+          {confirmRow("gps", "Purge GPS…")}
         </> : <p>Pair a phone to manage its saved GPS.</p>}
       </div>
     </div>

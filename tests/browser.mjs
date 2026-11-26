@@ -342,7 +342,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     for (const theme of ["light", "dark"]) {
       await appearance.selectOption(theme);
       await assertTheme(theme);
-      await assertReadable([".phone-hero h2", ".phone-hero p", ".phone-hero .connection-badge", ".network-card p", ".private-map-status", ".primary", ".nav-item.active"]);
+      await assertReadable([".phone-hero h2", ".phone-facts dt", ".phone-hero .connection-badge", ".network-card p", ".private-map-status", ".primary", ".nav-item.active"]);
     }
     await appearance.selectOption("system");
     await assertTheme("dark");
@@ -481,6 +481,7 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     await phoneRequest("/v1/sync",{report:{revision:saved.revision,recovery_consent:true,lost_mode_active:true,camera:{armed:true,pending:0,dropped:0,status:"Armed · synthetic fixture report",reported_at:Math.floor(Date.now()/1000)}}});
     await page.getByRole("button",{name:"Device care",exact:true}).click();
     await page.getByText(/Armed at last report/).waitFor();
+    await page.getByRole("button", {name:"View recovery photos",exact:true}).click();
     const gallery = page.locator("section.recovery-photos");
     const image = gallery.getByRole("img",{name:"Labelled local camera test"});
     await image.waitFor();

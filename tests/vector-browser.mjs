@@ -138,7 +138,7 @@ test("server APK is easy to download and its signing details fit the mobile mana
  await page.goto(f.origin);await page.getByRole('button',{name:'Settings',exact:true}).click();
  await page.getByText('Signing identity',{exact:true}).click();
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
- const downloading=page.waitForEvent('download');await page.getByRole('link',{name:'Download this server’s APK'}).click();const downloaded=await downloading;
+ const downloading=page.waitForEvent('download');await page.getByRole('link',{name:'Download APK'}).click();const downloaded=await downloading;
  assert.equal(downloaded.suggestedFilename(),'bungee.apk');assert.deepEqual(await readFile(await downloaded.path()),bytes);
 });
 
@@ -155,7 +155,7 @@ test("phone update preparation shows bytes and errors, and signer recovery keeps
  await page.getByText('APK signing identity is missing; restore its encrypted backup',{exact:true}).waitFor();
  assert.equal(await page.getByRole('progressbar',{name:'Server APK preparation'}).count(),0);
  await page.getByText('Phone says “different signing key”?',{exact:true}).click();
- assert.match(await page.locator('.apk-recovery').innerText(),/Do not purge/);
+ assert.match(await page.locator('.apk-recovery').innerText(),/Keep the saved phone record/);
  assert.match(await page.locator('.apk-recovery').innerText(),/Uninstalling removes unsent data/);
  assert.match(await page.locator('.apk-recovery').innerText(),/Reconnect · keep history/);
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);

@@ -67,6 +67,7 @@ class TelemetryService : Service() {
         }
     }
     private var locationForeground = false
+    @Volatile private var diagnosticsSupported = false
     private fun canSample(command: Boolean = false) = TemporaryLocatePolicy.allowed(identity.allowLocate, command, identity.allowCommands, hasLocation(this), locationForeground) && !ManagementAgent.blocksPersonalOperation(this)
     private fun updateLocationStatus() {
         val device = DeviceStateMonitor.snapshot(this)
@@ -113,10 +114,15 @@ class TelemetryService : Service() {
         } finally { runCatching { alarms.cancel(tickIntent) } }
     }
     private val tunnelOwner = Any()
-    private val networkChanged = Channel<Unit>(Channel.CONFLATED)
+    private val connectionWakeup = Channel<Unit>(Channel.CONFLATED)
+    private val tunnelRestartRequested = AtomicBoolean(false)
+    private fun wakeForNetworkChange() {
+        tunnelRestartRequested.set(true)
+        connectionWakeup.trySend(Unit)
+    }
     private val callback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(value: Network) { network = value; networkChanged.trySend(Unit) }
-        override fun onLost(value: Network) { if (network == value) { network = null; networkChanged.trySend(Unit) } }
+        override fun onAvailable(value: Network) { network = value; wakeForNetworkChange() }
+        override fun onLost(value: Network) { if (network == value) { network = null; wakeForNetworkChange() } }
     }
     private fun elapsed() = SystemClock.elapsedRealtime()
     private suspend fun updateQueueStatus() {
@@ -133,7 +139,10 @@ class TelemetryService : Service() {
         identity = Identity(this)
         val cm = getSystemService(ConnectivityManager::class.java)
         network = runCatching { cm.activeNetwork }.getOrNull()
-        watchingNetwork = runCatching { cm.registerDefaultNetworkCallback(callback); true }.getOrDefault(false)
+        watchingNetwork = runCatching {
+            cm.registerDefaultNetworkCallback(callback)
+            true
+        }.getOrDefault(false)
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel("sharing", "Private household connection", NotificationManager.IMPORTANCE_LOW))
         nm.createNotificationChannel(NotificationChannel("recovery", "Phone recovery messages", NotificationManager.IMPORTANCE_HIGH).apply { lockscreenVisibility = Notification.VISIBILITY_PUBLIC })
@@ -242,15 +251,18 @@ class TelemetryService : Service() {
             var nextTelemetry = 0L
             var nextPhotoAttempt = 0L
             var advertised: List<String>? = null
+            suspend fun handleWakeup() {
+                if (tunnelRestartRequested.getAndSet(false)) {
+                    withContext(Dispatchers.IO) { HomeTunnel.disconnectOwned(tunnelOwner) }
+                }
+                retry.networkChanged(elapsed())
+            }
             while (isActive) {
                 if (LocalSafety.isStopped(this@TelemetryService) || ManagementAgent.blocksPersonalOperation(this@TelemetryService)) {
                     if (!LocalSafety.isStopped(this@TelemetryService)) SharingHistory.ended(this@TelemetryService, SharingReason.MANAGEMENT_BLOCKED)
                     stopSelf(); break
                 }
-                if (networkChanged.tryReceive().isSuccess) {
-                    withContext(Dispatchers.IO) { HomeTunnel.disconnectOwned(tunnelOwner) }
-                    retry.networkChanged(elapsed())
-                }
+                if (connectionWakeup.tryReceive().isSuccess) handleWakeup()
                 val noNetwork = watchingNetwork && network == null
                 val wait = if (noNetwork) 60_000L else (retry.nextAttempt - elapsed()).coerceAtLeast(0)
                 if (noNetwork || wait > 0) {
@@ -258,11 +270,9 @@ class TelemetryService : Service() {
                         withContext(Dispatchers.IO) { HomeTunnel.disconnectOwned(tunnelOwner) }
                         status.value = status.value.copy(running = true, connected = false, text = "No network · GPS stays queued on this phone", nextRetryAt = null)
                     }
-                    val event = withTimeoutOrNull(wait.coerceAtLeast(1)) { networkChanged.receive(); true } == true
-                    if (event) {
-                        withContext(Dispatchers.IO) { HomeTunnel.disconnectOwned(tunnelOwner) }
-                        retry.networkChanged(elapsed())
-                    } else if (noNetwork) {
+                    val event = withTimeoutOrNull(wait.coerceAtLeast(1)) { connectionWakeup.receive(); true } == true
+                    if (event) handleWakeup()
+                    else if (noNetwork) {
                         val available = runCatching { getSystemService(ConnectivityManager::class.java).activeNetwork }.getOrNull()
                         if (available != null) { network = available; retry.networkChanged(elapsed()) }
                     }
@@ -276,6 +286,7 @@ class TelemetryService : Service() {
                     val probeStarted = elapsed()
                     val polled = try { withContext(Dispatchers.IO) { api.request("/v1/commands") }.also { if (!identity.profileCompanion) ConnectionHealth.success(elapsed()-probeStarted) } } catch (e: Exception) { if (!identity.profileCompanion) ConnectionHealth.failed(); throw e }
                     status.value = status.value.copy(connected = true)
+                    diagnosticsSupported = polled.optBoolean("diagnostics_supported")
                     withContext(Dispatchers.IO) { identity.reconcileGpsEpoch(polled.getString("gps_epoch")) }
                     polled.optString("photo_epoch").takeIf { it.isNotEmpty() }?.let { epoch -> withContext(Dispatchers.IO) { identity.reconcilePhotoEpoch(epoch) } }
                     val batch = polled.getJSONArray("commands")
@@ -388,7 +399,10 @@ class TelemetryService : Service() {
                             if (samples.size >= minimum && SystemClock.elapsedRealtimeNanos()-started >= duration*750_000) finish(location)
                         }
                     }
-                    continuation.invokeOnCancellation { done.set(true); runCatching { manager.removeUpdates(listener) } }
+                    continuation.invokeOnCancellation {
+                        done.set(true)
+                        runCatching { manager.removeUpdates(listener) }
+                    }
                     try {
                         ticket = PrivacySends.fence.reserve(stamp, { disclosureAllowed(epoch, command) }, { finish(null) })
                         PrivacySends.fence.checked(stamp, { disclosureAllowed(epoch, command) && !done.get() }) {
@@ -529,6 +543,11 @@ class TelemetryService : Service() {
                 receipt.put("status", "rejected").put("result", "Permission or local consent was revoked")
             } else {
                 val result = when (kind) {
+                    "diagnostics" -> {
+                        val checks = withContext(Dispatchers.IO) { PhoneDiagnostics.collect(this@TelemetryService, identity, locationForeground) }
+                        identity.ifCommandsAllowed { LocalSafety.ifAllowed(this) { receipt.put("diagnostic_checks", checks) } }
+                        "Phone diagnostics completed"
+                    }
                     "take_picture" -> {
                         val actionContext = currentCoroutineContext()
                         ArmedCameraService.takePicture {
@@ -649,7 +668,7 @@ class TelemetryService : Service() {
         if (watchingTick) runCatching { unregisterReceiver(tickReceiver); getSystemService(AlarmManager::class.java).cancel(tickIntent) }
         runCatching { getSystemService(NotificationManager::class.java).cancel(3) }
         stopRinging(); scope.cancel()
-        networkChanged.close()
+        connectionWakeup.close()
         val stopped = LocalSafety.isStopped(this)
         Thread { runCatching {
             if (stopped) RecoveryConnection.current.stop() else HomeTunnel.disconnectOwned(tunnelOwner)
@@ -658,7 +677,7 @@ class TelemetryService : Service() {
     }
     companion object {
         @Volatile private var activeService: TelemetryService? = null
-        fun requestPhotoUpload() { activeService?.networkChanged?.trySend(Unit) }
+        fun requestPhotoUpload() { activeService?.connectionWakeup?.trySend(Unit) }
         val status = MutableStateFlow(SharingStatus())
         const val ACTION_SAMPLE_TICK = "org.bungee.app.SAMPLE_TICK"
         /** Process-wide: the periodic delivery report reads it. It restarts with the process, never persists coordinates. */
@@ -676,6 +695,7 @@ class TelemetryService : Service() {
                 }
                 if (hasLocation(context) && (activeService?.locationForeground == true || hasBackgroundLocation(context))) addAll(listOf("locate", "best_guess"))
                 addAll(listOf("ring", "stop_ringing", "stop_all"))
+                if (activeService?.diagnosticsSupported == true) add("diagnostics")
                 if (RecoveryAlarm.flashCamera(context) != null) addAll(listOf("flash", "ring_flash"))
                 if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) addAll(listOf("message", "clear_message"))
                 if (context.getSystemService(DevicePolicyManager::class.java).isAdminActive(ComponentName(context, BungeeAdminReceiver::class.java))) add("lock")

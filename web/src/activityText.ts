@@ -22,7 +22,7 @@ const actions: Record<string, string> = {
   "device.reconnected": "Phone reconnected", "device.archive_erased": "Saved phone record deleted", "device.binding_purged": "Inactive pairing keys removed",
   "enrollment.created": "Invitation created", "enrollment.reissued": "Invitation reissued", "enrollment.reclaimed": "Unused invitation reclaimed", "profiles.enabled": "Android profiles enabled",
   "command.queued": "Command queued", "command.receipt": "Command receipt received", "command.canceled": "Command canceled", "policy.updated": "Recovery policy updated",
-  "history.erased": "Saved history erased", "history.imported": "History imported", "location.erased": "All saved GPS erased", "location.purged": "Older saved GPS purged",
+  "history.erased": "Saved history erased", "history.imported": "History imported", "location.erased": "All saved GPS erased", "location.purged": "Older saved GPS purged", "location.erased_all": "Saved GPS erased for all phones",
   "photo.erased": "Recovery photo erased", "photos.erased": "Recovery photos erased", "photos.all_erased": "All recovery photos erased", "maps.queued": "Map download queued",
   "activity.purged": "Activity log purged", "retention.updated": "Automatic cleanup changed",
 };
@@ -52,7 +52,7 @@ export function lateDelivery(at: number | null, recordedAt: number, receivedAt: 
   return receivedAt - (at ?? recordedAt) > 300;
 }
 
-export type Filter = { device: string; group: string };
+export type Filter = { device: string; group: string; from?: number; to?: number };
 export const groups: Array<[string, string]> = [
   ["all", "Everything"], ["admin", "Administrator actions"], ["phone", "Everything reported by phones"],
   ["device_state", "Airplane mode, location and GPS gaps"], ["sharing", "Sharing start and stop"],
@@ -60,6 +60,8 @@ export const groups: Array<[string, string]> = [
 export const activityQuery = (filter: Filter, before: string | null, limit = 50) => {
   const q = new URLSearchParams({ limit: String(limit), group: filter.group });
   if (filter.device) q.set("device", filter.device);
+  if (filter.from != null) q.set("from", String(filter.from));
+  if (filter.to != null) q.set("to", String(filter.to));
   if (before) q.set("before", before);
   return `?${q.toString()}`;
 };

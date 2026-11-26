@@ -393,7 +393,7 @@ fn issue_for(
             .find(|ip| !used.contains(ip))
             .ok_or_else(|| bad("Household device limit reached"))?;
         retire_binding(&tx, target)?;
-        tx.execute("UPDATE devices SET name=?,wg_key=?,address=?,wg_psk=?,revoked=0,binding_released=0,last_contact=NULL,last_seen=NULL WHERE id=?",params![input.name.trim(),input.wg_public_key,address,psk,target])?;
+        tx.execute("UPDATE devices SET name=?,wg_key=?,address=?,wg_psk=?,revoked=0,binding_released=0,last_contact=NULL,last_seen=NULL,last_poll=NULL WHERE id=?",params![input.name.trim(),input.wg_public_key,address,psk,target])?;
         tx.execute(
             "INSERT INTO enrollments(hash,device_id,expires) VALUES(?,?,?)",
             params![hash(&code), target, now() + 600],

@@ -32,7 +32,7 @@ test("the Activity page browses every entry, explains airplane and location even
 
   const browser = await launch();
   t.after(() => browser.close());
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1050 } }), [name, value] = f.cookie.split("=");
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1050 }, timezoneId: "UTC" }), [name, value] = f.cookie.split("=");
   await context.addCookies([{ name, value, url: f.origin }]);
   const page = await context.newPage(), errors = [];
   page.on("pageerror", e => errors.push(e.message));
@@ -65,6 +65,14 @@ test("the Activity page browses every entry, explains airplane and location even
   await feed.getByLabel("Show").selectOption("device_state");
   await page.waitForFunction(() => document.querySelectorAll(".activity-list > li").length === 6);
   assert.equal(await feed.locator(".activity-list > li").count(), 6);
+  const local = seconds => new Date(seconds * 1000).toISOString().slice(0, 16);
+  await feed.getByLabel("From (local time)").fill(local(base - 1900));
+  await feed.getByLabel("To (local time)").fill(local(base - 1500));
+  await feed.getByRole("button", { name: "Apply filter" }).click();
+  await page.waitForFunction(() => document.querySelectorAll(".activity-list > li").length === 2);
+  await feed.getByText("Location turned off", { exact: false }).waitFor();
+  await feed.getByRole("button", { name: "Clear filter" }).click();
+  await page.waitForFunction(() => document.querySelectorAll(".activity-list > li").length === 6);
   await feed.getByLabel("Show").selectOption("all");
   await page.waitForFunction(() => document.querySelectorAll(".activity-list > li").length === 50);
 
@@ -96,6 +104,29 @@ test("the Activity page browses every entry, explains airplane and location even
   await care.getByText("3 saved GPS points removed. The newest point was kept.", { exact: true }).waitFor();
   assert.deepEqual(f.sql("SELECT observed_at FROM location_history ORDER BY observed_at").map(r => r[0]), [base - 3 * day]);
   assert.equal((await (await p.request("/v1/commands", {})).json()).gps_epoch, before);
+
+  // All phones can be purged together, keeping each latest fix when an age is set.
+  const other = await phone(f, { name: "Second phone" });
+  assert.equal((await other.request("/v1/telemetry", {
+    battery: 63, charging: false, device_owner: false, capabilities: ["locate"], gps_epoch: other.epoch,
+    locations: [50, 2].map(d => ({ latitude: 38.9, longitude: -77.03, accuracy: 9, observed_at: base - d * day })),
+  })).status, 200);
+  await care.getByLabel("Phone whose GPS to purge").selectOption("all");
+  await care.getByRole("button", { name: "Purge GPS…" }).click();
+  await care.getByRole("button", { name: "Confirm purge" }).click();
+  await care.getByText("1 saved GPS point removed. Each phone’s newest point was kept.", { exact: true }).waitFor();
+  assert.equal(f.sql("SELECT COUNT(*) FROM location_history")[0][0], 2);
+  const checkins = f.sql("SELECT COUNT(*) FROM state_history")[0][0];
+
+  await care.getByLabel("GPS age to purge").selectOption("0");
+  await care.getByRole("button", { name: "Purge GPS…" }).click();
+  assert.equal(f.sql("SELECT COUNT(*) FROM location_history")[0][0], 2);
+  await care.getByRole("button", { name: "Confirm purge" }).click();
+  await care.getByText("Saved GPS erased for all phones.", { exact: true }).waitFor();
+  assert.equal(f.sql("SELECT COUNT(*) FROM location_history")[0][0], 0);
+  assert.equal(f.sql("SELECT COUNT(*) FROM state_history")[0][0], checkins);
+  assert.notEqual((await (await p.request("/v1/commands", {})).json()).gps_epoch, before);
+  assert.notEqual((await (await other.request("/v1/commands", {})).json()).gps_epoch, other.epoch);
 
   // Automatic cleanup is saved and reported back.
   await care.getByLabel("Automatic GPS cleanup age").selectOption("365");

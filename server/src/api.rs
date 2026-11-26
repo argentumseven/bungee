@@ -171,7 +171,7 @@ pub async fn devices(State(app): State<App>, headers: HeaderMap) -> ApiResult<Js
     let db = app.db.lock().unwrap();
     // Recovery data survives long outages. Freshness is described by timestamps, not deletion.
     let mut q=db.prepare("SELECT id,name,address,created,last_seen,revoked,telemetry,capabilities,public_key IS NOT NULL,last_location,wg_psk IS NOT NULL,management_report,last_contact,(SELECT MAX(expires) FROM enrollments WHERE device_id=devices.id),wg_key,binding_released,primary_device_id,profiles_enabled,main_profile_name,management_report_at,profile_fingerprint IS NOT NULL,
-        (SELECT conflict_at FROM device_runtimes WHERE device_id=devices.id),runtime_required FROM devices ORDER BY created")?;
+        (SELECT conflict_at FROM device_runtimes WHERE device_id=devices.id),runtime_required,last_poll FROM devices ORDER BY created")?;
     let rows=q.query_map([],|r| {
         let location = r.get::<_,Option<String>>(9)?.and_then(|s|serde_json::from_str::<Value>(&s).ok());
         let mut telemetry = r.get::<_,Option<String>>(6)?.and_then(|s|serde_json::from_str::<Value>(&s).ok());
@@ -186,7 +186,7 @@ pub async fn devices(State(app): State<App>, headers: HeaderMap) -> ApiResult<Js
         "profiles_enabled":r.get::<_,bool>(17)?,"main_profile_name":r.get::<_,Option<String>>(18)?,
         "management_report_at":r.get::<_,Option<i64>>(19)?,"profile_identity_confirmed":r.get::<_,bool>(20)?,
         "duplicate_blocked_at":r.get::<_,Option<i64>>(21)?,"runtime_protected":r.get::<_,bool>(22)?,
-        "telemetry":telemetry,"last_location":location,"last_contact":r.get::<_,Option<i64>>(12)?,
+        "telemetry":telemetry,"last_location":location,"last_contact":r.get::<_,Option<i64>>(12)?,"last_poll":r.get::<_,Option<i64>>(23)?,
         "network":crate::geography::latest(&db,&r.get::<_,String>(0)?)?,
         "capabilities":serde_json::from_str::<Vec<String>>(&r.get::<_,String>(7)?).unwrap_or_default().into_iter().filter(|kind|kind!="reboot" && kind!="dns_check").collect::<Vec<_>>(),
         "enrolled":r.get::<_,bool>(8)?,
@@ -219,6 +219,7 @@ pub struct Pair {
 }
 const CAPABILITIES: &[&str] = &[
     "locate",
+    "diagnostics",
     "best_guess",
     "ring",
     "ring_flash",
@@ -540,12 +541,15 @@ pub(crate) fn erase_history(
     require_admin(app, headers)?;
     let mut db = app.db.lock().unwrap();
     let tx = db.transaction()?;
-    let changed = tx.execute("UPDATE devices SET history_revision=history_revision+1,gps_epoch=?,
-        location_floor=MAX(location_floor,COALESCE(json_extract(last_location,'$.observed_at'),0),?),
-        last_location=NULL WHERE id=? AND revoked=0 AND public_key IS NOT NULL", params![token(),now(),id])?;
-    if changed != 1 {
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM devices WHERE id=? AND revoked=0 AND public_key IS NOT NULL)",
+        [id],
+        |row| row.get(0),
+    )?;
+    if !exists {
         return Err(Error(StatusCode::NOT_FOUND, "Enrolled device not found"));
     }
+    reset_gps(&tx, id, now())?;
     tx.execute("DELETE FROM location_history WHERE device_id=?", [id])?;
     if include_state {
         crate::sharing::erase(&tx, id)?;
@@ -569,6 +573,13 @@ pub(crate) fn erase_history(
     )?;
     tx.commit()?;
     Ok(Json(json!({"cleared":true})))
+}
+
+pub(crate) fn reset_gps(db: &rusqlite::Connection, id: &str, cutoff: i64) -> rusqlite::Result<()> {
+    db.execute("UPDATE devices SET history_revision=history_revision+1,gps_epoch=?,
+        location_floor=MAX(location_floor,COALESCE(json_extract(last_location,'$.observed_at'),0),?),
+        last_location=NULL WHERE id=?", params![token(),cutoff,id])?;
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -620,6 +631,18 @@ pub async fn command(
         // Stop requests bypass a full queue and invalidate old offers in the same commit.
         tx.execute("UPDATE commands SET status='canceled',canceled_at=?,canceled_after_offer=(status='delivered'),result='Canceled by Stop all actions' WHERE device_id=? AND status IN ('pending','delivered')",params![now(),id])?;
         tx.execute("INSERT INTO device_policies(device_id,revision,policy) VALUES(?,1,?) ON CONFLICT(device_id) DO UPDATE SET revision=revision+1,policy=excluded.policy",params![id,serde_json::to_string(&crate::management::Policy::default()).unwrap()])?;
+    }
+    if input.kind == "diagnostics" {
+        let outstanding = tx.query_row(
+            "SELECT id,expires FROM commands WHERE device_id=? AND kind='diagnostics' AND status IN ('pending','delivered') AND expires>? ORDER BY created DESC LIMIT 1",
+            params![id, now()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        ).optional()?;
+        if let Some((command, expires)) = outstanding {
+            return Ok(Json(
+                json!({"id":command,"status":"pending","expires":expires}),
+            ));
+        }
     }
     let pending:i64=tx.query_row("SELECT count(*) FROM commands WHERE device_id=? AND status IN ('pending','delivered') AND expires>?",params![id,now()],|r|r.get(0))?;
     if pending >= 10 {
@@ -719,6 +742,12 @@ pub async fn poll(
     let input: Poll = serde_json::from_slice(&body).map_err(|_| bad("Invalid command poll"))?;
     let db = app.db.lock().unwrap();
     crate::runtime::fence(&db, &id, &headers)?;
+    if !input.only_stop {
+        db.execute(
+            "UPDATE devices SET last_poll=MAX(COALESCE(last_poll,0),?) WHERE id=?",
+            params![now(), id],
+        )?;
+    }
     if crate::profiles::companion(&db, &id)? {
         db.execute("UPDATE commands SET status='rejected',result='Not available to a profile companion' WHERE device_id=? AND kind NOT IN ('message','clear_message','stop_all','take_picture') AND status IN ('pending','delivered')", [&id])?;
     }
@@ -736,7 +765,7 @@ pub async fn poll(
         |r| r.get(0),
     )?;
     Ok(Json(
-        json!({"commands":list,"gps_epoch":epoch,"photo_epoch":db.query_row("SELECT photo_epoch FROM devices WHERE id=?",[&id],|r|r.get::<_,String>(0))?,"server_time":now()}),
+        json!({"commands":list,"diagnostics_supported":true,"gps_epoch":epoch,"photo_epoch":db.query_row("SELECT photo_epoch FROM devices WHERE id=?",[&id],|r|r.get::<_,String>(0))?,"server_time":now()}),
     ))
 }
 #[derive(Deserialize)]
@@ -745,6 +774,7 @@ pub struct Ack {
     status: String,
     result: String,
     attempted_at: Option<i64>,
+    diagnostic_checks: Option<Vec<crate::diagnostics::Check>>,
 }
 pub async fn ack(
     State(app): State<App>,
@@ -767,16 +797,21 @@ pub async fn ack(
     // A restored server may not know an offered command yet. Preserve the phone's
     // journal in every non-matching case so later polls/restoration can reconcile it.
     let received = now();
-    let row: Option<(String, Option<String>, i64, i64, String)> = db
+    let row: Option<(String, Option<String>, i64, i64, String, Option<String>)> = db
         .query_row(
-            "SELECT status,result,created,expires,kind FROM commands WHERE id=? AND device_id=?",
+            "SELECT status,result,created,expires,kind,diagnostic_checks FROM commands WHERE id=? AND device_id=?",
             params![input.id, id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
         )
         .optional()?;
     let disposition = match row {
         None => "unknown_command",
-        Some((status, result, created, expires, kind)) => {
+        Some((status, result, created, expires, kind, recorded_checks)) => {
+            let checks = crate::diagnostics::validate(
+                &kind,
+                &input.status,
+                input.diagnostic_checks.as_deref(),
+            )?;
             if status == "canceled" {
                 // Settle the durable phone receipt, while preserving the cancellation.
                 // Work already offered may have run; keep its actual result visible.
@@ -788,7 +823,10 @@ pub async fn ack(
             let offered = status == "delivered"
                 || (status == "accepted" && kind == "reboot" && input.status == "failed");
             if !offered && status != "pending" {
-                if status == input.status && result.as_deref() == Some(input.result.as_str()) {
+                if status == input.status
+                    && result.as_deref() == Some(input.result.as_str())
+                    && recorded_checks == checks
+                {
                     "already_terminal"
                 } else {
                     "conflicting_terminal"
@@ -807,8 +845,8 @@ pub async fn ack(
             } else if input.status == "accepted" && kind != "reboot" {
                 "invalid_status"
             } else {
-                db.execute("UPDATE commands SET status=?,result=?,receipt_received_at=? WHERE id=? AND device_id=?",
-                    params![input.status,input.result,received,input.id,id])?;
+                db.execute("UPDATE commands SET status=?,result=?,receipt_received_at=?,diagnostic_checks=? WHERE id=? AND device_id=?",
+                    params![input.status,input.result,received,checks,input.id,id])?;
                 "recorded"
             }
         }
