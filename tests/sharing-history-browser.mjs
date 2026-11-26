@@ -96,6 +96,8 @@ test("diagnostics reports return to their own panel and activity filters use eve
   await page.getByText(/Earlier activity fixture/).waitFor();
   await page.getByLabel("From (local time)").fill(new Date((now - 300) * 1000).toISOString().slice(0, 16));
   await page.getByRole("button", { name: "Apply filter", exact: true }).click();
+  // The feed keeps its previous rows until the filtered response arrives, so wait for the older entry to leave
+  // instead of asserting at once (that row, not the receipt, is what the filter changes).
+  await page.getByText(/Earlier activity fixture/).waitFor({ state: "detached" });
   await page.getByText("Command receipt received", { exact: true }).waitFor();
-  assert.equal(await page.getByText(/Earlier activity fixture/).count(), 0);
 });
