@@ -15,7 +15,7 @@ npm run test:browser
 python3 scripts/check-doc-images.py
 ```
 
-Use Node 24 and installed Chromium/Firefox (or set `CHROME_BIN`/`FIREFOX_BIN`). Each fixture starts temporary local servers, creates its own test state and cleans it up. Tests save PNGs directly from the browser; the committed screenshots are not composited UI mockups. `tests/browser.mjs`, `profile-companions-browser.mjs`, `vector-browser.mjs`, `manual-photos-browser.mjs`, `sharing-history-browser.mjs`, `activity-browser.mjs` and `device-records-browser.mjs` own the captures. Timestamps in the captures are the time the fixture ran, so recapturing changes the image bytes. Some static illustrations can produce identical PNG bytes when recaptured.
+Use Node 24 and installed Chromium/Firefox (or set `CHROME_BIN`/`FIREFOX_BIN`). Each fixture starts temporary local servers, creates its own test state and cleans it up. Tests save PNGs directly from the browser; the committed screenshots are not composited UI mockups. `tests/browser.mjs`, `profile-companions-browser.mjs`, `vector-browser.mjs`, `manual-photos-browser.mjs`, `sharing-history-browser.mjs`, `activity-browser.mjs` and `device-records-browser.mjs` own the captures. Timestamps in the captures are the time the fixture ran, so recapturing changes the image bytes. Run the browser tests as an unprivileged user: the map-permission fixture in `vector-browser.mjs`, which takes the lead overview, depends on file permissions that root bypasses. Some static illustrations can produce identical PNG bytes when recaptured.
 
 ## Overview and recovery
 

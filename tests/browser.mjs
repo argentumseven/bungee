@@ -110,6 +110,8 @@ test("dashboard browser: sign in, enrollment, navigation, and mobile layout", as
     // Dismiss real transient UI so it cannot cover the history or connection details.
     await page.evaluate(() => document.querySelector('button[aria-label="Dismiss notification"]')?.click());
     await assertTheme("dark");
+    // An inner list scrolled by an earlier click would clip the first navigation row.
+    await page.evaluate(() => { scrollTo(0, 0); for (const e of document.querySelectorAll("*")) if (e.scrollTop) e.scrollTop = 0; });
     await page.screenshot({ path: `docs/screenshots/${name}.png`, fullPage: true, animations: "disabled" });
   }
   await t.test("appearance follows the OS, saves overrides and synchronizes tabs", async () => {

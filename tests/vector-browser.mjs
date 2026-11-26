@@ -42,6 +42,7 @@ test("the included overview renders with unreadable regional metadata and the do
  await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');
  await page.locator('.leaflet-tile-loaded').first().waitFor();await page.evaluate(()=>document.fonts.ready);
  await page.waitForFunction(()=>[...document.querySelectorAll('.leaflet-tile')].length>0&&[...document.querySelectorAll('.leaflet-tile')].every(img=>img.complete&&img.naturalWidth>0));
+ await page.evaluate(()=>{scrollTo(0,0);for(const e of document.querySelectorAll('*'))if(e.scrollTop)e.scrollTop=0;});
  await page.screenshot({path:'docs/screenshots/overview.png',fullPage:false,animations:'disabled'});
 });
 
@@ -95,7 +96,7 @@ test("vector archive renders with a local worker, local assets and authenticated
 
 
 test("regional maps can be planned in Settings and render labelled streets in GPS history",async t=>{
- const f=await fixture(t),p=await phone(f),root=join(f.dir,"map-control");
+ const f=await fixture(t),p=await phone(f,{name:"Avery's Pixel"}),root=join(f.dir,"map-control");
  await mkdir(join(root,"requests"),{recursive:true});await mkdir(join(root,"status"));await mkdir(join(f.dir,"maps","archives"),{recursive:true});
  const region={id:"us-south-atlantic",name:"South Atlantic",group:"United States",estimated_bytes:1048576,bounds:[-81,32,-79,34],max_zoom:15};
  const state={updated_at:Math.floor(Date.now()/1000),catalog:[region],installed:[],legacy_map_bytes:0,map_limit_bytes:25e9,job:{id:"initial",state:"completed",message:"Ready"},disk:{total_bytes:16*1024**3,free_bytes:10*1024**3,available_bytes:7*1024**3,reserve_bytes:3*1024**3,swap_total_bytes:2*1024**3,swap_used_bytes:0,swap_growth_reserve_bytes:2*1024**3,backing_free_bytes:20*1024**3,note:"Synthetic capacity fixture"}};
@@ -124,6 +125,7 @@ test("regional maps can be planned in Settings and render labelled streets in GP
  await page.setViewportSize({width:1440,height:1050});await page.getByRole("button",{name:"Tracking",exact:true}).click();await page.getByRole("button",{name:"GPS history",exact:true}).click();
  await page.locator(".maplibregl-canvas").waitFor();await page.getByText(/Nearby mapped street: Synthetic Main Street/).waitFor({timeout:15000});
  assert.equal(await page.locator(".history-trail").count(),0);assert.equal(await page.locator(".history-selection").count(),1);
+ await page.evaluate(()=>{scrollTo(0,0);for(const e of document.querySelectorAll('*'))if(e.scrollTop)e.scrollTop=0;});
  await page.screenshot({path:"docs/screenshots/regional-street-tracking.png"});
  assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
 });

@@ -8,13 +8,13 @@ This pass changed documentation, browser-fixture screenshot captures and one sty
 
 **What was documented.** The 1.1.24 behavior: active-profile focus and its limits, targeted profile commands, phone diagnostics, resumable and retried phone update downloads and what their messages (including `HTTP 404`) mean, date filters, GPS purge for all phones, read-only host `status`, and the renamed pages. Every dashboard label and number written into the documents was checked against the web, server and Android source, and several first drafts were corrected by that check.
 
-**Screenshots.** All captures were regenerated from the browser fixtures in a dark appearance, and six were added (device events, log storage and cleanup, the location-services notice, mobile Activity, phone diagnostics, phone app updates). They show synthetic fixture data. The container's fonts differ from the earlier captures, so every image changed.
+**Screenshots.** All captures were regenerated from the browser fixtures in a dark appearance, and six were added (device events, log storage and cleanup, the location-services notice, mobile Activity, phone diagnostics, phone app updates). They show synthetic fixture data. The container's fonts differ from the earlier captures, so every image changed. The lead overview and street-map captures come from `tests/vector-browser.mjs`, whose map-permission fixture only works for an unprivileged user, so that file and `tests/browser.mjs` were run as a non-root user to take them. The capture helpers now reset scrolled navigation lists first, because a list scrolled by an earlier click had clipped the first sidebar row in six images.
 
 | Check | Result |
 | --- | --- |
 | Documentation | `scripts/check-doc-images.py` passes (51 embedded images exist); 138 Python tests pass |
 | API (`npm test`) | 27 TypeScript-helper tests pass; 138 of 139 API tests pass. The one failure is "unreadable regional metadata cannot suppress the bundled overview…", which depends on file permissions and fails identically on unmodified code when run as root |
-| Browser | 44 of 47 Chromium checks pass and 2 Firefox checks were skipped (no Firefox installed). The one failure is the same "unreadable regional metadata" case |
+| Browser | 44 of 47 Chromium checks pass and 2 Firefox checks were skipped (no Firefox installed). The one failure is the same "unreadable regional metadata" case, which passes when the file is run as a non-root user (`vector-browser.mjs` 6 of 6, `browser.mjs` 20 of 20) |
 | Not run | Rust and Kotlin checks (no source changed in this pass), Android builds, Firefox, and every physical-device behavior. The documented 1.1.24 behaviors were reviewed against the source here, not exercised on a phone |
 
 ## 1.1.23: DDIL backfill, device-state events, and activity maintenance
