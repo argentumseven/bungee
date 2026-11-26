@@ -69,7 +69,7 @@ class HomeApi(private val identity: Identity, val clock: HomeClock = HomeClock()
         val remaining = HomeRequestBudget.remaining(timeoutMillis, deadlineElapsed, started, path)
         val response = JSONObject(if (reservation == null) {
             DisclosureRequest(PrivacySends.fence, { Transport.reserveRequest() }, { Transport.cancelRequest(it) })
-                .exchange(authorization, { identity.requestsAllowed() }, { minOf(remaining, deadlineElapsed - android.os.SystemClock.elapsedRealtime()) }) { request, budget ->
+                .exchange(authorization, { identity.requestsAllowed() }, { minOf(remaining, deadlineElapsed - android.os.SystemClock.elapsedRealtime()) }, maxMillis = HomeRequestBudget.maximum(path)) { request, budget ->
                     Transport.exchangeRequest(request, path, bytes.toString(Charsets.UTF_8), headers.toString(), budget)
                 }
         } else Transport.exchangeRequest(reservation, path, bytes.toString(Charsets.UTF_8), headers.toString(), remaining))

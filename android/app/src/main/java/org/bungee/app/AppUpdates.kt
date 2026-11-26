@@ -80,7 +80,7 @@ object AppUpdates {
             check(identity.requestsAllowed()) { "Bungee stopped or pairing changed. Reopen Bungee before resuming." }
             try {
                 if (!HomeTunnel.appContained) connect(context, identity, owner)
-                return api.request("/v1/app-update/chunk", JSONObject().put("sha256", release.sha).put("offset", offset))
+                return api.request("/v1/app-update/chunk", JSONObject().put("sha256", release.sha).put("offset", offset), timeoutMillis = HomeRequestBudget.CHUNK_MAX_MILLIS)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

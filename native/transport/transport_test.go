@@ -27,6 +27,9 @@ func randomKey() []byte {
 	}
 	return b
 }
+
+const slowResponse = 10500 * time.Millisecond
+
 func TestWireGuardRoundTripAndRequestBoundaries(t *testing.T) {
 	serverPrivate, clientPrivate, psk := randomKey(), randomKey(), randomKey()
 	serverPublic, _ := curve25519.X25519(serverPrivate, curve25519.Basepoint)
@@ -58,6 +61,14 @@ func TestWireGuardRoundTripAndRequestBoundaries(t *testing.T) {
 	waiting := make(chan struct{}, 4)
 	release := make(chan struct{})
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Bungee-Nonce") == "slow-response" {
+			// Longer than the old client-wide ten-second timeout, as on a weak cellular link.
+			io.Copy(io.Discard, r.Body)
+			time.Sleep(slowResponse)
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"accepted":true}`)
+			return
+		}
 		if r.Header.Get("X-Bungee-Nonce") == "large-response" || r.Header.Get("X-Bungee-Nonce") == "oversized-response" {
 			size := 175000
 			if r.Header.Get("X-Bungee-Nonce") == "oversized-response" {
@@ -128,6 +139,40 @@ func TestWireGuardRoundTripAndRequestBoundaries(t *testing.T) {
 	if err != nil || !strings.Contains(large, `"status":200`) {
 		t.Fatal("larger photo upload failed", err, large)
 	}
+	// A slow link must get the per-request budget (photo 60 s, APK chunk 30 s), not a hidden ten-second cap.
+	slow := make(chan error, 2)
+	for _, path := range []string{"/v1/photos", "/v1/app-update/chunk"} {
+		budget := int64(60000)
+		if path == "/v1/app-update/chunk" {
+			budget = 30000
+		}
+		go func(path string, budget int64) {
+			request, err := ReserveRequest()
+			if err != nil {
+				slow <- err
+				return
+			}
+			defer CancelRequest(request)
+			result, err := ExchangeRequest(request, path, `{}`, `{"X-Bungee-Nonce":"slow-response"}`, budget)
+			if err == nil && !strings.Contains(result, `"status":200`) {
+				err = fmt.Errorf("unexpected result %s", result)
+			}
+			slow <- err
+		}(path, budget)
+	}
+	for range 2 {
+		if err := <-slow; err != nil {
+			t.Fatal("slow response was cut off before its per-request deadline", err)
+		}
+	}
+	id, err = ReserveRequest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = ExchangeRequest(id, "/v1/app-update/chunk", `{}`, `{}`, 30001); err == nil {
+		t.Fatal("unbounded APK chunk deadline accepted")
+	}
+	CancelRequest(id)
 	id, err = ReserveRequest()
 	if err != nil {
 		t.Fatal(err)

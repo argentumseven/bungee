@@ -110,7 +110,7 @@ func Configure(configJSON string) error {
 			return stack.DialContextTCPAddrPort(ctx, apiAddress)
 		}}
 	ctx, cancel := context.WithCancel(context.Background())
-	peer := &engine{ctx, cancel, wg, &http.Client{Transport: transport, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, transport}
+	peer := &engine{ctx, cancel, wg, &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, transport}
 	active.Lock()
 	old := active.peer
 	active.peer = peer
@@ -186,9 +186,14 @@ func Exchange(path, body, headersJSON string) (string, error) {
 // The JSON result contains an HTTP status and body, never a redirect or provider URL.
 func ExchangeRequest(id int64, path, body, headersJSON string, timeoutMillis int64) (string, error) {
 	allowed := map[string]bool{"/v1/runtime": true, "/v1/enroll": true, "/v1/telemetry": true, "/v1/photos": true, "/v1/commands": true, "/v1/command-check": true, "/v1/ack": true, "/v1/sync": true, "/v1/app-update": true, "/v1/app-update/chunk": true}
+	// The per-request deadline below is the only time limit (the HTTP client has none, so it cannot
+	// silently shorten a larger budget): control requests 10 s, an APK chunk 30 s, a photo 60 s.
 	maxBody, maxTimeout := 32768, int64(10000)
 	if path == "/v1/photos" {
 		maxBody, maxTimeout = 2*1024*1024, 60000
+	}
+	if path == "/v1/app-update/chunk" {
+		maxTimeout = 30000
 	}
 	if !allowed[path] || len(body) > maxBody || !json.Valid([]byte(body)) || len(headersJSON) > 4096 {
 		return "", errors.New("invalid home request")

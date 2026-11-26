@@ -2,6 +2,13 @@
 
 Versions come from [`release.json`](release.json). Published APK assets include `build.json` with the exact source commit, version code, SHA-256 and signing certificate. Update the server before the matching phone app.
 
+## 1.1.25 — Android code 41
+
+**Phone app only.** The server is unchanged, so a 1.1.24 server works with a 1.1.25 phone and the reverse.
+
+- **Slow links.** A hidden ten-second limit in the phone's network layer cut off any request whose response took longer, however much time the request was meant to have. Recovery-photo uploads (up to 60 seconds) and app-update chunks (now up to 30 seconds) could therefore fail on a weak connection with **home server unreachable**. Each request now keeps only its own deadline: 10 seconds for ordinary requests, 30 for an update chunk and 60 for a photo. Ordinary requests are unchanged.
+- **Build only: nightly image refresh.** The scheduled "Refresh tested stable container images" run no longer fails every night when the newest release is an Android APK release. It checks the newest stable `vX.Y.Z` release, and does nothing, successfully, when there is none. It has no effect on the app, the server or signing.
+
 ## 1.1.24 — Android code 40
 
 **Update the server first, then the APK.** A 1.1.24 app sends its focus and diagnostics fields only when the server says it supports them, but the 1.1.23 device-state reports still need a 1.1.23 or newer server.

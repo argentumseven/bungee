@@ -16,13 +16,16 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if ! tag=$(gh api "repos/$REPOSITORY/releases/latest" --jq .tag_name 2>github-error.txt); then
-            if rg -q 'HTTP 404' github-error.txt; then
-              echo 'No stable release is available; nothing is promoted.'
-              exit 0
-            fi
+          # Android APK releases (android-<commit>) are published as ordinary releases, so
+          # "latest" is never the server release. Pick the newest stable vX.Y.Z release.
+          if ! tags=$(gh api --paginate "repos/$REPOSITORY/releases?per_page=100" --jq '.[] | select((.draft | not) and (.prerelease | not) and (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))) | .tag_name' 2>github-error.txt); then
             cat github-error.txt >&2
             exit 1
+          fi
+          tag=${tags%%$'\n'*}
+          if [[ -z "$tag" ]]; then
+            echo 'No stable release is available; nothing is promoted.'
+            exit 0
           fi
           [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           gh workflow run check.yml --repo "$REPOSITORY" --ref "$tag"
