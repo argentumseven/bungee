@@ -919,7 +919,17 @@ def install(root, config, from_stdin=False):
     print('Sign in with the administrator password you chose. Change it in Settings → Administrator password.')
 
 
-if __name__ == '__main__':
+def status(host):
+    # The generation pointer is atomic and generations are retained. Readers
+    # can inspect the committed configuration while a worker owns host.lock.
+    generation = host.current()
+    print('Version:', host.metadata(generation)['version'])
+    print('Maintenance:', (host.root / 'control/status').read_text().strip())
+    print('Transaction journal present:', (host.root / 'transaction.json').exists())
+    print(host.engine.compose(generation, 'ps', '--all'))
+
+
+def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=['install', 'configure', 'update', 'recover', 'status', 'datasets', 'basemap', 'geodata', 'maps-us', 'maps', 'map-worker', 'apk-worker', 'repair-maps', 'repair-boot', 'uninstall', 'password', 'rebuild'])
     parser.add_argument('--password-stdin', action='store_true', help='With install/password: read the new password from a dedicated stdin pipe')
@@ -982,8 +992,14 @@ if __name__ == '__main__':
         if args.command == 'install': install(root, CONFIG, args.password_stdin)
         else:
             preflight(root)
+            if args.command == 'status':
+                status(host)
+                return
             with (root / 'host.lock').open('a') as lock:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError as exc:
+                    raise ValueError('Another Bungee host operation is in progress. Retry after it finishes') from exc
                 if args.command == 'recover':
                     host.recover()
                     host.renew_tls()
@@ -1010,10 +1026,9 @@ if __name__ == '__main__':
                 elif args.command == 'update': host.update(manual=args.manual)
                 elif args.command == 'datasets': host.datasets(args.maps, args.geoip, args.clear_maps, args.clear_geoip)
                 elif args.command == 'configure': host.apply(CONFIG, host.metadata(host.current()))
-                else:
-                    print('Version:', host.metadata(host.current())['version'])
-                    print('Maintenance:', (root / 'control/status').read_text().strip())
-                    print('Interrupted transaction:', (root / 'transaction.json').exists())
-                    print(host.engine.compose(host.current(), 'ps', '--all'))
     except (ValueError, OSError, RuntimeError, EOFError, subprocess.SubprocessError) as exc:
         sys.exit(f'Bungee operation failed: {exc}. Inspect local status; phone configuration was not changed.')
+
+
+if __name__ == '__main__':
+    main()

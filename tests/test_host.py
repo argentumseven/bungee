@@ -126,6 +126,42 @@ class TransactionTests(unittest.TestCase):
         self.engine.old = self.old
         host.atomic(self.root / 'current.json', {'generation': self.old})
         host.atomic(self.root / 'control/status', 'open')
+    def test_status_reports_runtime_while_host_worker_holds_exclusive_lock(self):
+        fixture = """
+import importlib.util
+import sys
+
+script, root, command = sys.argv[1:]
+spec = importlib.util.spec_from_file_location('installed', script)
+helper = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(helper)
+helper.preflight = lambda root: None
+
+def compose(engine, generation, *args):
+    assert generation == helper.Host(engine.root).current()
+    assert args == ('ps', '--all')
+    return 'bungee-server-1 running (healthy)'
+
+helper.Engine.compose = compose
+sys.argv = [script, command, '--root', root]
+helper.main()
+"""
+        command = ['python3', '-c', fixture, str(host.HERE / 'bungee-host.py'), str(self.root)]
+        generation = (self.root / 'current.json').read_bytes()
+        with (self.root / 'host.lock').open('a') as lock:
+            host.fcntl.flock(lock, host.fcntl.LOCK_EX | host.fcntl.LOCK_NB)
+            status = subprocess.run([*command, 'status'], capture_output=True, text=True, timeout=5)
+            rebuild = subprocess.run([*command, 'rebuild'], capture_output=True, text=True, timeout=5)
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertIn('Version: 0.1.0', status.stdout)
+        self.assertIn('Maintenance: open', status.stdout)
+        self.assertIn('Transaction journal present: False', status.stdout)
+        self.assertIn('bungee-server-1 running (healthy)', status.stdout)
+        self.assertNotEqual(rebuild.returncode, 0)
+        self.assertIn('Another Bungee host operation is in progress', rebuild.stderr)
+        self.assertEqual((self.root / 'current.json').read_bytes(), generation)
+        self.assertFalse((self.root / 'transaction.json').exists())
+
     def test_map_repair_keeps_containers_generation_data_and_installed_maps(self):
         state=self.root/'map-control/status/state.json'
         state.write_text(json.dumps({'job':{'id':'old','state':'completed','message':'Ready'}}));state.chmod(0o600)
