@@ -16,17 +16,21 @@ Bungee connects consenting household phones to a server you run. Find a misplace
 
 | Feature | How it works |
 | --- | --- |
-| Find a phone | Last known GPS with its original time and accuracy, battery and separate connection status; request a temporary GPS fix even with automatic GPS sharing off. |
+| Find a phone | Last known GPS with its original time and accuracy, battery and separate connection status; request a temporary GPS fix even with automatic GPS sharing off. The dashboard shows when Android Location is switched off and can ask whoever has the phone to turn it on; no server or app can switch it on remotely. |
 | Keep location history | GPS, check-ins and separate approximate IP history; time ranges, recurring lookups, CSV export and restore. Records stay on your server until explicitly erased. |
-| Recover through outages | Encrypted offline GPS queue, bounded catch-up, reconnect backoff and durable command receipts. A lost connection does not erase saved history. |
+| Recover through outages | Encrypted offline GPS queue and bounded catch-up that sends saved fixes in batches after a reconnect, including after airplane mode, with reconnect backoff and durable command receipts. A lost connection does not erase saved history. |
 | Send recovery commands | Alarm, flash, message, ordinary Android lock, manual picture and Stop all. Commands require local approval and expire; the dashboard distinguishes offers from confirmed results. |
+| Check a phone's readiness | A diagnostics command runs local checks in the chosen profile (location services, location access, saved-GPS queue, connection, battery, notifications, theft-photo readiness) and returns ok / attention / info results. It reports settings only, never a position or photo. |
 | Use local maps | OpenStreetMap archives and offline GeoIP data served by your server. Choose regional street maps in Settings; tracking never falls back to a public tile service. |
 | Use Android sandbox profiles | One physical phone, one main installation and separately paired companions. Pictures, messages and diagnostics follow the active profile or one you choose, and the dashboard says when focus is unconfirmed. Profiles retain separate identities and permissions. |
-| Understand sharing stops | Phone and web timelines distinguish manual actions, Android-reported crashes, errors and unknown exits. Offline events sync after reconnecting. |
+| Understand sharing stops | Phone and web timelines distinguish manual actions, Android-reported crashes, errors and unknown exits. Offline events sync after reconnecting. The phone also records airplane mode, Android Location, GPS-provider and location-permission changes and long GPS gaps with the circumstances Android exposes; Android does not say who changed a setting. |
+| Audit and maintain activity | **Activity** is a complete, paginated history of administrator actions and phone-reported events, filterable by phone, kind and time. Purge activity or saved GPS for one phone or all phones, entirely or older than a chosen age. The server also trims its own logs to fixed limits and never removes a phone's newest GPS point by age. |
 
 The [complete feature reference](docs/FEATURES.md) covers limits and implementation details. The [profile guide](docs/PROFILE-COMPANIONS.md) illustrates pairing across Android users.
 
 ![GPS history and locally served street labels, using synthetic locations and map data](docs/screenshots/regional-street-tracking.png)
+
+![Activity history of airplane-mode, location and GPS-gap events with circumstances and date filters, using synthetic data](docs/screenshots/activity-device-state.png)
 
 ## How it connects
 
@@ -73,7 +77,7 @@ sudo python3 scripts/bungee-host.py rebuild &&
 sudo python3 /opt/bungee/bungee-host.py status
 ```
 
-A Git pull updates source; `rebuild` updates the running dashboard and containers. It preserves configuration, pairing and history, creates an encrypted cold snapshot, and checks the candidate with rollback on failure. After a version update, install the matching APK from **Settings → Phone app updates** or GitHub Releases. Routine updates keep app data and require Android's installation confirmation.
+A Git pull updates source; `rebuild` updates the running dashboard and containers. It preserves configuration, pairing and history, creates an encrypted cold snapshot, and checks the candidate with rollback on failure. After a version update, install the matching APK from **Settings → Phone app updates** or GitHub Releases. Routine updates keep app data and require Android's installation confirmation. The host fetches the signed APK for the exact commit it builds, and GitHub publishes it only after that commit's build passes. If it is not ready yet, **Settings → Phone app updates** shows `APK download returned HTTP 404` and retries each minute while the server keeps running ([what the messages mean](docs/MANAGEMENT.md#how-a-phone-gets-its-update-and-what-the-messages-mean)).
 
 The optional host timer instead checks the published container channel; a main-branch source change need not already be in that channel. Keep the timer enabled for certificate maintenance even when automatic software updates are disabled. See [updates, backups and recovery](docs/INSTALL.md#updates-encrypted-backups-and-recovery-keys).
 
@@ -83,7 +87,7 @@ WireGuard protects the phone connection; separate signed requests bind messages 
 
 Persistent server state lives on LUKS2 storage, and cold backups are age-encrypted. Unattended startup uses a key stored on the host: this protects an image copied without its key, **not a compromised running host, root access, or a provider snapshot containing the key**. The server administrator can read stored locations and photos. This is not end-to-end encryption that hides records from your server.
 
-Bungee is maintained by a small project and has no documented independent security audit. Automated checks and their limits are in [Validation](docs/VALIDATION.md). Real-device behavior depends on Android permissions, profile state, camera availability and background restrictions. A force-stopped or offline app cannot immediately receive a command. There is no powered-off finding, crowdsourced network, remote wipe, credential reset, hidden enrollment or remote camera enablement. Use it with the device owner's knowledge and approval.
+Bungee is maintained by a small project and has no documented independent security audit. Automated checks and their limits are in [Validation](docs/VALIDATION.md). Real-device behavior depends on Android permissions, profile state, camera availability and background restrictions. A force-stopped or offline app cannot immediately receive a command. Android gives no app a way to switch Location or airplane mode on remotely, so Bungee can only ask whoever has the phone to do it. There is no powered-off finding, crowdsourced network, remote wipe, credential reset, hidden enrollment or remote camera enablement. Use it with the device owner's knowledge and approval.
 
 The full [security design](docs/SECURITY.md) explains the trust model, network rules, key placement, retention, erasure and update trust. [Report a security issue](SECURITY.md).
 
@@ -93,7 +97,7 @@ All [screenshots](docs/SCREENSHOTS.md) are captured from the running application
 
 - [Installation and troubleshooting](docs/INSTALL.md) · [HTTPS certificates](docs/HTTPS.md)
 - [Phone and app updates](docs/MANAGEMENT.md) · [Android profiles](docs/PROFILE-COMPANIONS.md)
-- [Location history and outages](docs/DDIL.md) · [Sharing history](docs/SHARING_HISTORY.md)
+- [Location history and outages](docs/DDIL.md) · [Sharing history and activity](docs/SHARING_HISTORY.md) · [Airplane mode](docs/AIRPLANE_MODE.md)
 - [Maps, downloads and licenses](docs/GEOGRAPHY.md) · [Network topology](docs/NETWORK-TOPOLOGY.md)
 - [Contributing and local checks](CONTRIBUTING.md) · [Roadmap](docs/ROADMAP.md)
 
