@@ -1,6 +1,6 @@
 # Screenshots
 
-These captures come from the running Bungee web manager built from the current **1.1.22** source and this documentation/update-help revision. The browser fixtures use fictional household names, signed simulated phones, synthetic locations/GeoIP and either bundled or synthetic maps, disposable invitations and a synthetic camera-test image. They contain no real household records. The lead overview uses the actual bundled Natural Earth world map with a simulated GPS point; other map fixtures demonstrate rendering and local delivery, not real geography or the production map catalogue.
+These captures come from the running Bungee web manager built from the current **1.1.24** source and this documentation revision. Every capture uses the manager's dark appearance (the browser fixtures ask for a dark colour scheme; the manager follows the browser's or phone's light/dark setting). The browser fixtures use fictional household names, signed simulated phones, synthetic locations/GeoIP and either bundled or synthetic maps, disposable invitations and a synthetic camera-test image. They contain no real household records. The lead overview uses the actual bundled Natural Earth world map with a simulated GPS point; other map fixtures demonstrate rendering and local delivery, not real geography or the production map catalogue.
 
 Mobile captures show the **web manager at a 390-pixel viewport**, not the Android app. Notification previews are in-app illustrations. These screenshots do not establish physical Android camera, background-service or profile-switch behavior.
 
@@ -15,7 +15,7 @@ npm run test:browser
 python3 scripts/check-doc-images.py
 ```
 
-Use Node 24 and installed Chromium/Firefox (or set `CHROME_BIN`/`FIREFOX_BIN`). Each fixture starts temporary local servers, creates its own test state and cleans it up. Tests save PNGs directly from the browser; the committed screenshots are not composited UI mockups. `tests/browser.mjs`, `profile-companions-browser.mjs`, `vector-browser.mjs`, `manual-photos-browser.mjs`, `sharing-history-browser.mjs` and `device-records-browser.mjs` own the captures. Some static illustrations can produce identical PNG bytes when recaptured.
+Use Node 24 and installed Chromium/Firefox (or set `CHROME_BIN`/`FIREFOX_BIN`). Each fixture starts temporary local servers, creates its own test state and cleans it up. Tests save PNGs directly from the browser; the committed screenshots are not composited UI mockups. `tests/browser.mjs`, `profile-companions-browser.mjs`, `vector-browser.mjs`, `manual-photos-browser.mjs`, `sharing-history-browser.mjs`, `activity-browser.mjs` and `device-records-browser.mjs` own the captures. Timestamps in the captures are the time the fixture ran, so recapturing changes the image bytes. Some static illustrations can produce identical PNG bytes when recaptured.
 
 ## Overview and recovery
 
@@ -43,11 +43,11 @@ Camera readiness, recovery settings and sharing state.
 
 ![Device care in the Bungee web manager](screenshots/device-care.png)
 
-### Recovery photos
+### Recovery captures
 
-A clearly labelled synthetic camera-test image; no household photo is published.
+The **Recovery captures** page, with a clearly labelled synthetic camera-test image; no household photo is published.
 
-![Recovery photos in the Bungee web manager](screenshots/recovery-photos.png)
+![Recovery captures in the Bungee web manager](screenshots/recovery-photos.png)
 
 ### Recovery message preview
 
@@ -105,6 +105,26 @@ The host-download status UI with synthetic map catalogue/capacity data.
 
 ![Maps and storage in the Bungee web manager](screenshots/maps-storage.png)
 
+## Activity and device events
+
+### Phone-reported device events
+
+The Activity page filtered to airplane mode, Android Location and GPS gaps, with the **From (local time)** and **To (local time)** filter. Each entry shows its circumstances, whether it was reported after reconnecting, and when the server received it; an event found after Bungee was not running says its exact time is unknown. Names and events are synthetic.
+
+![Activity feed with airplane-mode, location and GPS-gap events, circumstances, and date filters](screenshots/activity-device-state.png)
+
+### Log storage and cleanup
+
+Stored counts, the server's size limits, automatic cleanup choices, and separate purge controls for the activity log and saved GPS. A purge names the phone and the amount it removes before it is confirmed.
+
+![Log storage and cleanup with automatic cleanup and purge controls](screenshots/activity-cleanup.png)
+
+### Location services off
+
+The notice on a phone that last reported Android Location off. It explains that no server or app can switch Location on remotely and offers a message asking whoever has the phone to do so.
+
+![Notice that Android location services were off, with a button asking the phone's holder to turn Location on](screenshots/location-services-off.png)
+
 ## Pairing and Android profiles
 
 ### Sign in
@@ -139,15 +159,15 @@ A disposable companion invitation waiting for enrollment.
 
 ### Paired profile overview
 
-One physical phone with separately paired Android installations.
+One physical phone with separately paired Android installations. **Active Android profile** names the profile the server judges to be in the foreground, and the list marks each profile **Active** or **Background**; the command target defaults to **Automatic · active profile**.
 
 ![Paired profile overview in the Bungee web manager](screenshots/profile-workflow-phone-overview.png)
 
-### Companion actions
+### Targeting a profile
 
-Profile-local camera and message controls.
+**Target for profile commands** set to a named profile. Its pictures, messages and diagnostics go to that profile, a queued message and a finished diagnostics report appear in **Recent commands**, and **Phone diagnostics** shows the report. The page also shows the focus states the server can report.
 
-![Companion actions in the Bungee web manager](screenshots/profile-workflow-sandbox-actions.png)
+![Choosing a profile as the target for pictures, messages and diagnostics](screenshots/profile-workflow-sandbox-actions.png)
 
 ### Profile connected
 
@@ -224,3 +244,21 @@ Companion status in the sidebar/profile navigation.
 The command wraps and remains copyable.
 
 <img src="screenshots/mobile-server-updates.png" width="330" alt="Mobile server update command in the Bungee web manager">
+
+### Mobile Activity
+
+Device-state events, circumstances and filters in a 390-pixel viewport.
+
+<img src="screenshots/mobile-activity.png" width="330" alt="Mobile Activity feed in the Bungee web manager">
+
+### Mobile phone diagnostics
+
+A diagnostics report from a phone with Android Location off: one check needing attention, three passing and one informational, with settings only and no position.
+
+<img src="screenshots/mobile-phone-diagnostics.png" width="330" alt="Mobile phone diagnostics report in the Bungee web manager">
+
+### Mobile phone app updates
+
+The server's APK preparation status, shown at 390 pixels with the signing-key help collapsed.
+
+<img src="screenshots/mobile-phone-app-updates.png" width="330" alt="Mobile phone app update status in the Bungee web manager">

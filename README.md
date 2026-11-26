@@ -21,7 +21,7 @@ Bungee connects consenting household phones to a server you run. Find a misplace
 | Recover through outages | Encrypted offline GPS queue, bounded catch-up, reconnect backoff and durable command receipts. A lost connection does not erase saved history. |
 | Send recovery commands | Alarm, flash, message, ordinary Android lock, manual picture and Stop all. Commands require local approval and expire; the dashboard distinguishes offers from confirmed results. |
 | Use local maps | OpenStreetMap archives and offline GeoIP data served by your server. Choose regional street maps in Settings; tracking never falls back to a public tile service. |
-| Use Android sandbox profiles | One physical phone, one main installation and separately paired companions. Picture requests name the active, locally armed profile. Profiles retain separate identities and permissions. |
+| Use Android sandbox profiles | One physical phone, one main installation and separately paired companions. Pictures, messages and diagnostics follow the active profile or one you choose, and the dashboard says when focus is unconfirmed. Profiles retain separate identities and permissions. |
 | Understand sharing stops | Phone and web timelines distinguish manual actions, Android-reported crashes, errors and unknown exits. Offline events sync after reconnecting. |
 
 The [complete feature reference](docs/FEATURES.md) covers limits and implementation details. The [profile guide](docs/PROFILE-COMPANIONS.md) illustrates pairing across Android users.

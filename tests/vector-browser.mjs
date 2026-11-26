@@ -19,7 +19,7 @@ test("the included overview renders with unreadable regional metadata and the do
  await chmod(library,0o000);await chmod(status,0o000);
  assert.equal((await p.request('/v1/telemetry',{battery:90,charging:false,device_owner:false,capabilities:['locate'],gps_epoch:p.epoch,location:{latitude:33,longitude:-80,accuracy:10,observed_at:Math.floor(Date.now()/1000)}})).status,200);
  const browser=await chromium.launch({executablePath:process.env.CHROME_BIN||'/usr/bin/chromium',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});t.after(()=>browser.close());
- const context=await browser.newContext({timezoneId:'America/New_York'}),[name,value]=f.cookie.split('=');await context.addCookies([{name,value,url:f.origin}]);const page=await context.newPage();
+ const context=await browser.newContext({timezoneId:'America/New_York',colorScheme:'dark'}),[name,value]=f.cookie.split('=');await context.addCookies([{name,value,url:f.origin}]);const page=await context.newPage();
  const tile=page.waitForResponse(r=>/\/api\/maps\/\d+\/\d+\/\d+$/.test(r.url())&&r.status()===200);
  await page.goto(f.origin);await page.getByRole('button',{name:'Tracking',exact:true}).click();await tile;
  await page.locator('.leaflet-tile-loaded').first().waitFor();
@@ -53,7 +53,7 @@ test("an old broad saved GPS fix remains visible after reconnect, including fail
  await f.stop();await f.launch();
  await f.admin(`/api/devices/${p.id}/disconnect`,'POST');
  const browser=await chromium.launch({executablePath:process.env.CHROME_BIN||"/usr/bin/chromium",headless:true,args:["--no-sandbox","--disable-dev-shm-usage","--enable-unsafe-swiftshader"]});t.after(()=>browser.close());
- const context=await browser.newContext(),[name,value]=f.cookie.split("=");await context.addCookies([{name,value,url:f.origin}]);const page=await context.newPage();
+ const context=await browser.newContext({colorScheme:'dark'}),[name,value]=f.cookie.split("=");await context.addCookies([{name,value,url:f.origin}]);const page=await context.newPage();
  await page.route('**/api/maps/archive.pmtiles',route=>route.abort());
  await page.goto(f.origin);await page.getByRole('button',{name:'Tracking',exact:true}).click();
  await page.locator('.saved-gps-marker.uncertain').waitFor();
@@ -74,7 +74,7 @@ test("vector archive renders with a local worker, local assets and authenticated
  const f=await fixture(t,{geodata:data}),p=await phone(f);
  assert.equal((await p.request("/v1/telemetry",{battery:90,charging:false,device_owner:false,capabilities:["locate"],gps_epoch:p.epoch,location:{latitude:33,longitude:-80,accuracy:10,observed_at:Math.floor(Date.now()/1000)}})).status,200);
  const browser=await chromium.launch({executablePath:process.env.CHROME_BIN||"/usr/bin/chromium",headless:true,args:["--no-sandbox","--disable-dev-shm-usage","--enable-unsafe-swiftshader"]});t.after(()=>browser.close());
- const context=await browser.newContext();
+ const context=await browser.newContext({colorScheme:'dark'});
  const [name,value]=f.cookie.split("=");await context.addCookies([{name,value,url:f.origin}]);
  const page=await context.newPage();const external=[],errors=[],ranges=[];
  page.on("pageerror",e=>errors.push(e.message));page.on("console",m=>{if(m.type()==="error")errors.push(m.text());});
@@ -103,7 +103,7 @@ test("regional maps can be planned in Settings and render labelled streets in GP
  const now=Math.floor(Date.now()/1000);
  for(let i=0;i<2;i++)assert.equal((await p.request("/v1/telemetry",{battery:90,charging:false,device_owner:false,capabilities:["locate","stop_all"],gps_epoch:p.epoch,location:{latitude:33,longitude:-80+i*.00001,accuracy:10,observed_at:now-10+i}})).status,200);
  const browser=await chromium.launch({executablePath:process.env.CHROME_BIN||"/usr/bin/chromium",headless:true,args:["--no-sandbox","--disable-dev-shm-usage","--enable-unsafe-swiftshader"]});t.after(()=>browser.close());
- const context=await browser.newContext(),[name,value]=f.cookie.split("=");await context.addCookies([{name,value,url:f.origin}]);const page=await context.newPage();const errors=[],external=[];
+ const context=await browser.newContext({colorScheme:'dark'}),[name,value]=f.cookie.split("=");await context.addCookies([{name,value,url:f.origin}]);const page=await context.newPage();const errors=[],external=[];
  page.on("pageerror",e=>errors.push(e.message));page.on("request",r=>{if(!r.url().startsWith(f.origin)&&!r.url().startsWith("data:"))external.push(r.url());});
  await page.goto(f.origin);await page.getByRole("button",{name:"Settings",exact:true}).click();
  const manager=page.locator(".map-manager");await manager.getByText("South Atlantic",{exact:true}).waitFor();
@@ -134,7 +134,7 @@ test("server APK is easy to download and its signing details fit the mobile mana
  await mkdir(dir);const bytes=Buffer.from('synthetic APK download fixture'),sha='a'.repeat(64);
  await writeFile(join(dir,sha+'.apk'),bytes);await writeFile(join(dir,'release.json'),JSON.stringify({version:release.version,version_code:release.android_version_code,sha256:sha,signer_sha256:'b'.repeat(64),size:bytes.length,commit:'c'.repeat(40)}));
  const browser=await chromium.launch({executablePath:process.env.CHROME_BIN||'/usr/bin/chromium',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});t.after(()=>browser.close());
- const context=await browser.newContext({viewport:{width:390,height:844}}),[name,value]=f.cookie.split('=');await context.addCookies([{name,value,url:f.origin}]);const page=await context.newPage();
+ const context=await browser.newContext({viewport:{width:390,height:844},colorScheme:'dark'}),[name,value]=f.cookie.split('=');await context.addCookies([{name,value,url:f.origin}]);const page=await context.newPage();
  await page.goto(f.origin);await page.getByRole('button',{name:'Settings',exact:true}).click();
  await page.getByText('Signing identity',{exact:true}).click();
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
@@ -147,10 +147,12 @@ test("phone update preparation shows bytes and errors, and signer recovery keeps
  const status=join(dir,'status.json');
  await writeFile(status,JSON.stringify({state:'preparing',message:'Downloading the server APK…',downloaded_bytes:52428800,total_bytes:104857600}));
  const browser=await chromium.launch({executablePath:process.env.CHROME_BIN||'/usr/bin/chromium',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});t.after(()=>browser.close());
- const context=await browser.newContext({viewport:{width:390,height:844}}),[name,value]=f.cookie.split('=');await context.addCookies([{name,value,url:f.origin}]);const page=await context.newPage();
+ const context=await browser.newContext({viewport:{width:390,height:844},colorScheme:'dark'}),[name,value]=f.cookie.split('=');await context.addCookies([{name,value,url:f.origin}]);const page=await context.newPage();
  await page.goto(f.origin);await page.getByRole('button',{name:'Settings',exact:true}).click();
  await page.getByText('50% · 50.0 / 100.0 MiB',{exact:true}).waitFor();
  assert.equal(await page.getByRole('progressbar',{name:'Server APK preparation'}).getAttribute('value'),'52428800');
+ await page.evaluate(()=>document.fonts.ready);
+ await page.locator('.app-updates').screenshot({path:'docs/screenshots/mobile-phone-app-updates.png',animations:'disabled'});
  await writeFile(status,JSON.stringify({state:'waiting',message:'APK signing identity is missing; restore its encrypted backup'}));
  await page.getByText('APK signing identity is missing; restore its encrypted backup',{exact:true}).waitFor();
  assert.equal(await page.getByRole('progressbar',{name:'Server APK preparation'}).count(),0);

@@ -36,6 +36,18 @@ Existing household-signed phones keep a compatibility APK made with their origin
 
 Historical GitHub builds used disposable CI keys. Their private keys cannot be recovered from an APK, and the new common identity cannot retroactively match them. For those installations only, let unsent data upload, keep the existing manager device, install the official APK and use **Reconnect · keep history** on that same record. Server history is retained. Ordinary official updates do not require reinstalling or re-pairing.
 
+### How a phone gets its update, and what the messages mean
+
+Two separate transfers are involved. First the **server** downloads the signed APK from the GitHub release for the exact commit it was built from (`android-` plus the first twelve characters of the commit), verifies it and caches it. **Settings → Phone app updates** shows this preparation with its progress and any error. Then the **phone** downloads the cached APK from your server through its private tunnel, in 128 KiB chunks (the **App updates** section of the phone app), and verifies size, checksum, version and signing key before Android asks you to install it.
+
+A phone download resumes from its last saved chunk. Transient failures (a dropped tunnel, or an HTTP 408, 429 or 5xx answer) are retried up to three times, after 1, 3 and 8 seconds; if the server answered 429 the last wait is 60 seconds instead. After that the download pauses with its saved chunks ready to resume. If the server has replaced the APK meanwhile, the phone says so and asks you to check for updates again.
+
+| Message | Meaning and fix |
+| --- | --- |
+| **APK download returned HTTP 404; automatic retry in one minute** (Phone app updates) | GitHub has no release for the commit the server is running. The release is published by the build of a commit on `main` after its checks pass, so the build is still running, failed, or the commit never reached `main`. A 404 is not a rate limit, which GitHub reports as 403 or 429. Wait for or fix the build (re-running failed jobs clears a transient failure such as a package repository answering 429 to GitHub's runner), then rebuild the server at a commit that has a release. The server itself is unaffected and retries every minute. |
+| **…signing certificate changed; the publisher must restore the established release key**, **APK signing identity changed; restore the original key** or **…signing identity is missing; restore its encrypted backup** | An established signing key must be restored; Bungee never substitutes a new one silently. See [Stable signing and updates](#stable-signing-and-updates). |
+| **home server unreachable** (on the phone) | The phone's request through its WireGuard tunnel got no answer: the server is closed for maintenance or still starting, the network blocks the UDP port, or the endpoint IP changed. It is not specific to updates. Check `bungee-host.py status`. |
+
 ### Maintainer setup for the shared release key
 
 On a trusted administrator machine with Java `keytool`, Python 3.11+ and GitHub CLI authenticated for repository administration, run once:
@@ -59,6 +71,14 @@ bash scripts/build-owner-apk.sh
 ```
 
 The historical helper name `build-owner-apk.sh` refers to an operator-owned signing key; it does not enable device ownership. It signs/lints an optimized release, verifies the public certificate and prints SHA-256. Keep its key/password private; do not put them in source, issues or chat. Optional BUNGEE_OWNER_KEY_ALIAS/KEY_PASSWORD select an existing key. Increase versionCode on updates and verify the public signer fingerprint. An independently signed APK can only update APKs using that same independent certificate; it cannot switch signing identities in place.
+
+## Phone diagnostics
+
+**Devices → Recovery commands → Check phone diagnostics** asks the targeted profile (see [Target for profile commands](PROFILE-COMPANIONS.md#active-profile-and-targeted-actions)) to run local checks and return up to 16 labelled results, each **ok**, **attention** or **info**, with a short detail. They appear in **Phone diagnostics** on the phone page, naming the profile that reported and when. The panel shows the newest request from the last 24 hours.
+
+The checks cover Android location services, Bungee's precise and background location access, automatic GPS sharing and the saved-GPS queue, the signed server connection (transport, round trip and signal strength when Android provides them), battery and power, battery-optimization exemption, free storage, recovery notifications, removable device administration, theft-photo protection (and, when that is enabled, automatic recovery after reboot), and the Bungee and Android versions. A linked profile instead reports whether it is in the foreground and refers location and GPS-queue questions to the main installation.
+
+Diagnostics report settings. The app composes them from fixed checks and they carry no position, photo or network name. The command needs the profile's local approval of recovery commands, expires after five minutes like other commands, and shows a waiting state for a phone that is not connected. An identical outstanding request is reused instead of duplicated. Results are phone-reported and not hardware-attested; an app older than 1.1.24 leaves the button disabled.
 
 ## Primary sources
 

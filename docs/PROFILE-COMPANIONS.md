@@ -16,16 +16,16 @@ For a multi-user OS such as GrapheneOS, enable **This phone uses multiple sandbo
 
 ![Optional pairing workflow asks which Android profile is main](screenshots/profile-workflow-choose-main.png)
 
-For a phone already paired normally, open **Device care → Set up sandbox profiles**. Select the Android user containing its existing installation, then choose **Use … as main**. Open the updated Bungee app in that user and connect. The dashboard waits for its profile identity confirmation before allowing a companion invitation. To make a different installation main, pair that installation as the phone first. Main authority is fixed after setup; connection timing cannot change it.
+For a phone already paired normally, open **Pairing & history** and choose **Add Android profile** for that phone (the **Devices** phone overview has the same button). Under **Set up Android profiles**, select the Android user containing its existing installation, then choose **Use … as main**. Open the updated Bungee app in that user and connect. The dashboard waits for its profile identity confirmation before allowing a companion invitation. To make a different installation main, pair that installation as the phone first. Main authority is fixed after setup; connection timing cannot change it.
 
-Use Bungee **1.1.18 or newer** in every installation participating in this workflow. Upgrading an existing normal pairing does not require enabling profiles or resetting its saved history. Bungee 1.1.19 also handles upgrading the app before the server: it retries legacy compatibility after one minute, and selecting profile mode immediately requires the runtime protocol. Once runtime support is confirmed, that binding never falls back to the legacy protocol.
+Use Bungee **1.1.18 or newer** in every installation participating in this workflow. Upgrading an existing normal pairing does not require enabling profiles or resetting its saved history. Bungee 1.1.19 also handles upgrading the app before the server: it retries legacy compatibility after one minute, and selecting profile mode immediately requires the runtime protocol. Once runtime support is confirmed, that binding never falls back to the legacy protocol. Active-profile detection, targeted commands and diagnostics need **1.1.24 or newer** in each installation that should be targeted.
 
 ## Add a companion deliberately
 
 1. Install the same official APK inside the secondary Android user. Open Bungee there and copy **that installation's public key**.
-2. In the phone's **Device care → Profile setup → Manage sandbox profiles**, expand **Add a profile companion**. Enter its Android profile name and public key, then create the invitation.
+2. In **Pairing & history**, choose **Add Android profile** for the phone (once profile mode is on, **Manage Android profiles** opens the same list). Under **Pair another Android profile**, enter its Android profile name and public key, then choose **Create profile invitation**.
 3. Scan or paste the invitation into Bungee in that user. Each invitation expires after ten minutes and is usable only with the approved public key.
-4. Start its connection and approve profile recovery messages locally. For theft photos, grant camera/notification permissions and removable device administration, arm protection there, and wait for Ready.
+4. Start its connection and approve profile recovery commands (messages and diagnostics) locally. For theft photos, grant camera/notification permissions and removable device administration, arm protection there, and wait for Ready.
 
 Before step 3 finishes, the invitation appears only in setup, explicitly marked pending. It does not create a connected profile or a sidebar entry. Canceling the invitation releases its slot.
 
@@ -35,7 +35,7 @@ Each phone supports **eight enabled companions plus its main installation**. Pen
 
 ## Read the phone at a glance
 
-After pairing, **Devices → phone name** expands into a named main profile and the officially paired companions. The same choices appear beneath the phone header on narrow screens. The phone count remains one.
+After pairing, **Devices → phone name** shows one phone overview. Its **Android profiles** list names the main profile and each paired companion with a connection badge and, on a multi-profile phone, whether that profile is **Active** or in the **Background**. **Active Android profile** names the profile the server currently judges to be in the foreground, or says **Switching profiles** or **Focus unconfirmed**. The phone count remains one.
 
 ![One phone with Owner as Main and paired Sandbox and Work subprofiles](screenshots/profile-workflow-phone-overview.png)
 
@@ -46,19 +46,32 @@ After pairing, **Devices → phone name** expands into a named main profile and 
 | Grey **Offline** | No paired installation has recent contact. Saved information remains available. |
 | **Awaiting pairing** | The phone invitation has not been redeemed. It has no connected status yet. |
 
-Connected means reachable; it does not mean an Android user is currently foreground or that camera capture has succeeded. Each profile's camera status and dated reports are independent.
+Connected means reachable; it does not mean an Android user is currently foreground or that camera capture has succeeded. Foreground is judged separately (see [active profile](#active-profile-and-targeted-actions)). Each profile's camera status and dated reports are independent.
 
 ![Companion-only reachability uses amber while the main profile's status remains dated](screenshots/profile-workflow-limited-connection.png)
 
-## Target the sandbox that needs the action
+## Active profile and targeted actions
 
-Select **Sandbox**, for example, to view its camera readiness, send or clear a recovery message there, and view its photos. A message stays addressed to that profile even if another user becomes active before delivery. It never broadcasts to every profile or silently moves to the main user.
+**Target for profile commands**, on the phone page, chooses which Android profile receives pictures, recovery messages and diagnostics. **Automatic · active profile** (the default) follows the profile the server judges to be in the foreground. Choosing a profile such as **Sandbox** addresses it explicitly, whatever is in the foreground. An explicit message stays addressed to that profile even if another user becomes active before delivery. Nothing is broadcast to every profile or silently moved to the main user.
 
-![Selected Sandbox shows its own camera, message controls and recovery photos beneath the overall phone header](screenshots/profile-workflow-sandbox-actions.png)
+![Choosing Sandbox as the target sends pictures, messages and diagnostics to it; shared controls stay with the main installation](screenshots/profile-workflow-sandbox-actions.png)
+
+### How the active profile is decided
+
+From **1.1.24** each installation reports, in its signed status, whether its Android user is in the foreground and the time its profile last became foreground. It reports a switch promptly when Android's user-switch broadcast reaches it, and otherwise on its next connection cycle. The server then applies these rules:
+
+- The **newest foreground transition** wins, provided its owner's report is under 90 seconds old and still says foreground. An older profile's positive report is never promoted: Android can freeze a background user before it reports leaving, so that claim may be stale.
+- Two profiles claiming the same transition time show **Switching profiles**, and no action is routed until a later report settles it.
+- If the newest transition's owner reports background or goes stale, or nothing has reported recently, the focus is **Focus unconfirmed**. Choose a profile manually.
+- A background report without a transition time (for example after a service restart) keeps that profile's last known claim and cannot make an older claim current.
+- Apps older than 1.1.24 report foreground without a time. One recent claim is accepted for a picture request, but messages and diagnostics ask you to choose a profile manually until that installation updates. Two such claims are treated as a switch in progress.
+- A command sent to the automatic target carries a **foreground requirement**. The phone checks again when it runs and rejects with "Android switched profiles before this command ran. Check the active profile and retry." instead of acting in the wrong user. An explicit target never depends on focus.
+
+Detection is limited to what the installations report. A profile whose app is not running cannot announce that it became active, so a switch to it can look like **Focus unconfirmed**, and the previous profile can still look active for up to 90 seconds. These are signed software reports, not hardware attestation.
 
 Shared sound, flash and location requests stay on **Phone overview**, addressed to the main installation. Companions cannot claim those capabilities, upload phone telemetry, or create another GPS/battery/network history. The phone's combined photo album labels each image's source profile; a companion view shows only that profile's images.
 
-The main installation and several companions may legitimately remain connected together. During an Android user switch, two recent reports may both say foreground. Those reports are snapshots, not an election: they never redirect actions or replace main telemetry. A stale main report does not become current merely because a companion checked in.
+The main installation and several companions may legitimately remain connected together, and during an Android user switch two recent reports may both say foreground. Bungee resolves that only by the rules above. Foreground reports never replace main telemetry, and shared sound, flash and location requests stay with the main installation. A stale main report does not become current merely because a companion checked in.
 
 ## Duplicate and restart safeguards
 
@@ -79,7 +92,7 @@ These are safeguards for cooperating installations and accidental duplicates, no
 
 **Stop all Bungee actions** on the phone overview cancels pending recovery work and queues a stop for locally approved, capable companions. Delivery still requires each installation's connection. Local Stop and camera/message consent remain independent in each Android user.
 
-Disconnecting a companion removes it from the live submenu and keeps its saved photos in profile setup. It leaves the main and other companions connected. Use **Reconnect profile · keep photos** to replace its credentials deliberately, or **Remove profile & photos** to delete its disconnected archive. Disconnecting/reconnecting the overall phone disables its companion bindings too; re-enable those explicitly. Revoking the whole phone disables every linked credential and erases its saved recovery data.
+**Disconnect profile · keep captures** removes a companion from the live list and keeps its saved captures. It leaves the main and other companions connected. Use **Reconnect profile** to replace its credentials deliberately, **Remove inactive keys** to release its connection keys, or **Remove saved profile** to delete its disconnected archive. **Revoke profile & erase data** disables it and erases its captures. Disconnecting/reconnecting the overall phone disables its companion bindings too; re-enable those explicitly. Revoking the whole phone disables every linked credential and erases its saved recovery data.
 
 The combined phone album obeys the same erasure generations as individual profile albums. Erasing it prevents an old queued upload from restoring an erased image. Unsent photos live only in the sending profile's memory and can be lost when Android stops that process.
 

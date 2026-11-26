@@ -32,7 +32,7 @@ test("the Activity page browses every entry, explains airplane and location even
 
   const browser = await launch();
   t.after(() => browser.close());
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1050 }, timezoneId: "UTC" }), [name, value] = f.cookie.split("=");
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1050 }, timezoneId: "UTC", colorScheme: "dark" }), [name, value] = f.cookie.split("=");
   await context.addCookies([{ name, value, url: f.origin }]);
   const page = await context.newPage(), errors = [];
   page.on("pageerror", e => errors.push(e.message));
@@ -65,6 +65,13 @@ test("the Activity page browses every entry, explains airplane and location even
   await feed.getByLabel("Show").selectOption("device_state");
   await page.waitForFunction(() => document.querySelectorAll(".activity-list > li").length === 6);
   assert.equal(await feed.locator(".activity-list > li").count(), 6);
+  // Documentation captures: the airplane/location/GPS-gap view with its circumstances, desktop and narrow.
+  await page.evaluate(() => document.fonts.ready);
+  await feed.screenshot({ path: "docs/screenshots/activity-device-state.png", animations: "disabled" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => document.fonts.ready);
+  await feed.screenshot({ path: "docs/screenshots/mobile-activity.png", animations: "disabled" });
+  await page.setViewportSize({ width: 1440, height: 1050 });
   const local = seconds => new Date(seconds * 1000).toISOString().slice(0, 16);
   await feed.getByLabel("From (local time)").fill(local(base - 1900));
   await feed.getByLabel("To (local time)").fill(local(base - 1500));
@@ -84,6 +91,8 @@ test("the Activity page browses every entry, explains airplane and location even
   // Purging activity older than 90 days removes only the old event; the purge itself is recorded.
   const care = page.getByRole("region", { name: "Log storage and cleanup" });
   await care.getByText("Database on disk").waitFor();
+  await page.evaluate(() => document.fonts.ready);
+  await care.screenshot({ path: "docs/screenshots/activity-cleanup.png", animations: "disabled" });
   await care.getByLabel("Activity age to purge").selectOption("90");
   await care.getByLabel("Activity kinds to purge").selectOption("phone");
   await care.getByRole("button", { name: "Purge activity…" }).click();
@@ -150,7 +159,7 @@ test("device care offers a one-tap route back to Location only when Android loca
   assert.equal((await report(delivery())).status, 200);
   const browser = await launch();
   t.after(() => browser.close());
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1050 } }), [name, value] = f.cookie.split("=");
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1050 }, colorScheme: "dark" }), [name, value] = f.cookie.split("=");
   await context.addCookies([{ name, value, url: f.origin }]);
   const page = await context.newPage(), errors = [];
   page.on("pageerror", e => errors.push(e.message));
@@ -169,6 +178,8 @@ test("device care offers a one-tap route back to Location only when Android loca
   await page.getByText("Paused · Android location services are off", { exact: true }).waitFor();
   await page.getByText("6 attempts in a row without a fix", { exact: false }).waitFor();
   await page.getByText(/Android does not let this server, or any app, switch Location on remotely/).waitFor();
+  await page.evaluate(() => document.fonts.ready);
+  await page.locator(".location-off-notice").screenshot({ path: "docs/screenshots/location-services-off.png", animations: "disabled" });
   await page.getByRole("button", { name: "Ask the phone to turn Location on" }).click();
   await page.getByText(/Message queued\./).waitFor();
   const offered = (await (await p.request("/v1/commands", {})).json()).commands;

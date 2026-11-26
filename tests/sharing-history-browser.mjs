@@ -12,7 +12,7 @@ test("sharing timeline separates manual actions from crashes/errors and retains 
   assert.equal((await p.request("/v1/sync", { report: { sharing_epoch: epoch, sharing_events: events } })).status, 200);
   const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN || "/usr/bin/chromium", headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
   t.after(() => browser.close());
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1050 }, timezoneId: "UTC" }), [name, value] = f.cookie.split("=");
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1050 }, timezoneId: "UTC", colorScheme: "dark" }), [name, value] = f.cookie.split("=");
   await context.addCookies([{ name, value, url: f.origin }]);
   const page = await context.newPage(), errors = []; page.on("pageerror", e => errors.push(e.message));
   await page.goto(f.origin);
@@ -63,12 +63,12 @@ test("manual Locate stays available with passive GPS off and leaves that setting
 
 
 test("diagnostics reports return to their own panel and activity filters use event time", async t => {
-  const f = await fixture(t), p = await phone(f, { capabilities: ["diagnostics"] });
+  const f = await fixture(t), p = await phone(f, { name: "Avery’s Pixel", capabilities: ["diagnostics"] });
   const now = Math.floor(Date.now() / 1000);
   f.sql("INSERT INTO audit(at,action,device_id,detail) VALUES(?,?,?,?)", [now - 3600, "fixture.previous", p.id, "Earlier activity fixture"]);
   const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN || "/usr/bin/chromium", headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
   t.after(() => browser.close());
-  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, timezoneId: "UTC" });
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, timezoneId: "UTC", colorScheme: "dark" });
   const [name, value] = f.cookie.split("=");
   await context.addCookies([{ name, value, url: f.origin }]);
   const page = await context.newPage();
@@ -83,7 +83,13 @@ test("diagnostics reports return to their own panel and activity filters use eve
   const receipt = {
     id: poll[0].id, status: "executed", result: "Phone diagnostics completed",
     attempted_at: Math.floor(Date.now() / 1000),
-    diagnostic_checks: [{ label: "Android location services", status: "attention", detail: "Location is disabled in Android Settings." }],
+    diagnostic_checks: [
+      { label: "Android location services", status: "attention", detail: "Location is disabled in Android Settings." },
+      { label: "Server connection", status: "ok", detail: "The phone received this authenticated request over Wi-Fi." },
+      { label: "Battery and power", status: "ok", detail: "82% remaining. Not charging." },
+      { label: "Background activity", status: "info", detail: "Bungee is not exempt from Android battery optimization." },
+      { label: "Local storage", status: "ok", detail: "9,840 MiB available to Bungee." },
+    ],
   };
   assert.equal((await p.request("/v1/ack", { ...receipt, diagnostic_checks: [] })).status, 400);
   assert.equal((await p.request("/v1/ack", receipt)).status, 200);
@@ -91,6 +97,8 @@ test("diagnostics reports return to their own panel and activity filters use eve
   assert.equal(retry.receipt_status, "already_terminal");
   await report.getByText("Location is disabled in Android Settings.", { exact: true }).waitFor();
   await report.getByText("1 check needs attention", { exact: true }).waitFor();
+  await page.evaluate(() => document.fonts.ready);
+  await report.screenshot({ path: "docs/screenshots/mobile-phone-diagnostics.png", animations: "disabled" });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.getByRole("button", { name: "Activity", exact: true }).click();
   await page.getByText(/Earlier activity fixture/).waitFor();

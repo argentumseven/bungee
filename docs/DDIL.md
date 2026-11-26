@@ -56,6 +56,8 @@ A delayed, freshly signed receipt may reconcile a command retained by the server
 - The app shows queued fixes, queue-capacity losses, last successful telemetry and approximate next retry, whether airplane mode is on, and, when Android location services are off, a button to open the location settings.
 - Device care shows the phone's **last reported** GPS access, Android location-services and airplane-mode state, time of its last obtained fix and consecutive missed attempts, queue count, oldest queued timestamp, discarded-at-capacity count and pending receipts. It cannot know a disconnected phone's current queue or permissions. An older app reports no such metrics.
 - A quick series of catch-up batches records one check-in when the battery reading is identical and under a minute old; every GPS point is still stored.
+- Device care also lists when airplane mode was last turned on and off, from the phone's recorded events, noting when the exact time is unknown or the report arrived after reconnecting.
+- A phone app-update download resumes from its last saved chunk and retries transient tunnel and server failures (see [update downloads](MANAGEMENT.md#how-a-phone-gets-its-update-and-what-the-messages-mean)).
 - An authenticated contact updates `last_contact` independently of `last_seen` (latest accepted telemetry). A short command-only connection can establish presence while the battery reading remains older; the dashboard's battery tooltip identifies the saved telemetry age.
 - A configured tunnel is not proof of delivery. Records become acknowledged only on an accepted home-server response.
 

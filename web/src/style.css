@@ -2410,6 +2410,7 @@ select:not(:disabled):hover { border-color: var(--accent-border); }
 .activity-list .activity-error .icon-tile,.activity-list .activity-crash .icon-tile{outline:1px solid var(--danger,#b3261e)}
 .log-maintenance .storage-usage{margin:14px 0}
 .log-maintenance .record-action select{width:100%}
+.log-maintenance .record-action p{font-size:12px;line-height:1.65}
 .location-off-notice{margin:12px 0}
 .location-off-notice button{margin-top:10px}
 

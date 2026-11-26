@@ -4,7 +4,7 @@ Available in the 1.1.20 server and phone app. Update the server before installin
 
 ## Phone and web history
 
-The phone's main screen shows recent sharing events with their reason, classification and local date/time. The web GUI has **Tracking → Sharing history**, plus the same timeline in **Device care** and individual profile views. A physical phone's timeline includes its linked profiles with their names. The web timeline is paginated and ordered by server receipt; event time and receipt time are both shown.
+The phone's main screen shows recent sharing events with their reason, classification and local date/time. The web GUI has **Tracking → Sharing history** (Device care links to it with **Open sharing history**). A physical phone's timeline includes its linked profiles with their names. The web timeline is paginated and ordered by server receipt; event time and receipt time are both shown. **From (local time)** and **To (local time)** with **Apply filter** and **Clear filter** narrows it by event time; an event whose exact time is unknown is filtered by the time the phone recorded it.
 
 The app records explicit Start/Stop actions, the sharing notification's Stop action, local recovery, and changes to automatic GPS sharing. Recovery starts and Android service restarts have their own labels. A manual event identifies the action/source, not the person who used the phone.
 
@@ -46,3 +46,5 @@ A change is seen live from Android's broadcasts and a check about once a minute.
 ## Activity log
 
 **Activity** lists administrator actions and phone events together, newest first, with filters for one phone or one kind of event and a **Load older activity** button; nothing is capped at the latest hundred. The server keeps up to 20,000 administrator entries and 10,000 events per phone and trims the oldest automatically. **Log storage and cleanup** shows row counts and database size, can purge activity or saved GPS by age or entirely (each phone and each kind separately, after a confirmation), and can apply an automatic age. A purge is itself recorded. A full activity purge rotates the phone's event generation so unsent events cannot restore it; an age purge keeps newer entries and does not store older late events again. A GPS purge by age keeps the phone's newest point, leaves the phone's GPS generation alone so its offline backlog still uploads, and never reaches photos or check-ins.
+
+The Activity feed has the same **From (local time)** and **To (local time)** filter, in addition to the phone and kind filters. In **Log storage and cleanup**, **Purge saved GPS** can target one phone or **All phones**, entirely or only points older than a chosen age; with **All phones** each phone's newest point is kept for an age purge, and a complete purge rotates every phone's GPS generation so queued fixes cannot restore it.

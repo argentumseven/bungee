@@ -14,10 +14,10 @@ test('one phone view supports profile pairing, verified focus, diagnostics, manu
  await main.request('/v1/telemetry',{battery:84,charging:false,device_owner:false,capabilities:['locate','message','clear_message','stop_all','ring','ring_flash','flash','best_guess'],gps_epoch:main.epoch});
  await main.request('/v1/sync',{report:{foreground_user:true,recovery_consent:true,secure_lock:true,unlock_monitoring:true,camera:camera(),android_version:'16',connection_health:{since:now-3600,reported_at:now,connection:'wifi',system_vpn:false,signal_dbm:-51,attempts:62,succeeded:62,last_rtt_ms:24,mean_rtt_ms:26,jitter_ms:3}}});
  const browser=await chromium.launch({executablePath:process.env.CHROME_BIN||'/usr/bin/chromium',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});t.after(()=>browser.close());
- const context=await browser.newContext({viewport:{width:1440,height:1080},colorScheme:'light',timezoneId:'America/New_York'}),[name,value]=f.cookie.split('=');await context.addCookies([{name,value,url:f.origin}]);
+ const context=await browser.newContext({viewport:{width:1440,height:1080},colorScheme:'dark',timezoneId:'America/New_York'}),[name,value]=f.cookie.split('=');await context.addCookies([{name,value,url:f.origin}]);
  const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await mkdir('docs/screenshots',{recursive:true});
- const shot=async(name,locator=page.locator('.shell'))=>{await page.evaluate(()=>document.fonts.ready);await locator.screenshot({path:`docs/screenshots/profile-workflow-${name}.png`,animations:'disabled'});};
+ const shot=async(name,locator=page.locator('.shell'))=>{await page.evaluate(()=>scrollTo(0,0));await page.evaluate(()=>document.fonts.ready);await locator.screenshot({path:`docs/screenshots/profile-workflow-${name}.png`,animations:'disabled'});};
  const refresh=async()=>{await page.evaluate(()=>window.dispatchEvent(new Event('bungee:refresh')));};
  const openPhone=async()=>{await page.locator('.nav-phones').getByRole('button',{name:'Avery’s Pixel',exact:true}).click();};
  await page.goto(f.origin);await openPhone();await page.getByRole('region',{name:'Overall phone status'}).waitFor();

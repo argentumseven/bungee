@@ -10,7 +10,7 @@ test("manual picture command requires a ready camera capability and displays its
   const f = await fixture(t), p = await phone(f, { profiles: true, name: "Example phone" });
   const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN || "/usr/bin/chromium", headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
   t.after(() => browser.close());
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1050 } });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1050 }, colorScheme: "dark" });
   const [name, value] = f.cookie.split("=");
   await context.addCookies([{ name, value, url: f.origin }]);
   const page = await context.newPage(), errors = [];

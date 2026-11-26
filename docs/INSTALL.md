@@ -201,6 +201,10 @@ before downtime, takes an encrypted cold snapshot, and uses the normal health
 checks and rollback flow before reopening admission. It also refreshes the
 installed host helper. Run it from the source checkout, not `/opt/bungee`.
 
+The host prepares the phone APK for the exact commit the server was built from, so rebuild from a commit whose GitHub build has finished and published its release (`android-` plus the first twelve characters of the commit). If it is missing, **Settings → Phone app updates** reports `APK download returned HTTP 404` and retries each minute while the server keeps running; see [update downloads](MANAGEMENT.md#how-a-phone-gets-its-update-and-what-the-messages-mean).
+
+`status` is read-only and can be run while an update, rebuild or APK preparation is in progress. It prints the version, maintenance state, whether an interrupted-transaction journal exists, and the container list. Other host commands refuse to run concurrently and say that another Bungee host operation is in progress; retry after it finishes.
+
 A source update and a published container-channel update are different paths. `update --manual` checks the published stable/preview bundle; it does not build the latest GitHub main branch. Use the command above for the source workflow. The same command is available in web **Settings → Update this server**. After a version change, install the matching APK from **Settings → Phone app updates** or GitHub Releases.
 
 ## Operations and reboot
